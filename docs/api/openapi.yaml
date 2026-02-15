@@ -1,0 +1,551 @@
+openapi: 3.1.0
+info:
+  title: BabyLog AI API
+  version: 0.1.0
+  description: >
+    BabyLog AI MVP API. 육아 기록, AI 조회, 리포트, 구독/사진 공유, Siri/Bixby 연동을 포함한다.
+servers:
+  - url: http://localhost:8000
+    description: local
+tags:
+  - name: health
+  - name: onboarding
+  - name: events
+  - name: ai
+  - name: reports
+  - name: photos
+  - name: subscription
+  - name: assistants
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Health check
+      operationId: healthcheck
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, service]
+                properties:
+                  status: { type: string, example: ok }
+                  service: { type: string, example: babylog-api }
+
+  /api/v1/onboarding/parent:
+    post:
+      tags: [onboarding]
+      summary: Parent onboarding with required baby profile
+      operationId: onboardingParent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ParentOnboardingRequest'
+      responses:
+        '200':
+          description: Parent onboarding completed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: created }
+                  household_id: { type: string }
+                  baby_profile_created: { type: boolean, example: true }
+                  provider: { $ref: '#/components/schemas/AuthProvider' }
+
+  /api/v1/events/voice:
+    post:
+      tags: [events]
+      summary: Parse voice recording into structured events
+      operationId: parseVoiceEvent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VoiceUploadRequest'
+      responses:
+        '200':
+          description: Voice parsed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VoiceParseResponse'
+
+  /api/v1/events/confirm:
+    post:
+      tags: [events]
+      summary: Confirm parsed events with one-tap action
+      operationId: confirmEvents
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfirmEventsRequest'
+      responses:
+        '200':
+          description: Confirmed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: CONFIRMED }
+                  clip_id: { type: string }
+                  saved_event_count: { type: integer }
+
+  /api/v1/ai/query:
+    post:
+      tags: [ai]
+      summary: Ask chatbot with optional personal-data mode
+      operationId: aiQuery
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AiQueryRequest'
+      responses:
+        '200':
+          description: AI response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AiQueryResponse'
+
+  /api/v1/quick/last-poo-time:
+    get:
+      tags: [ai]
+      summary: Get the last poo event time
+      operationId: quickLastPooTime
+      parameters:
+        - in: query
+          name: baby_id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: tone
+          schema: { $ref: '#/components/schemas/AiTone' }
+      responses:
+        '200':
+          description: Last poo time
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LastPooTimeResponse'
+
+  /api/v1/quick/next-feeding-eta:
+    get:
+      tags: [ai]
+      summary: Get next feeding ETA from recent feeding intervals
+      operationId: quickNextFeedingEta
+      parameters:
+        - in: query
+          name: baby_id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: tone
+          schema: { $ref: '#/components/schemas/AiTone' }
+      responses:
+        '200':
+          description: Next feeding ETA
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NextFeedingEtaResponse'
+
+  /api/v1/quick/today-summary:
+    get:
+      tags: [ai]
+      summary: Get today's summary lines
+      operationId: quickTodaySummary
+      parameters:
+        - in: query
+          name: baby_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Today summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TodaySummaryResponse'
+
+  /api/v1/reports/daily:
+    get:
+      tags: [reports]
+      summary: Daily report
+      operationId: getDailyReport
+      parameters:
+        - in: query
+          name: baby_id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: date
+          required: true
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: Daily report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DailyReportResponse'
+
+  /api/v1/reports/weekly:
+    get:
+      tags: [reports]
+      summary: Weekly report
+      operationId: getWeeklyReport
+      parameters:
+        - in: query
+          name: baby_id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: week_start
+          required: true
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: Weekly report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WeeklyReportResponse'
+
+  /api/v1/photos/upload-url:
+    post:
+      tags: [photos]
+      summary: Create presigned upload URL
+      operationId: createPhotoUploadUrl
+      parameters:
+        - in: query
+          name: album_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Presigned URL created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  album_id: { type: string }
+                  upload_url: { type: string, format: uri }
+                  object_key: { type: string }
+
+  /api/v1/photos/complete:
+    post:
+      tags: [photos]
+      summary: Confirm photo upload and generate variants metadata
+      operationId: completePhotoUpload
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PhotoUploadCompleteRequest'
+      responses:
+        '200':
+          description: Upload completed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: uploaded }
+                  photo_id: { type: string }
+                  album_id: { type: string }
+                  downloadable: { type: boolean }
+                  variants:
+                    type: object
+                    additionalProperties: { type: string }
+
+  /api/v1/subscription/me:
+    get:
+      tags: [subscription]
+      summary: Get household subscription
+      operationId: getMySubscription
+      parameters:
+        - in: query
+          name: household_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Subscription snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  household_id: { type: string }
+                  plan: { $ref: '#/components/schemas/SubscriptionPlan' }
+                  status: { type: string, example: active }
+
+  /api/v1/subscription/checkout:
+    post:
+      tags: [subscription]
+      summary: Start checkout
+      operationId: checkoutSubscription
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckoutRequest'
+      responses:
+        '200':
+          description: Checkout started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: pending_payment }
+                  plan: { $ref: '#/components/schemas/SubscriptionPlan' }
+                  household_id: { type: string }
+
+  /api/v1/assistants/siri/{intentName}:
+    post:
+      tags: [assistants]
+      summary: Siri App Intent dialog endpoint
+      operationId: executeSiriIntent
+      parameters:
+        - in: path
+          name: intentName
+          required: true
+          schema:
+            type: string
+            enum: [GetLastPooTime, GetNextFeedingEta, GetTodaySummary]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SiriIntentRequest'
+      responses:
+        '200':
+          description: Dialog response for Siri
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssistantDialogResponse'
+
+  /api/v1/assistants/bixby/query:
+    post:
+      tags: [assistants]
+      summary: Bixby endpoint query
+      operationId: executeBixbyQuery
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BixbyQueryRequest'
+      responses:
+        '200':
+          description: Bixby answer payload
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  answer: { type: string }
+                  resultMoment: { type: boolean, example: true }
+
+components:
+  schemas:
+    AuthProvider:
+      type: string
+      enum: [apple, google, phone]
+
+    AiTone:
+      type: string
+      enum: [friendly, neutral, formal, brief, coach]
+
+    SubscriptionPlan:
+      type: string
+      enum: [PHOTO_SHARE, AI_ONLY, AI_PHOTO]
+
+    ParentOnboardingRequest:
+      type: object
+      required: [provider, baby_name, baby_birth_date, required_consents]
+      properties:
+        provider: { $ref: '#/components/schemas/AuthProvider' }
+        baby_name: { type: string }
+        baby_birth_date: { type: string, format: date }
+        required_consents:
+          type: array
+          items:
+            type: string
+            enum: [terms, privacy, data_processing]
+
+    VoiceUploadRequest:
+      type: object
+      required: [baby_id]
+      properties:
+        baby_id: { type: string }
+        transcript_hint: { type: string }
+
+    EventItem:
+      type: object
+      required: [type, start_time, value]
+      properties:
+        type:
+          type: string
+          enum: [FORMULA, BREASTFEED, SLEEP, PEE, POO, GROWTH, MEMO, SYMPTOM, MEDICATION]
+        start_time: { type: string, format: date-time }
+        end_time: { type: string, format: date-time, nullable: true }
+        value:
+          type: object
+          additionalProperties: true
+        metadata:
+          type: object
+          additionalProperties: true
+        confidence:
+          type: object
+          additionalProperties:
+            type: number
+            format: float
+
+    VoiceParseResponse:
+      type: object
+      required: [clip_id, transcript, parsed_events, status]
+      properties:
+        clip_id: { type: string }
+        transcript: { type: string }
+        parsed_events:
+          type: array
+          items: { $ref: '#/components/schemas/EventItem' }
+        status:
+          type: string
+          enum: [PARSED, FAILED]
+
+    ConfirmEventsRequest:
+      type: object
+      required: [clip_id, events]
+      properties:
+        clip_id: { type: string }
+        events:
+          type: array
+          items: { $ref: '#/components/schemas/EventItem' }
+
+    AiQueryRequest:
+      type: object
+      required: [baby_id, question]
+      properties:
+        baby_id: { type: string }
+        question: { type: string }
+        tone: { $ref: '#/components/schemas/AiTone' }
+        use_personal_data: { type: boolean, default: true }
+
+    AiQueryResponse:
+      type: object
+      properties:
+        answer: { type: string }
+        labels:
+          type: array
+          items: { type: string }
+        tone: { $ref: '#/components/schemas/AiTone' }
+        use_personal_data: { type: boolean }
+
+    LastPooTimeResponse:
+      type: object
+      properties:
+        last_poo_time: { type: string, format: date-time, nullable: true }
+        reference_text: { type: string }
+        message: { type: string }
+
+    NextFeedingEtaResponse:
+      type: object
+      properties:
+        eta_minutes: { type: integer, nullable: true }
+        reference_text: { type: string }
+        message: { type: string }
+        unstable: { type: boolean }
+
+    TodaySummaryResponse:
+      type: object
+      properties:
+        summary_lines:
+          type: array
+          items: { type: string }
+        reference_text: { type: string }
+
+    DailyReportResponse:
+      type: object
+      properties:
+        baby_id: { type: string }
+        date: { type: string, format: date }
+        summary:
+          type: array
+          items: { type: string }
+        labels:
+          type: array
+          items: { type: string }
+
+    WeeklyReportResponse:
+      type: object
+      properties:
+        baby_id: { type: string }
+        week_start: { type: string, format: date }
+        trend:
+          type: object
+          additionalProperties: { type: string }
+        suggestions:
+          type: array
+          items: { type: string }
+        labels:
+          type: array
+          items: { type: string }
+
+    PhotoUploadCompleteRequest:
+      type: object
+      required: [album_id, object_key]
+      properties:
+        album_id: { type: string }
+        object_key: { type: string }
+        downloadable: { type: boolean, default: false }
+
+    CheckoutRequest:
+      type: object
+      required: [household_id, plan]
+      properties:
+        household_id: { type: string }
+        plan: { $ref: '#/components/schemas/SubscriptionPlan' }
+
+    SiriIntentRequest:
+      type: object
+      required: [baby_id]
+      properties:
+        baby_id: { type: string }
+        tone: { $ref: '#/components/schemas/AiTone' }
+
+    AssistantDialogResponse:
+      type: object
+      properties:
+        dialog: { type: string }
+        reference: { type: string }
+
+    BixbyQueryRequest:
+      type: object
+      required: [capsule_action, baby_id]
+      properties:
+        capsule_action:
+          type: string
+          enum: [GetLastPooTime, GetNextFeedingEta, GetTodaySummary]
+        baby_id: { type: string }
+        tone: { $ref: '#/components/schemas/AiTone' }
+
