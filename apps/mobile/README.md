@@ -4,10 +4,11 @@ Flutter app screens are wired to real backend APIs via `Dio`.
 
 ## Prerequisites
 - Flutter SDK
+- Xcode `16+` (for iOS 18.0+ builds on macOS)
 - Running backend (`apps/backend`) on `http://127.0.0.1:8000` or your custom base URL
 - Valid JWT token for backend auth
 - Platform requirements:
-  - Android: `14+` (API 34+), `64-bit only` (`arm64-v8a`, `x86_64`)
+  - Android: `14+` (min API 34), target API `35`, `64-bit only` (`arm64-v8a`, `x86_64`)
   - iOS: `18.0+`
 
 ## Install / Run

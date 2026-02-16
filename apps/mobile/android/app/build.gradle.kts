@@ -7,7 +7,7 @@ plugins {
 
 android {
     namespace = "com.example.babyai"
-    compileSdk = maxOf(flutter.compileSdkVersion, 34)
+    compileSdk = maxOf(flutter.compileSdkVersion, 35)
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -24,7 +24,7 @@ android {
         applicationId = "com.example.babyai"
         // Product policy: Android 14+ and 64-bit only.
         minSdk = 34
-        targetSdk = 34
+        targetSdk = 35
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
         }
