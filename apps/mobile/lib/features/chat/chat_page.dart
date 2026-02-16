@@ -2,7 +2,7 @@ import "dart:convert";
 
 import "package:flutter/material.dart";
 
-import "../../core/network/babylog_api.dart";
+import "../../core/network/babyai_api.dart";
 
 class ChatPage extends StatefulWidget {
   const ChatPage({super.key});
@@ -47,7 +47,7 @@ class _ChatPageState extends State<ChatPage> {
       setState(() => _error = "Enter a question first.");
       return;
     }
-    await _run(() => BabyLogApi.instance.queryAi(question));
+    await _run(() => BabyAIApi.instance.queryAi(question));
   }
 
   @override
@@ -65,15 +65,15 @@ class _ChatPageState extends State<ChatPage> {
             children: <Widget>[
               _QuickAskButton(
                 label: "Last poo time",
-                onPressed: _loading ? null : () => _run(BabyLogApi.instance.quickLastPooTime),
+                onPressed: _loading ? null : () => _run(BabyAIApi.instance.quickLastPooTime),
               ),
               _QuickAskButton(
                 label: "Next feeding ETA",
-                onPressed: _loading ? null : () => _run(BabyLogApi.instance.quickNextFeedingEta),
+                onPressed: _loading ? null : () => _run(BabyAIApi.instance.quickNextFeedingEta),
               ),
               _QuickAskButton(
                 label: "Today summary",
-                onPressed: _loading ? null : () => _run(BabyLogApi.instance.quickTodaySummary),
+                onPressed: _loading ? null : () => _run(BabyAIApi.instance.quickTodaySummary),
               ),
             ],
           ),

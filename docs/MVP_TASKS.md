@@ -1,4 +1,4 @@
-# MVP Tasks - BabyLog AI
+# MVP Tasks - BabyAI
 
 ## 0. 프로젝트 부트스트랩
 - [ ] Flutter 앱 기본 구조 생성

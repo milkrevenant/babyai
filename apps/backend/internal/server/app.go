@@ -18,7 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"babylog-ai/apps/backend/internal/config"
+	"babyai/apps/backend/internal/config"
 )
 
 const (
@@ -111,7 +111,7 @@ func (a *App) Router() *gin.Engine {
 func (a *App) health(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"status":  "ok",
-		"service": "babylog-api",
+		"service": "babyai-api",
 	})
 }
 

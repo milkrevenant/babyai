@@ -1,9 +1,9 @@
 openapi: 3.1.0
 info:
-  title: BabyLog AI API
+  title: BabyAI API
   version: 0.1.0
   description: >
-    BabyLog AI MVP API. 육아 기록, AI 조회, 리포트, 구독/사진 공유, Siri/Bixby 연동을 포함한다.
+    BabyAI MVP API. 육아 기록, AI 조회, 리포트, 구독/사진 공유, Siri/Bixby 연동을 포함한다.
 servers:
   - url: http://localhost:8000
     description: local
@@ -32,7 +32,7 @@ paths:
                 required: [status, service]
                 properties:
                   status: { type: string, example: ok }
-                  service: { type: string, example: babylog-api }
+                  service: { type: string, example: babyai-api }
 
   /api/v1/onboarding/parent:
     post:

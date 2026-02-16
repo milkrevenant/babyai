@@ -2,7 +2,7 @@ import "dart:convert";
 
 import "package:flutter/material.dart";
 
-import "../../core/network/babylog_api.dart";
+import "../../core/network/babyai_api.dart";
 
 class RecordingPage extends StatefulWidget {
   const RecordingPage({super.key});
@@ -32,7 +32,7 @@ class _RecordingPageState extends State<RecordingPage> {
     });
 
     try {
-      final Map<String, dynamic> result = await BabyLogApi.instance.parseVoice(
+      final Map<String, dynamic> result = await BabyAIApi.instance.parseVoice(
         _transcriptController.text,
       );
       setState(() => _parsed = result);
@@ -67,7 +67,7 @@ class _RecordingPageState extends State<RecordingPage> {
       _error = null;
     });
     try {
-      final Map<String, dynamic> result = await BabyLogApi.instance.confirmVoiceEvents(
+      final Map<String, dynamic> result = await BabyAIApi.instance.confirmVoiceEvents(
         clipId: clipId,
         events: events,
       );

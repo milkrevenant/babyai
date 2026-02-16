@@ -18,8 +18,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"babylog-ai/apps/backend/internal/config"
-	"babylog-ai/apps/backend/internal/db"
+	"babyai/apps/backend/internal/config"
+	"babyai/apps/backend/internal/db"
 )
 
 var (
@@ -86,7 +86,7 @@ func withSimpleProtocol(rawURL string) string {
 func newTestConfig() config.Config {
 	cfg := config.Config{
 		AppEnv:             "test",
-		AppName:            "BabyLog AI API Test",
+		AppName:            "BabyAI API Test",
 		APIPrefix:          "/api/v1",
 		AppPort:            "0",
 		DatabaseURL:        "test",

@@ -5,13 +5,13 @@ import "../features/photos/photos_page.dart";
 import "../features/recording/recording_page.dart";
 import "../features/report/report_page.dart";
 
-class BabyLogApp extends StatelessWidget {
-  const BabyLogApp({super.key});
+class BabyAIApp extends StatelessWidget {
+  const BabyAIApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: "BabyLog AI",
+      title: "BabyAI",
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF2A6F97)),

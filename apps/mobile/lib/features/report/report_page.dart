@@ -1,6 +1,6 @@
 import "package:flutter/material.dart";
 
-import "../../core/network/babylog_api.dart";
+import "../../core/network/babyai_api.dart";
 
 class ReportPage extends StatefulWidget {
   const ReportPage({super.key});
@@ -34,8 +34,8 @@ class _ReportPageState extends State<ReportPage> {
 
     final DateTime now = DateTime.now().toUtc();
     try {
-      final Map<String, dynamic> daily = await BabyLogApi.instance.dailyReport(now);
-      final Map<String, dynamic> weekly = await BabyLogApi.instance.weeklyReport(_toWeekStart(now));
+      final Map<String, dynamic> daily = await BabyAIApi.instance.dailyReport(now);
+      final Map<String, dynamic> weekly = await BabyAIApi.instance.weeklyReport(_toWeekStart(now));
       setState(() {
         _daily = daily;
         _weekly = weekly;

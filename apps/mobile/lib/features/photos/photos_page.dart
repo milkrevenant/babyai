@@ -3,7 +3,7 @@ import "dart:convert";
 import "package:flutter/material.dart";
 
 import "../../core/config/app_env.dart";
-import "../../core/network/babylog_api.dart";
+import "../../core/network/babyai_api.dart";
 
 class PhotosPage extends StatefulWidget {
   const PhotosPage({super.key});
@@ -33,7 +33,7 @@ class _PhotosPageState extends State<PhotosPage> {
     });
 
     try {
-      final Map<String, dynamic> result = await BabyLogApi.instance.createUploadUrl();
+      final Map<String, dynamic> result = await BabyAIApi.instance.createUploadUrl();
       final String? objectKey = result["object_key"] as String?;
       if (objectKey != null && objectKey.isNotEmpty) {
         _objectKeyController.text = objectKey;
@@ -60,7 +60,7 @@ class _PhotosPageState extends State<PhotosPage> {
       _error = null;
     });
     try {
-      final Map<String, dynamic> result = await BabyLogApi.instance.completeUpload(
+      final Map<String, dynamic> result = await BabyAIApi.instance.completeUpload(
         objectKey: objectKey,
         downloadable: _downloadable,
       );

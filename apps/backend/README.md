@@ -19,10 +19,10 @@ Set these values in `.env`:
 Example:
 ```env
 APP_ENV=local
-APP_NAME=BabyLog AI API
+APP_NAME=BabyAI API
 API_PREFIX=/api/v1
 APP_PORT=8000
-DATABASE_URL=postgres://babylog:babylog@localhost:5432/babylog
+DATABASE_URL=postgres://babyai:babyai@localhost:5432/babyai
 JWT_SECRET=replace-with-long-random-secret
 JWT_ALGORITHM=HS256
 JWT_AUDIENCE=
@@ -33,8 +33,8 @@ CORS_ALLOW_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://localhost:
 
 If you use Prisma Dev DB instead of local PostgreSQL:
 ```bash
-cd C:/Users/milkrevenant/Documents/code/babylog-ai
-npx prisma dev start babylog
+cd C:/Users/milkrevenant/Documents/code/babyai
+npx prisma dev start babyai
 npx prisma dev ls
 ```
 Use the `TCP` URL from `prisma dev ls` output as `DATABASE_URL`.
@@ -51,9 +51,9 @@ Unit tests always run. API integration tests run when `TEST_DATABASE_URL` is set
 
 PowerShell example:
 ```powershell
-$env:TEST_DATABASE_URL = "postgres://babylog:babylog@localhost:5432/babylog_test"
+$env:TEST_DATABASE_URL = "postgres://babyai:babyai@localhost:5432/babyai_test"
 $env:DATABASE_URL = $env:TEST_DATABASE_URL
-cd C:\Users\milkrevenant\Documents\code\babylog-ai
+cd C:\Users\milkrevenant\Documents\code\babyai
 npm run prisma:push
 cd apps\backend
 "C:\Program Files\Go\bin\go.exe" test ./internal/server -count=1

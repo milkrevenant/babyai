@@ -1,4 +1,4 @@
-module babylog-ai/apps/backend
+module babyai/apps/backend
 
 go 1.26.0
 

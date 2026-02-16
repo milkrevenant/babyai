@@ -1,4 +1,4 @@
-# BabyLog AI
+# BabyAI
 
 Baby care logging + AI summary MVP monorepo.
 
@@ -22,9 +22,9 @@ copy .env.example .env
 
 ## Prisma Schema
 ```bash
-cd C:/Users/milkrevenant/Documents/code/babylog-ai
+cd C:/Users/milkrevenant/Documents/code/babyai
 npm install
-$env:DATABASE_URL="postgres://babylog:babylog@localhost:5432/babylog"
+$env:DATABASE_URL="postgres://babyai:babyai@localhost:5432/babyai"
 npm run prisma:validate
 npm run prisma:generate
 npm run prisma:push
@@ -32,4 +32,4 @@ npm run prisma:push
 
 ## Notes
 - Database schema source of truth is Prisma (`packages/schema/prisma/schema.prisma`).
-- Mobile app calls backend APIs in `apps/mobile/lib/core/network/babylog_api.dart`.
+- Mobile app calls backend APIs in `apps/mobile/lib/core/network/babyai_api.dart`.

@@ -10,9 +10,9 @@ import (
 	"syscall"
 	"time"
 
-	"babylog-ai/apps/backend/internal/config"
-	"babylog-ai/apps/backend/internal/db"
-	"babylog-ai/apps/backend/internal/server"
+	"babyai/apps/backend/internal/config"
+	"babyai/apps/backend/internal/db"
+	"babyai/apps/backend/internal/server"
 )
 
 func main() {
@@ -40,7 +40,7 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("babylog api listening on http://localhost:%s", cfg.AppPort)
+		log.Printf("babyai api listening on http://localhost:%s", cfg.AppPort)
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("server failed: %v", err)
 		}

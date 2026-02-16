@@ -1,7 +1,7 @@
-# PRD - BabyLog AI (MVP)
+# PRD - BabyAI (MVP)
 
 ## 1. 제품 개요
-- 제품명(가칭): BabyLog AI
+- 제품명(가칭): BabyAI
 - 목표:
   - 음성 기반 육아 기록
   - 기록 기반 대화형 Q&A

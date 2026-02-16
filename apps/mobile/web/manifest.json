@@ -1,6 +1,6 @@
 {
-    "name": "babylog_ai",
-    "short_name": "babylog_ai",
+    "name": "babyai",
+    "short_name": "babyai",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

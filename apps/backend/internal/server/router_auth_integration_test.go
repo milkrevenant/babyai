@@ -17,8 +17,8 @@ func TestHealthOK(t *testing.T) {
 	if body["status"] != "ok" {
 		t.Fatalf("expected status=ok, got %v", body["status"])
 	}
-	if body["service"] != "babylog-api" {
-		t.Fatalf("expected service=babylog-api, got %v", body["service"])
+	if body["service"] != "babyai-api" {
+		t.Fatalf("expected service=babyai-api, got %v", body["service"])
 	}
 }
 

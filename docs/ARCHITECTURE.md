@@ -1,4 +1,4 @@
-# Architecture - BabyLog AI MVP
+# Architecture - BabyAI MVP
 
 ## 1. 시스템 구성
 - Client: Flutter 앱(iOS/Android)

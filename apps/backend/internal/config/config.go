@@ -30,10 +30,10 @@ func Load() Config {
 
 	return Config{
 		AppEnv:             getEnv("APP_ENV", "local"),
-		AppName:            getEnv("APP_NAME", "BabyLog AI API"),
+		AppName:            getEnv("APP_NAME", "BabyAI API"),
 		APIPrefix:          getEnv("API_PREFIX", "/api/v1"),
 		AppPort:            getEnv("APP_PORT", "8000"),
-		DatabaseURL:        getEnv("DATABASE_URL", "postgresql://babylog:babylog@localhost:5432/babylog"),
+		DatabaseURL:        getEnv("DATABASE_URL", "postgresql://babyai:babyai@localhost:5432/babyai"),
 		RedisURL:           getEnv("REDIS_URL", "redis://localhost:6379/0"),
 		DefaultTone:        getEnv("DEFAULT_TONE", "neutral"),
 		JWTSecret:          getEnv("JWT_SECRET", ""),

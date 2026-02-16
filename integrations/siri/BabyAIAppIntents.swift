@@ -1,7 +1,7 @@
 import AppIntents
 import Foundation
 
-enum BabyLogTone: String, AppEnum {
+enum BabyAITone: String, AppEnum {
     case friendly
     case neutral
     case formal
@@ -9,7 +9,7 @@ enum BabyLogTone: String, AppEnum {
     case coach
 
     static var typeDisplayRepresentation = TypeDisplayRepresentation(name: "AI Tone")
-    static var caseDisplayRepresentations: [BabyLogTone: DisplayRepresentation] = [
+    static var caseDisplayRepresentations: [BabyAITone: DisplayRepresentation] = [
         .friendly: "친근",
         .neutral: "중립",
         .formal: "격식",
@@ -21,7 +21,7 @@ enum BabyLogTone: String, AppEnum {
 struct SiriBackendClient {
     let baseURL: URL
 
-    func execute(intentName: String, babyId: String, tone: BabyLogTone) async throws -> String {
+    func execute(intentName: String, babyId: String, tone: BabyAITone) async throws -> String {
         var request = URLRequest(url: baseURL.appendingPathComponent("/api/v1/assistants/siri/\(intentName)"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -44,10 +44,10 @@ struct GetLastPooTimeIntent: AppIntent {
     var babyId: String
 
     @Parameter(title: "톤")
-    var tone: BabyLogTone
+    var tone: BabyAITone
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let client = SiriBackendClient(baseURL: URL(string: "https://api.babylog.ai")!)
+        let client = SiriBackendClient(baseURL: URL(string: "https://api.babyai.ai")!)
         let dialog = try await client.execute(intentName: "GetLastPooTime", babyId: babyId, tone: tone)
         return .result(dialog: "\(dialog)")
     }
@@ -61,10 +61,10 @@ struct GetNextFeedingEtaIntent: AppIntent {
     var babyId: String
 
     @Parameter(title: "톤")
-    var tone: BabyLogTone
+    var tone: BabyAITone
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let client = SiriBackendClient(baseURL: URL(string: "https://api.babylog.ai")!)
+        let client = SiriBackendClient(baseURL: URL(string: "https://api.babyai.ai")!)
         let dialog = try await client.execute(intentName: "GetNextFeedingEta", babyId: babyId, tone: tone)
         return .result(dialog: "\(dialog)")
     }
@@ -78,10 +78,10 @@ struct GetTodaySummaryIntent: AppIntent {
     var babyId: String
 
     @Parameter(title: "톤")
-    var tone: BabyLogTone
+    var tone: BabyAITone
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let client = SiriBackendClient(baseURL: URL(string: "https://api.babylog.ai")!)
+        let client = SiriBackendClient(baseURL: URL(string: "https://api.babyai.ai")!)
         let dialog = try await client.execute(intentName: "GetTodaySummary", babyId: babyId, tone: tone)
         return .result(dialog: "\(dialog)")
     }

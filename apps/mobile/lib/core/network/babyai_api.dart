@@ -12,8 +12,8 @@ class ApiFailure implements Exception {
   String toString() => statusCode == null ? message : "$message (HTTP $statusCode)";
 }
 
-class BabyLogApi {
-  BabyLogApi._()
+class BabyAIApi {
+  BabyAIApi._()
       : _dio = Dio(
           BaseOptions(
             baseUrl: AppEnv.apiBaseUrl,
@@ -24,7 +24,7 @@ class BabyLogApi {
           ),
         );
 
-  static final BabyLogApi instance = BabyLogApi._();
+  static final BabyAIApi instance = BabyAIApi._();
   final Dio _dio;
 
   bool get isConfigured =>

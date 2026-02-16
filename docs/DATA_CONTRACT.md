@@ -1,4 +1,4 @@
-# Data Contract - BabyLog AI MVP
+# Data Contract - BabyAI MVP
 
 ## 1. 엔티티와 필드
 
