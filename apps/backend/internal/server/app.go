@@ -367,13 +367,13 @@ func (a *App) getBabyWithAccess(ctx context.Context, userID, babyID string, allo
 
 func recordAuditLog(ctx context.Context, q dbQuerier, householdID, actorUserID, action, targetType string, targetID *string, payload any) error {
 	id := uuid.NewString()
-	var payloadBytes []byte
+	var payloadJSON any
 	if payload != nil {
 		encoded, err := json.Marshal(payload)
 		if err != nil {
 			return err
 		}
-		payloadBytes = encoded
+		payloadJSON = string(encoded)
 	}
 
 	var actor any
@@ -393,7 +393,7 @@ func recordAuditLog(ctx context.Context, q dbQuerier, householdID, actorUserID, 
 		action,
 		targetType,
 		targetID,
-		payloadBytes,
+		payloadJSON,
 	).Scan(&id)
 }
 

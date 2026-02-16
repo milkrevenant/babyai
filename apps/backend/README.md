@@ -46,6 +46,24 @@ cd apps/backend
 "C:\Program Files\Go\bin\go.exe" build ./...
 ```
 
+## Tests
+Unit tests always run. API integration tests run when `TEST_DATABASE_URL` is set.
+
+PowerShell example:
+```powershell
+$env:TEST_DATABASE_URL = "postgres://babylog:babylog@localhost:5432/babylog_test"
+$env:DATABASE_URL = $env:TEST_DATABASE_URL
+cd C:\Users\milkrevenant\Documents\code\babylog-ai
+npm run prisma:push
+cd apps\backend
+"C:\Program Files\Go\bin\go.exe" test ./internal/server -count=1
+"C:\Program Files\Go\bin\go.exe" test ./... -count=1
+```
+
+Notes:
+- Integration tests require schema tables to exist in `TEST_DATABASE_URL`.
+- Integration tests truncate domain tables between tests.
+
 ## Auth
 Most endpoints require:
 ```http
