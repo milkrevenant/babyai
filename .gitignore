@@ -17,7 +17,10 @@ pnpm-lock.yaml
 package-lock.json
 yarn.lock
 
+# Backend runtime artifacts
+apps/backend/backend_run_stdout.log
+apps/backend/backend_run_stderr.log
+
 # IDE
 .idea/
 .vscode/
-
