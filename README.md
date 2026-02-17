@@ -48,6 +48,8 @@ Copy-Item .env.example .env
 go run ./cmd/api
 ```
 
+Default local backend port in this repo is `18000` (`APP_PORT=18000` in `.env`).
+
 3. Prepare schema (new terminal)
 ```powershell
 cd C:\Users\milkrevenant\Documents\code\babyai
@@ -63,7 +65,14 @@ npm run prisma:push
 cd C:\Users\milkrevenant\Documents\code\babyai\apps\mobile
 flutter pub get
 flutter run -d windows --debug `
-  --dart-define=API_BASE_URL=http://127.0.0.1:8000 `
+  --dart-define=API_BASE_URL=http://127.0.0.1:18000 `
+  --dart-define=API_BEARER_TOKEN=<jwt-token>
+```
+
+Android emulator example:
+```powershell
+flutter run -d emulator-5554 --debug `
+  --dart-define=API_BASE_URL=http://10.0.2.2:18000 `
   --dart-define=API_BEARER_TOKEN=<jwt-token>
 ```
 
@@ -75,3 +84,9 @@ flutter run -d windows --debug `
 ## References
 - Backend setup: `apps/backend/README.md`
 - Mobile setup: `apps/mobile/README.md`
+- Gemini/Assistant roadmap: `docs/gemini-babyai-plan.md`
+
+## Gemini/Assistant Notes (Current)
+- Intent-based record flow is integrated on Android (`OPEN_APP_FEATURE` + deep link bridge).
+- DB write must be confirmed by backend `POST /api/v1/events/manual`; chat text alone is not a write guarantee.
+- For production release, keep record-intent parsing and fallback policy aligned with `docs/gemini-babyai-plan.md`.
