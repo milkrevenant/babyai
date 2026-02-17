@@ -161,9 +161,13 @@ func TestQuickLandingSnapshotReturnsStructuredDashboardData(t *testing.T) {
 
 	seedEvent(t, "", fixture.BabyID, "FORMULA", base.Add(8*time.Hour), nil, map[string]any{"ml": 120}, fixture.UserID)
 	seedEvent(t, "", fixture.BabyID, "FORMULA", base.Add(19*time.Hour+15*time.Minute), nil, map[string]any{"ml": 140}, fixture.UserID)
+	seedEvent(t, "", fixture.BabyID, "BREASTFEED", base.Add(14*time.Hour+10*time.Minute), nil, map[string]any{}, fixture.UserID)
 	sleepStart := base.Add(11 * time.Hour)
 	sleepEnd := sleepStart.Add(95 * time.Minute)
 	seedEvent(t, "", fixture.BabyID, "SLEEP", sleepStart, &sleepEnd, map[string]any{}, fixture.UserID)
+	seedEvent(t, "", fixture.BabyID, "PEE", base.Add(16*time.Hour+40*time.Minute), nil, map[string]any{}, fixture.UserID)
+	seedEvent(t, "", fixture.BabyID, "POO", base.Add(17*time.Hour+5*time.Minute), nil, map[string]any{}, fixture.UserID)
+	seedEvent(t, "", fixture.BabyID, "MEDICATION", base.Add(18*time.Hour), nil, map[string]any{"name": "vitamin-d"}, fixture.UserID)
 	seedEvent(t, "", fixture.BabyID, "MEMO", base.Add(20*time.Hour), nil, map[string]any{"text": "Needs vitamin D after lunch"}, fixture.UserID)
 
 	rec := performRequest(
@@ -187,6 +191,22 @@ func TestQuickLandingSnapshotReturnsStructuredDashboardData(t *testing.T) {
 	if body["last_formula_time"] == nil {
 		t.Fatalf("expected last_formula_time, got nil")
 	}
+	if formulaCount, ok := body["formula_count"].(float64); !ok || int(formulaCount) != 2 {
+		t.Fatalf("expected formula_count=2, got %v", body["formula_count"])
+	}
+	if formulaTotalML, ok := body["formula_total_ml"].(float64); !ok || int(formulaTotalML) != 260 {
+		t.Fatalf("expected formula_total_ml=260, got %v", body["formula_total_ml"])
+	}
+	if breastfeedCount, ok := body["breastfeed_count"].(float64); !ok || int(breastfeedCount) != 1 {
+		t.Fatalf("expected breastfeed_count=1, got %v", body["breastfeed_count"])
+	}
+	breastfeedTimes := decodeStringList(t, body["breastfeed_times"])
+	if len(breastfeedTimes) != 1 {
+		t.Fatalf("expected 1 breastfeed time, got %v", breastfeedTimes)
+	}
+	if body["last_breastfeed_time"] == nil {
+		t.Fatalf("expected last_breastfeed_time, got nil")
+	}
 	if body["recent_sleep_time"] == nil {
 		t.Fatalf("expected recent_sleep_time, got nil")
 	}
@@ -200,6 +220,21 @@ func TestQuickLandingSnapshotReturnsStructuredDashboardData(t *testing.T) {
 	}
 	if body["special_memo"] != "Needs vitamin D after lunch" {
 		t.Fatalf("unexpected special_memo: %v", body["special_memo"])
+	}
+	if peeCount, ok := body["diaper_pee_count"].(float64); !ok || int(peeCount) != 1 {
+		t.Fatalf("expected diaper_pee_count=1, got %v", body["diaper_pee_count"])
+	}
+	if pooCount, ok := body["diaper_poo_count"].(float64); !ok || int(pooCount) != 1 {
+		t.Fatalf("expected diaper_poo_count=1, got %v", body["diaper_poo_count"])
+	}
+	if body["last_diaper_time"] == nil {
+		t.Fatalf("expected last_diaper_time, got nil")
+	}
+	if medicationCount, ok := body["medication_count"].(float64); !ok || int(medicationCount) != 1 {
+		t.Fatalf("expected medication_count=1, got %v", body["medication_count"])
+	}
+	if body["last_medication_time"] == nil {
+		t.Fatalf("expected last_medication_time, got nil")
 	}
 
 	bands, ok := body["formula_amount_by_time_band_ml"].(map[string]any)

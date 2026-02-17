@@ -9,6 +9,7 @@ import "../features/photos/photos_page.dart";
 import "../features/recording/recording_page.dart";
 import "../features/report/report_page.dart";
 import "../features/settings/settings_page.dart";
+import "i18n/app_i18n.dart";
 import "network/babyai_api.dart";
 import "theme/app_theme_controller.dart";
 
@@ -90,6 +91,17 @@ class _BabyAIAppState extends State<BabyAIApp> {
     );
   }
 
+  Locale _localeFromLanguage(AppLanguage language) {
+    switch (language) {
+      case AppLanguage.ko:
+        return const Locale("ko");
+      case AppLanguage.en:
+        return const Locale("en");
+      case AppLanguage.es:
+        return const Locale("es");
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -99,9 +111,13 @@ class _BabyAIAppState extends State<BabyAIApp> {
           title: "BabyAI",
           debugShowCheckedModeBanner: false,
           themeMode: _themeController.themeMode,
+          locale: _localeFromLanguage(_themeController.language),
           theme: _buildTheme(brightness: Brightness.light),
           darkTheme: _buildTheme(brightness: Brightness.dark),
-          home: _HomeShell(themeController: _themeController),
+          home: AppSettingsScope(
+            controller: _themeController,
+            child: _HomeShell(themeController: _themeController),
+          ),
         );
       },
     );
@@ -125,33 +141,66 @@ class _HomeShellState extends State<_HomeShell> {
   static const int _marketPage = 4;
   static const int _communityPage = 5;
 
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  final GlobalKey<ReportPageState> _reportPageKey =
+      GlobalKey<ReportPageState>();
+
   int _index = 0;
   bool _isGoogleLoggedIn = false;
   String _accountName = "Google account";
   String _accountEmail = "Not connected";
 
-  final List<String> _titles = const <String>[
-    "Home",
-    "AI Chat",
-    "Statistics",
-    "Photos",
-    "Market",
-    "Community",
-  ];
-
-  final List<Widget> _pages = const <Widget>[
-    RecordingPage(),
-    ChatPage(),
-    ReportPage(),
-    PhotosPage(),
-    MarketPage(),
-    CommunityPage(),
+  late final List<Widget> _pages = <Widget>[
+    const RecordingPage(),
+    const ChatPage(),
+    ReportPage(key: _reportPageKey),
+    const PhotosPage(),
+    const MarketPage(),
+    const CommunityPage(),
   ];
 
   @override
   void initState() {
     super.initState();
     _bootstrapAccountFromToken();
+  }
+
+  String _labelForIndex(BuildContext context, int index) {
+    switch (index) {
+      case _homePage:
+        return tr(context, ko: "홈", en: "Home", es: "Inicio");
+      case _chatPage:
+        return tr(context, ko: "AI 채팅", en: "AI Chat", es: "Chat IA");
+      case _statisticsPage:
+        return tr(context, ko: "통계", en: "Statistics", es: "Estadisticas");
+      case _photosPage:
+        return tr(context, ko: "사진", en: "Photos", es: "Fotos");
+      case _marketPage:
+        return tr(context, ko: "장터", en: "Market", es: "Mercado");
+      case _communityPage:
+        return tr(context, ko: "커뮤니티", en: "Community", es: "Comunidad");
+      default:
+        return "";
+    }
+  }
+
+  IconData _iconForIndex(int index) {
+    switch (index) {
+      case _homePage:
+        return Icons.home_outlined;
+      case _chatPage:
+        return Icons.chat_bubble_outline;
+      case _statisticsPage:
+        return Icons.insert_chart_outlined;
+      case _photosPage:
+        return Icons.photo_library_outlined;
+      case _marketPage:
+        return Icons.storefront_outlined;
+      case _communityPage:
+        return Icons.groups_outlined;
+      default:
+        return Icons.apps_outlined;
+    }
   }
 
   void _selectIndex(int next) {
@@ -166,42 +215,42 @@ class _HomeShellState extends State<_HomeShell> {
       const _BottomMenuTab(
         pageIndex: _homePage,
         icon: Icons.home_outlined,
-        label: "Home",
+        label: "home",
       ),
     ];
     if (widget.themeController.isBottomMenuEnabled(AppBottomMenu.chat)) {
       tabs.add(const _BottomMenuTab(
         pageIndex: _chatPage,
         icon: Icons.chat_bubble_outline,
-        label: "AI",
+        label: "chat",
       ));
     }
     if (widget.themeController.isBottomMenuEnabled(AppBottomMenu.statistics)) {
       tabs.add(const _BottomMenuTab(
         pageIndex: _statisticsPage,
         icon: Icons.insert_chart_outlined,
-        label: "Statistics",
+        label: "statistics",
       ));
     }
     if (widget.themeController.isBottomMenuEnabled(AppBottomMenu.photos)) {
       tabs.add(const _BottomMenuTab(
         pageIndex: _photosPage,
         icon: Icons.photo_library_outlined,
-        label: "Photos",
+        label: "photos",
       ));
     }
     if (widget.themeController.isBottomMenuEnabled(AppBottomMenu.market)) {
       tabs.add(const _BottomMenuTab(
         pageIndex: _marketPage,
         icon: Icons.storefront_outlined,
-        label: "Market",
+        label: "market",
       ));
     }
     if (widget.themeController.isBottomMenuEnabled(AppBottomMenu.community)) {
       tabs.add(const _BottomMenuTab(
         pageIndex: _communityPage,
         icon: Icons.groups_outlined,
-        label: "Community",
+        label: "community",
       ));
     }
     return tabs;
@@ -274,7 +323,14 @@ class _HomeShellState extends State<_HomeShell> {
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
-          title: const Text("Google Login"),
+          title: Text(
+            tr(
+              context,
+              ko: "구글 로그인",
+              en: "Google Login",
+              es: "Inicio de Google",
+            ),
+          ),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -292,17 +348,27 @@ class _HomeShellState extends State<_HomeShell> {
                 const SizedBox(height: 10),
                 TextField(
                   controller: nameController,
-                  decoration: const InputDecoration(
-                    labelText: "Name (optional)",
-                    border: OutlineInputBorder(),
+                  decoration: InputDecoration(
+                    labelText: tr(
+                      context,
+                      ko: "이름(선택)",
+                      en: "Name (optional)",
+                      es: "Nombre (opcional)",
+                    ),
+                    border: const OutlineInputBorder(),
                   ),
                 ),
                 const SizedBox(height: 10),
                 TextField(
                   controller: emailController,
-                  decoration: const InputDecoration(
-                    labelText: "Email (optional)",
-                    border: OutlineInputBorder(),
+                  decoration: InputDecoration(
+                    labelText: tr(
+                      context,
+                      ko: "이메일(선택)",
+                      en: "Email (optional)",
+                      es: "Correo (opcional)",
+                    ),
+                    border: const OutlineInputBorder(),
                   ),
                 ),
               ],
@@ -311,7 +377,7 @@ class _HomeShellState extends State<_HomeShell> {
           actions: <Widget>[
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: const Text("Cancel"),
+              child: Text(tr(context, ko: "취소", en: "Cancel", es: "Cancelar")),
             ),
             FilledButton(
               onPressed: () {
@@ -340,7 +406,7 @@ class _HomeShellState extends State<_HomeShell> {
                 });
                 Navigator.of(context).pop();
               },
-              child: const Text("Login"),
+              child: Text(tr(context, ko: "로그인", en: "Login", es: "Entrar")),
             ),
           ],
         );
@@ -361,6 +427,60 @@ class _HomeShellState extends State<_HomeShell> {
     });
   }
 
+  void _onTopRefreshPressed() {
+    if (_index == _statisticsPage) {
+      _reportPageKey.currentState?.refreshData();
+    }
+  }
+
+  PreferredSizeWidget _buildTopBar(BuildContext context) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    return AppBar(
+      automaticallyImplyLeading: false,
+      toolbarHeight: 66,
+      elevation: 0,
+      scrolledUnderElevation: 0,
+      backgroundColor: Colors.transparent,
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedRectangleBorder(
+        borderRadius: const BorderRadius.vertical(bottom: Radius.circular(24)),
+        side: BorderSide(color: color.outlineVariant.withValues(alpha: 0.28)),
+      ),
+      flexibleSpace: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: <Color>[
+              color.surface.withValues(alpha: 0.98),
+              color.surface.withValues(alpha: 0.82),
+            ],
+          ),
+        ),
+      ),
+      titleSpacing: 12,
+      title: Row(
+        children: <Widget>[
+          _RoundTopButton(
+            icon: Icons.menu,
+            onTap: () => _scaffoldKey.currentState?.openDrawer(),
+          ),
+          const SizedBox(width: 8),
+          _RoundTopButton(
+            icon: _iconForIndex(_index),
+            onTap: () {},
+          ),
+          const Spacer(),
+          if (_index == _statisticsPage)
+            _RoundTopButton(
+              icon: Icons.refresh,
+              onTap: _onTopRefreshPressed,
+            ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final ColorScheme color = Theme.of(context).colorScheme;
@@ -371,7 +491,8 @@ class _HomeShellState extends State<_HomeShell> {
     final bool showBottomNav = selectedBottomIndex >= 0;
 
     return Scaffold(
-      appBar: AppBar(title: Text(_titles[_index])),
+      key: _scaffoldKey,
+      appBar: _buildTopBar(context),
       drawer: Drawer(
         child: SafeArea(
           child: Column(
@@ -381,58 +502,54 @@ class _HomeShellState extends State<_HomeShell> {
                   padding: EdgeInsets.zero,
                   children: <Widget>[
                     const Padding(
-                      padding: EdgeInsets.fromLTRB(16, 8, 16, 8),
+                      padding: EdgeInsets.fromLTRB(16, 6, 16, 8),
                       child: Text(
                         "BabyAI",
                         style: TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.w700,
-                        ),
+                            fontSize: 24, fontWeight: FontWeight.w700),
                       ),
                     ),
                     ListTile(
                       leading: const Icon(Icons.home_outlined),
-                      title: const Text("Home"),
-                      subtitle: const Text("Today snapshot + record input"),
+                      title: Text(_labelForIndex(context, _homePage)),
                       selected: _index == _homePage,
                       onTap: () => _selectIndex(_homePage),
                     ),
                     ListTile(
                       leading: const Icon(Icons.chat_bubble_outline),
-                      title: const Text("AI Chat"),
+                      title: Text(_labelForIndex(context, _chatPage)),
                       selected: _index == _chatPage,
                       onTap: () => _selectIndex(_chatPage),
                     ),
                     ListTile(
                       leading: const Icon(Icons.insert_chart_outlined),
-                      title: const Text("Statistics"),
+                      title: Text(_labelForIndex(context, _statisticsPage)),
                       selected: _index == _statisticsPage,
                       onTap: () => _selectIndex(_statisticsPage),
                     ),
                     ListTile(
                       leading: const Icon(Icons.photo_library_outlined),
-                      title: const Text("Photos"),
+                      title: Text(_labelForIndex(context, _photosPage)),
                       selected: _index == _photosPage,
                       onTap: () => _selectIndex(_photosPage),
                     ),
                     ListTile(
                       leading: const Icon(Icons.storefront_outlined),
-                      title: const Text("Market"),
-                      subtitle: const Text("Used / New / Promotion"),
+                      title: Text(_labelForIndex(context, _marketPage)),
                       selected: _index == _marketPage,
                       onTap: () => _selectIndex(_marketPage),
                     ),
                     ListTile(
                       leading: const Icon(Icons.groups_outlined),
-                      title: const Text("Community"),
-                      subtitle: const Text("Boards and suggestions"),
+                      title: Text(_labelForIndex(context, _communityPage)),
                       selected: _index == _communityPage,
                       onTap: () => _selectIndex(_communityPage),
                     ),
                     const Divider(),
                     ListTile(
                       leading: const Icon(Icons.settings_outlined),
-                      title: const Text("Settings"),
+                      title: Text(
+                          tr(context, ko: "설정", en: "Settings", es: "Ajustes")),
                       onTap: _openSettings,
                     ),
                   ],
@@ -444,8 +561,7 @@ class _HomeShellState extends State<_HomeShell> {
                   color: color.surfaceContainerHighest.withValues(alpha: 0.45),
                   border: Border(
                     top: BorderSide(
-                      color: color.outlineVariant.withValues(alpha: 0.5),
-                    ),
+                        color: color.outlineVariant.withValues(alpha: 0.5)),
                   ),
                 ),
                 child: Column(
@@ -462,16 +578,11 @@ class _HomeShellState extends State<_HomeShell> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: <Widget>[
-                              Text(
-                                _accountName,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                              Text(
-                                _accountEmail,
-                                overflow: TextOverflow.ellipsis,
-                              ),
+                              Text(_accountName,
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w700)),
+                              Text(_accountEmail,
+                                  overflow: TextOverflow.ellipsis),
                             ],
                           ),
                         ),
@@ -486,7 +597,8 @@ class _HomeShellState extends State<_HomeShell> {
                                 ? null
                                 : _loginWithGoogleToken,
                             icon: const Icon(Icons.login),
-                            label: const Text("Login"),
+                            label: Text(tr(context,
+                                ko: "로그인", en: "Login", es: "Entrar")),
                           ),
                         ),
                         const SizedBox(width: 8),
@@ -494,7 +606,8 @@ class _HomeShellState extends State<_HomeShell> {
                           child: OutlinedButton.icon(
                             onPressed: _isGoogleLoggedIn ? _logout : null,
                             icon: const Icon(Icons.logout),
-                            label: const Text("Logout"),
+                            label: Text(tr(context,
+                                ko: "로그아웃", en: "Logout", es: "Salir")),
                           ),
                         ),
                       ],
@@ -538,4 +651,29 @@ class _BottomMenuTab {
   final int pageIndex;
   final IconData icon;
   final String label;
+}
+
+class _RoundTopButton extends StatelessWidget {
+  const _RoundTopButton({required this.icon, required this.onTap});
+
+  final IconData icon;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    return Material(
+      color: color.surfaceContainerHighest.withValues(alpha: 0.6),
+      shape: const CircleBorder(),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: onTap,
+        child: SizedBox(
+          width: 40,
+          height: 40,
+          child: Icon(icon, size: 20),
+        ),
+      ),
+    );
+  }
 }

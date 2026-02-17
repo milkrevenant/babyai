@@ -217,7 +217,7 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 		 WHERE "babyId" = $1
 		   AND "startTime" >= $2
 		   AND "startTime" < $3
-		   AND type IN ('FORMULA', 'SLEEP', 'MEMO')
+		   AND type IN ('FORMULA', 'BREASTFEED', 'SLEEP', 'PEE', 'POO', 'MEDICATION', 'MEMO')
 		 ORDER BY "startTime" DESC`,
 		baby.ID,
 		start,
@@ -235,11 +235,20 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 		"afternoon": 0,
 		"evening":   0,
 	}
+	formulaCount := 0
 	formulaTimes := make([]string, 0)
+	breastfeedCount := 0
+	breastfeedTimes := make([]string, 0)
 	var lastFormulaTime *time.Time
+	var lastBreastfeedTime *time.Time
 	var recentSleepTime *time.Time
 	var recentSleepDurationMin *int
 	var sleepReferenceTime *time.Time
+	diaperPeeCount := 0
+	diaperPooCount := 0
+	var lastDiaperTime *time.Time
+	medicationCount := 0
+	var lastMedicationTime *time.Time
 	specialMemo := "No special memo for today."
 
 	for rows.Next() {
@@ -257,12 +266,20 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 
 		switch eventType {
 		case "FORMULA":
+			formulaCount++
 			if lastFormulaTime == nil {
 				lastFormulaTime = &startedUTC
 			}
 			formulaTimes = append(formulaTimes, startedUTC.Format(time.RFC3339))
 			amountML := int(extractNumberFromMap(valueMap, "ml", "amount_ml", "volume_ml") + 0.5)
 			formulaBands[landingFormulaBand(startedUTC.Hour())] += amountML
+
+		case "BREASTFEED":
+			breastfeedCount++
+			if lastBreastfeedTime == nil {
+				lastBreastfeedTime = &startedUTC
+			}
+			breastfeedTimes = append(breastfeedTimes, startedUTC.Format(time.RFC3339))
 
 		case "SLEEP":
 			if recentSleepTime == nil {
@@ -278,6 +295,24 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 				} else {
 					sleepReferenceTime = &startedUTC
 				}
+			}
+
+		case "PEE":
+			diaperPeeCount++
+			if lastDiaperTime == nil {
+				lastDiaperTime = &startedUTC
+			}
+
+		case "POO":
+			diaperPooCount++
+			if lastDiaperTime == nil {
+				lastDiaperTime = &startedUTC
+			}
+
+		case "MEDICATION":
+			medicationCount++
+			if lastMedicationTime == nil {
+				lastMedicationTime = &startedUTC
 			}
 
 		case "MEMO":
@@ -300,14 +335,26 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 		minutesSinceLastSleep = &elapsed
 	}
 
+	formulaTotalML := formulaBands["night"] + formulaBands["morning"] + formulaBands["afternoon"] + formulaBands["evening"]
+
 	c.JSON(http.StatusOK, gin.H{
 		"date":                           start.Format("2006-01-02"),
+		"formula_count":                  formulaCount,
 		"formula_times":                  formulaTimes,
+		"formula_total_ml":               formulaTotalML,
 		"formula_amount_by_time_band_ml": formulaBands,
 		"last_formula_time":              formatNullableTimeRFC3339(lastFormulaTime),
+		"breastfeed_count":               breastfeedCount,
+		"breastfeed_times":               breastfeedTimes,
+		"last_breastfeed_time":           formatNullableTimeRFC3339(lastBreastfeedTime),
 		"recent_sleep_time":              formatNullableTimeRFC3339(recentSleepTime),
 		"recent_sleep_duration_min":      recentSleepDurationMin,
 		"minutes_since_last_sleep":       minutesSinceLastSleep,
+		"diaper_pee_count":               diaperPeeCount,
+		"diaper_poo_count":               diaperPooCount,
+		"last_diaper_time":               formatNullableTimeRFC3339(lastDiaperTime),
+		"medication_count":               medicationCount,
+		"last_medication_time":           formatNullableTimeRFC3339(lastMedicationTime),
 		"special_memo":                   specialMemo,
 		"reference_text":                 "Derived from today's confirmed events.",
 	})

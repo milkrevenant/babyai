@@ -1,5 +1,6 @@
 import "package:flutter/material.dart";
 
+import "../../core/i18n/app_i18n.dart";
 import "../../core/network/babyai_api.dart";
 import "../../core/widgets/simple_donut_chart.dart";
 import "../../core/widgets/simple_stacked_bar_chart.dart";
@@ -8,10 +9,10 @@ class ReportPage extends StatefulWidget {
   const ReportPage({super.key});
 
   @override
-  State<ReportPage> createState() => _ReportPageState();
+  State<ReportPage> createState() => ReportPageState();
 }
 
-class _ReportPageState extends State<ReportPage> {
+class ReportPageState extends State<ReportPage> {
   bool _loading = false;
   String? _error;
   Map<String, dynamic>? _daily;
@@ -28,19 +29,14 @@ class _ReportPageState extends State<ReportPage> {
     "medication": Color(0xFF72B37E),
   };
 
-  static const Map<String, String> _categoryLabels = <String, String>{
-    "sleep": "Sleep",
-    "breastfeed": "Breastfeed",
-    "formula": "Formula",
-    "pee": "Diaper (pee)",
-    "poo": "Diaper (poo)",
-    "medication": "Medication",
-  };
-
   @override
   void initState() {
     super.initState();
     _loadReports();
+  }
+
+  Future<void> refreshData() async {
+    await _loadReports();
   }
 
   DateTime _toWeekStart(DateTime day) {
@@ -80,9 +76,8 @@ class _ReportPageState extends State<ReportPage> {
 
       final Map<String, dynamic> daily = await dailyFuture;
       final Map<String, dynamic> weekly = await weeklyFuture;
-      final List<Map<String, dynamic>> weeklyDaily = await Future.wait(
-        dayFutures,
-      );
+      final List<Map<String, dynamic>> weeklyDaily =
+          await Future.wait(dayFutures);
 
       setState(() {
         _daily = daily;
@@ -183,17 +178,24 @@ class _ReportPageState extends State<ReportPage> {
     return "${start.month}/${start.day} - ${end.month}/${end.day}";
   }
 
-  String _dayLabel(DateTime day) {
-    const List<String> labels = <String>[
-      "Mon",
-      "Tue",
-      "Wed",
-      "Thu",
-      "Fri",
-      "Sat",
-      "Sun",
-    ];
-    return labels[day.weekday - 1];
+  String _dayLabel(BuildContext context, DateTime day) {
+    switch (day.weekday) {
+      case DateTime.monday:
+        return tr(context, ko: "월", en: "Mon", es: "Lun");
+      case DateTime.tuesday:
+        return tr(context, ko: "화", en: "Tue", es: "Mar");
+      case DateTime.wednesday:
+        return tr(context, ko: "수", en: "Wed", es: "Mie");
+      case DateTime.thursday:
+        return tr(context, ko: "목", en: "Thu", es: "Jue");
+      case DateTime.friday:
+        return tr(context, ko: "금", en: "Fri", es: "Vie");
+      case DateTime.saturday:
+        return tr(context, ko: "토", en: "Sat", es: "Sab");
+      case DateTime.sunday:
+      default:
+        return tr(context, ko: "일", en: "Sun", es: "Dom");
+    }
   }
 
   @override
@@ -201,60 +203,72 @@ class _ReportPageState extends State<ReportPage> {
     final _DayMetrics dailyMetrics = _parseDaily(_daily);
     final Map<String, double> dailyMinutes = _toEstimatedMinutes(dailyMetrics);
     final double dailyTotal =
-        dailyMinutes.values.fold<double>(0, (a, b) => a + b);
+        dailyMinutes.values.fold<double>(0, (double a, double b) => a + b);
 
-    final List<DonutSliceData> pieSlices = _categoryLabels.keys
-        .map(
-          (String key) => DonutSliceData(
-            label: _categoryLabels[key]!,
-            value: dailyMinutes[key] ?? 0,
-            color: _categoryColors[key]!,
-          ),
-        )
-        .toList();
+    final List<DonutSliceData> pieSlices = <DonutSliceData>[
+      DonutSliceData(
+        label: tr(context, ko: "수면", en: "Sleep", es: "Sueno"),
+        value: dailyMinutes["sleep"] ?? 0,
+        color: _categoryColors["sleep"]!,
+      ),
+      DonutSliceData(
+        label: tr(context, ko: "모유수유", en: "Breastfeed", es: "Lactancia"),
+        value: dailyMinutes["breastfeed"] ?? 0,
+        color: _categoryColors["breastfeed"]!,
+      ),
+      DonutSliceData(
+        label: tr(context, ko: "분유수유", en: "Formula", es: "Formula"),
+        value: dailyMinutes["formula"] ?? 0,
+        color: _categoryColors["formula"]!,
+      ),
+      DonutSliceData(
+        label:
+            tr(context, ko: "기저귀(소변)", en: "Diaper (pee)", es: "Panal (orina)"),
+        value: dailyMinutes["pee"] ?? 0,
+        color: _categoryColors["pee"]!,
+      ),
+      DonutSliceData(
+        label:
+            tr(context, ko: "기저귀(대변)", en: "Diaper (poo)", es: "Panal (heces)"),
+        value: dailyMinutes["poo"] ?? 0,
+        color: _categoryColors["poo"]!,
+      ),
+      DonutSliceData(
+        label: tr(context, ko: "투약", en: "Medication", es: "Medicacion"),
+        value: dailyMinutes["medication"] ?? 0,
+        color: _categoryColors["medication"]!,
+      ),
+    ];
 
     final DateTime base = _weekStartUtc ?? _toWeekStart(DateTime.now().toUtc());
-    final List<StackedBarData> weeklyBars = List<StackedBarData>.generate(
-      7,
-      (int index) {
-        final DateTime day = base.add(Duration(days: index));
-        final _DayMetrics metrics = _parseDaily(
-          index < _weeklyDailyReports.length
-              ? _weeklyDailyReports[index]
-              : null,
-        );
-        final Map<String, double> minutes = _toEstimatedMinutes(metrics);
-        return StackedBarData(
-          label: _dayLabel(day),
-          segments: <StackedBarSegment>[
-            StackedBarSegment(
-              value: minutes["sleep"] ?? 0,
-              color: _categoryColors["sleep"]!,
-            ),
-            StackedBarSegment(
+    final List<StackedBarData> weeklyBars =
+        List<StackedBarData>.generate(7, (int index) {
+      final DateTime day = base.add(Duration(days: index));
+      final _DayMetrics metrics = _parseDaily(index < _weeklyDailyReports.length
+          ? _weeklyDailyReports[index]
+          : null);
+      final Map<String, double> minutes = _toEstimatedMinutes(metrics);
+      return StackedBarData(
+        label: _dayLabel(context, day),
+        segments: <StackedBarSegment>[
+          StackedBarSegment(
+              value: minutes["sleep"] ?? 0, color: _categoryColors["sleep"]!),
+          StackedBarSegment(
               value: minutes["breastfeed"] ?? 0,
-              color: _categoryColors["breastfeed"]!,
-            ),
-            StackedBarSegment(
+              color: _categoryColors["breastfeed"]!),
+          StackedBarSegment(
               value: minutes["formula"] ?? 0,
-              color: _categoryColors["formula"]!,
-            ),
-            StackedBarSegment(
-              value: minutes["pee"] ?? 0,
-              color: _categoryColors["pee"]!,
-            ),
-            StackedBarSegment(
-              value: minutes["poo"] ?? 0,
-              color: _categoryColors["poo"]!,
-            ),
-            StackedBarSegment(
+              color: _categoryColors["formula"]!),
+          StackedBarSegment(
+              value: minutes["pee"] ?? 0, color: _categoryColors["pee"]!),
+          StackedBarSegment(
+              value: minutes["poo"] ?? 0, color: _categoryColors["poo"]!),
+          StackedBarSegment(
               value: minutes["medication"] ?? 0,
-              color: _categoryColors["medication"]!,
-            ),
-          ],
-        );
-      },
-    );
+              color: _categoryColors["medication"]!),
+        ],
+      );
+    });
 
     final Map<dynamic, dynamic> trend =
         (_weekly?["trend"] as Map<dynamic, dynamic>?) ?? <dynamic, dynamic>{};
@@ -266,29 +280,20 @@ class _ReportPageState extends State<ReportPage> {
     return RefreshIndicator(
       onRefresh: _loadReports,
       child: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
         children: <Widget>[
-          Row(
-            children: <Widget>[
-              const Expanded(
-                child: Text(
-                  "Statistics",
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
-                ),
-              ),
-              IconButton(
-                onPressed: _loading ? null : _loadReports,
-                icon: const Icon(Icons.refresh),
-              ),
-            ],
-          ),
           Text(
-            "Week: ${_weekLabel()}",
+            "${tr(context, ko: "기간", en: "Week", es: "Semana")}: ${_weekLabel()}",
             style: TextStyle(
                 color: Theme.of(context).colorScheme.onSurfaceVariant),
           ),
           Text(
-            "Color mapping: Sleep purple, Breastfeed red, Formula yellow",
+            tr(
+              context,
+              ko: "색상 매핑: 보라=수면, 빨강=모유수유, 노랑=분유수유",
+              en: "Color mapping: Purple=Sleep, Red=Breastfeed, Yellow=Formula",
+              es: "Color: Morado=Sueno, Rojo=Lactancia, Amarillo=Formula",
+            ),
             style: TextStyle(
                 color: Theme.of(context).colorScheme.onSurfaceVariant),
           ),
@@ -301,9 +306,8 @@ class _ReportPageState extends State<ReportPage> {
             Text(
               _error!,
               style: TextStyle(
-                color: Theme.of(context).colorScheme.error,
-                fontWeight: FontWeight.w600,
-              ),
+                  color: Theme.of(context).colorScheme.error,
+                  fontWeight: FontWeight.w600),
             ),
           ],
           const SizedBox(height: 12),
@@ -313,9 +317,12 @@ class _ReportPageState extends State<ReportPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  const Text(
-                    "Daily activity share (estimated minutes)",
-                    style: TextStyle(fontWeight: FontWeight.w700),
+                  Text(
+                    tr(context,
+                        ko: "1일 활동 비중(추정 시간)",
+                        en: "Daily activity share (estimated minutes)",
+                        es: "Participacion diaria (min estimados)"),
+                    style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                   const SizedBox(height: 8),
                   SizedBox(
@@ -327,10 +334,9 @@ class _ReportPageState extends State<ReportPage> {
                         Column(
                           mainAxisSize: MainAxisSize.min,
                           children: <Widget>[
-                            const Text(
-                              "Today",
-                              style: TextStyle(fontWeight: FontWeight.w700),
-                            ),
+                            Text(tr(context, ko: "오늘", en: "Today", es: "Hoy"),
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w700)),
                             Text("${dailyTotal.toStringAsFixed(0)} min"),
                           ],
                         ),
@@ -341,12 +347,12 @@ class _ReportPageState extends State<ReportPage> {
                   Wrap(
                     spacing: 8,
                     runSpacing: 8,
-                    children: _categoryLabels.keys
+                    children: pieSlices
                         .map(
-                          (String key) => _LegendChip(
-                            color: _categoryColors[key]!,
-                            label: _categoryLabels[key]!,
-                            value: "${(dailyMinutes[key] ?? 0).round()}m",
+                          (DonutSliceData item) => _LegendChip(
+                            color: item.color,
+                            label: item.label,
+                            value: "${item.value.round()}m",
                           ),
                         )
                         .toList(),
@@ -362,29 +368,17 @@ class _ReportPageState extends State<ReportPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  const Text(
-                    "Weekly activity bars (estimated minutes per day)",
-                    style: TextStyle(fontWeight: FontWeight.w700),
+                  Text(
+                    tr(context,
+                        ko: "1주 활동 막대(일별 추정)",
+                        en: "Weekly stacked bars (estimated by day)",
+                        es: "Barras semanales (estimado por dia)"),
+                    style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                   const SizedBox(height: 8),
                   SizedBox(
-                    height: 230,
-                    child: SimpleStackedBarChart(bars: weeklyBars),
-                  ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: _categoryLabels.keys
-                        .map(
-                          (String key) => _LegendChip(
-                            color: _categoryColors[key]!,
-                            label: _categoryLabels[key]!,
-                            value: "",
-                          ),
-                        )
-                        .toList(),
-                  ),
+                      height: 230,
+                      child: SimpleStackedBarChart(bars: weeklyBars)),
                 ],
               ),
             ),
@@ -396,10 +390,12 @@ class _ReportPageState extends State<ReportPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  const Text(
-                    "Weekly trend",
-                    style: TextStyle(fontWeight: FontWeight.w700),
-                  ),
+                  Text(
+                      tr(context,
+                          ko: "주간 추세",
+                          en: "Weekly trend",
+                          es: "Tendencia semanal"),
+                      style: const TextStyle(fontWeight: FontWeight.w700)),
                   const SizedBox(height: 8),
                   Text("Formula total: ${trend["feeding_total_ml"] ?? "n/a"}"),
                   Text("Sleep total: ${trend["sleep_total_min"] ?? "n/a"}"),
@@ -414,13 +410,16 @@ class _ReportPageState extends State<ReportPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  const Text(
-                    "Suggestions",
-                    style: TextStyle(fontWeight: FontWeight.w700),
-                  ),
+                  Text(
+                      tr(context,
+                          ko: "제안", en: "Suggestions", es: "Sugerencias"),
+                      style: const TextStyle(fontWeight: FontWeight.w700)),
                   const SizedBox(height: 8),
                   if (suggestions.isEmpty)
-                    const Text("No suggestions available."),
+                    Text(tr(context,
+                        ko: "제안 데이터가 없습니다.",
+                        en: "No suggestions available.",
+                        es: "No hay sugerencias.")),
                   ...suggestions.map(
                     (String item) => Padding(
                       padding: const EdgeInsets.only(bottom: 6),
@@ -438,11 +437,8 @@ class _ReportPageState extends State<ReportPage> {
 }
 
 class _LegendChip extends StatelessWidget {
-  const _LegendChip({
-    required this.color,
-    required this.label,
-    required this.value,
-  });
+  const _LegendChip(
+      {required this.color, required this.label, required this.value});
 
   final Color color;
   final String label;
@@ -463,12 +459,11 @@ class _LegendChip extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
           Container(
-            width: 10,
-            height: 10,
-            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-          ),
+              width: 10,
+              height: 10,
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
           const SizedBox(width: 6),
-          Text("$label ${value.isEmpty ? "" : value}"),
+          Text("$label $value"),
         ],
       ),
     );

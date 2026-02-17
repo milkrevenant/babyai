@@ -1,5 +1,6 @@
 import "package:flutter/material.dart";
 
+import "../../core/i18n/app_i18n.dart";
 import "../../core/theme/app_theme_controller.dart";
 
 class SettingsPage extends StatelessWidget {
@@ -24,16 +25,17 @@ class SettingsPage extends StatelessWidget {
     await themeController.setMode(mode);
   }
 
-  String _mainFontLabel(AppMainFont font) {
+  String _mainFontLabel(BuildContext context, AppMainFont font) {
     switch (font) {
       case AppMainFont.notoSans:
         return "Noto Sans";
       case AppMainFont.systemSans:
-        return "System Sans";
+        return tr(context,
+            ko: "시스템 산세리프", en: "System Sans", es: "Sans del sistema");
     }
   }
 
-  String _highlightFontLabel(AppHighlightFont font) {
+  String _highlightFontLabel(BuildContext context, AppHighlightFont font) {
     switch (font) {
       case AppHighlightFont.ibmPlexSans:
         return "IBM Plex Sans";
@@ -42,16 +44,16 @@ class SettingsPage extends StatelessWidget {
     }
   }
 
-  String _toneLabel(AppAccentTone tone) {
+  String _toneLabel(BuildContext context, AppAccentTone tone) {
     switch (tone) {
       case AppAccentTone.gold:
-        return "Gold";
+        return tr(context, ko: "골드", en: "Gold", es: "Dorado");
       case AppAccentTone.teal:
-        return "Teal";
+        return tr(context, ko: "틸", en: "Teal", es: "Verde azulado");
       case AppAccentTone.coral:
-        return "Coral";
+        return tr(context, ko: "코랄", en: "Coral", es: "Coral");
       case AppAccentTone.indigo:
-        return "Indigo";
+        return tr(context, ko: "인디고", en: "Indigo", es: "Indigo");
     }
   }
 
@@ -68,18 +70,29 @@ class SettingsPage extends StatelessWidget {
     }
   }
 
-  String _bottomMenuLabel(AppBottomMenu menu) {
+  String _bottomMenuLabel(BuildContext context, AppBottomMenu menu) {
     switch (menu) {
       case AppBottomMenu.chat:
-        return "AI Chat";
+        return tr(context, ko: "AI 채팅", en: "AI Chat", es: "Chat IA");
       case AppBottomMenu.statistics:
-        return "Statistics";
+        return tr(context, ko: "통계", en: "Statistics", es: "Estadisticas");
       case AppBottomMenu.photos:
-        return "Photos";
+        return tr(context, ko: "사진", en: "Photos", es: "Fotos");
       case AppBottomMenu.market:
-        return "Market";
+        return tr(context, ko: "장터", en: "Market", es: "Mercado");
       case AppBottomMenu.community:
-        return "Community";
+        return tr(context, ko: "커뮤니티", en: "Community", es: "Comunidad");
+    }
+  }
+
+  String _languageLabel(AppLanguage language) {
+    switch (language) {
+      case AppLanguage.ko:
+        return "한국어";
+      case AppLanguage.en:
+        return "English";
+      case AppLanguage.es:
+        return "Espanol";
     }
   }
 
@@ -88,22 +101,20 @@ class SettingsPage extends StatelessWidget {
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
-          title: const Text("Customer Center"),
-          content: const Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Text("Support email: support@babyai.app"),
-              SizedBox(height: 6),
-              Text("Hours: Mon-Fri 09:00-18:00 (KST)"),
-              SizedBox(height: 6),
-              Text("FAQ: app usage / billing / account / data export"),
-            ],
+          title: Text(tr(context,
+              ko: "고객센터", en: "Customer Center", es: "Centro de ayuda")),
+          content: Text(
+            tr(
+              context,
+              ko: "문의: support@babyai.app\n운영시간: 평일 09:00-18:00 (KST)",
+              en: "Contact: support@babyai.app\nHours: Mon-Fri 09:00-18:00 (KST)",
+              es: "Contacto: support@babyai.app\nHorario: Lun-Vie 09:00-18:00 (KST)",
+            ),
           ),
           actions: <Widget>[
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: const Text("Close"),
+              child: Text(tr(context, ko: "닫기", en: "Close", es: "Cerrar")),
             ),
           ],
         );
@@ -116,32 +127,22 @@ class SettingsPage extends StatelessWidget {
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
-          title: const Text("Data Collection & Privacy Terms"),
-          content: const SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                Text("1. Required data: baby event records for core features."),
-                SizedBox(height: 6),
-                Text(
-                  "2. Optional data: photos, assistant phrases, and usage logs for UX improvement.",
-                ),
-                SizedBox(height: 6),
-                Text(
-                  "3. Account data: Google profile basics (name/email) for sign-in.",
-                ),
-                SizedBox(height: 6),
-                Text(
-                  "4. You can request deletion/export through Customer Center.",
-                ),
-              ],
+          title: Text(tr(context,
+              ko: "개인정보 수집 약관 안내",
+              en: "Privacy Terms",
+              es: "Terminos de privacidad")),
+          content: Text(
+            tr(
+              context,
+              ko: "기록, 사진, 계정 정보는 서비스 제공 목적 범위에서만 사용됩니다.\n삭제/내보내기 요청은 고객센터를 통해 처리할 수 있습니다.",
+              en: "Event/photo/account data is used only for service operations.\nDeletion/export requests are available via support.",
+              es: "Los datos de registros/fotos/cuenta se usan solo para el servicio.\nPuede solicitar eliminacion/exportacion en soporte.",
             ),
           ),
           actions: <Widget>[
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: const Text("Close"),
+              child: Text(tr(context, ko: "닫기", en: "Close", es: "Cerrar")),
             ),
           ],
         );
@@ -153,18 +154,44 @@ class SettingsPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final ColorScheme color = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: AppBar(title: const Text("Settings")),
+      appBar: AppBar(
+        title: Text(tr(context, ko: "설정", en: "Settings", es: "Ajustes")),
+      ),
       body: AnimatedBuilder(
         animation: themeController,
         builder: (BuildContext context, _) {
           return ListView(
             padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
             children: <Widget>[
-              const Text(
-                "Display Mode",
-                style: TextStyle(fontWeight: FontWeight.w700),
+              Text(tr(context, ko: "언어", en: "Language", es: "Idioma"),
+                  style: const TextStyle(fontWeight: FontWeight.w700)),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<AppLanguage>(
+                initialValue: themeController.language,
+                decoration: InputDecoration(
+                  labelText: tr(context,
+                      ko: "앱 언어", en: "App language", es: "Idioma de la app"),
+                  border: const OutlineInputBorder(),
+                ),
+                items: AppLanguage.values
+                    .map(
+                      (AppLanguage item) => DropdownMenuItem<AppLanguage>(
+                        value: item,
+                        child: Text(_languageLabel(item)),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (AppLanguage? value) {
+                  if (value != null) {
+                    themeController.setLanguage(value);
+                  }
+                },
               ),
-              const SizedBox(height: 6),
+              const Divider(height: 24),
+              Text(
+                  tr(context,
+                      ko: "표시 모드", en: "Display Mode", es: "Modo de pantalla"),
+                  style: const TextStyle(fontWeight: FontWeight.w700)),
               RadioGroup<AppThemeMode>(
                 groupValue: themeController.mode,
                 onChanged: (AppThemeMode? value) {
@@ -172,40 +199,44 @@ class SettingsPage extends StatelessWidget {
                     _selectTheme(value);
                   }
                 },
-                child: const Column(
+                child: Column(
                   children: <Widget>[
                     RadioListTile<AppThemeMode>(
                       value: AppThemeMode.system,
-                      title: Text("Follow system"),
+                      title: Text(tr(context,
+                          ko: "기기 설정 따름",
+                          en: "Follow system",
+                          es: "Seguir sistema")),
                     ),
                     RadioListTile<AppThemeMode>(
                       value: AppThemeMode.dark,
-                      title: Text("Dark mode"),
+                      title: Text(tr(context,
+                          ko: "다크 모드", en: "Dark mode", es: "Modo oscuro")),
                     ),
                     RadioListTile<AppThemeMode>(
                       value: AppThemeMode.light,
-                      title: Text("Light mode"),
+                      title: Text(tr(context,
+                          ko: "라이트 모드", en: "Light mode", es: "Modo claro")),
                     ),
                   ],
                 ),
               ),
               const Divider(height: 24),
-              const Text(
-                "Font Settings",
-                style: TextStyle(fontWeight: FontWeight.w700),
-              ),
+              Text(tr(context, ko: "폰트 설정", en: "Font Settings", es: "Fuentes"),
+                  style: const TextStyle(fontWeight: FontWeight.w700)),
               const SizedBox(height: 8),
               DropdownButtonFormField<AppMainFont>(
                 initialValue: themeController.mainFont,
-                decoration: const InputDecoration(
-                  labelText: "Main font",
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  labelText: tr(context,
+                      ko: "메인 폰트", en: "Main font", es: "Fuente principal"),
+                  border: const OutlineInputBorder(),
                 ),
                 items: AppMainFont.values
                     .map(
                       (AppMainFont item) => DropdownMenuItem<AppMainFont>(
                         value: item,
-                        child: Text(_mainFontLabel(item)),
+                        child: Text(_mainFontLabel(context, item)),
                       ),
                     )
                     .toList(),
@@ -218,16 +249,19 @@ class SettingsPage extends StatelessWidget {
               const SizedBox(height: 10),
               DropdownButtonFormField<AppHighlightFont>(
                 initialValue: themeController.highlightFont,
-                decoration: const InputDecoration(
-                  labelText: "Highlight font",
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  labelText: tr(context,
+                      ko: "하이라이트 폰트",
+                      en: "Highlight font",
+                      es: "Fuente destacada"),
+                  border: const OutlineInputBorder(),
                 ),
                 items: AppHighlightFont.values
                     .map(
                       (AppHighlightFont item) =>
                           DropdownMenuItem<AppHighlightFont>(
                         value: item,
-                        child: Text(_highlightFontLabel(item)),
+                        child: Text(_highlightFontLabel(context, item)),
                       ),
                     )
                     .toList(),
@@ -238,10 +272,9 @@ class SettingsPage extends StatelessWidget {
                 },
               ),
               const Divider(height: 24),
-              const Text(
-                "Color Settings",
-                style: TextStyle(fontWeight: FontWeight.w700),
-              ),
+              Text(
+                  tr(context, ko: "색상 설정", en: "Color Settings", es: "Colores"),
+                  style: const TextStyle(fontWeight: FontWeight.w700)),
               const SizedBox(height: 8),
               Wrap(
                 spacing: 8,
@@ -257,12 +290,11 @@ class SettingsPage extends StatelessWidget {
                               width: 10,
                               height: 10,
                               decoration: BoxDecoration(
-                                color: _toneColor(tone),
-                                shape: BoxShape.circle,
-                              ),
+                                  color: _toneColor(tone),
+                                  shape: BoxShape.circle),
                             ),
                             const SizedBox(width: 6),
-                            Text(_toneLabel(tone)),
+                            Text(_toneLabel(context, tone)),
                           ],
                         ),
                         onSelected: (_) => themeController.setAccentTone(tone),
@@ -271,31 +303,37 @@ class SettingsPage extends StatelessWidget {
                     .toList(),
               ),
               const Divider(height: 24),
-              const Text(
-                "Bottom Menu Visibility",
-                style: TextStyle(fontWeight: FontWeight.w700),
-              ),
+              Text(
+                  tr(context,
+                      ko: "하단 메뉴 표시",
+                      en: "Bottom Menu Visibility",
+                      es: "Menu inferior"),
+                  style: const TextStyle(fontWeight: FontWeight.w700)),
               const SizedBox(height: 4),
               Text(
-                "Home is always visible. Toggle other bottom menus.",
+                tr(context,
+                    ko: "홈은 고정입니다. 나머지 메뉴를 켜고 끌 수 있습니다.",
+                    en: "Home is fixed. Toggle the other menus.",
+                    es: "Inicio es fijo. Active o desactive otros menus."),
                 style: TextStyle(color: color.onSurfaceVariant),
               ),
-              const SizedBox(height: 8),
               ...AppBottomMenu.values.map(
                 (AppBottomMenu menu) => SwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   value: themeController.isBottomMenuEnabled(menu),
-                  title: Text(_bottomMenuLabel(menu)),
+                  title: Text(_bottomMenuLabel(context, menu)),
                   onChanged: (bool value) {
                     themeController.setBottomMenuEnabled(menu, value);
                   },
                 ),
               ),
               const Divider(height: 24),
-              const Text(
-                "Google Account Login",
-                style: TextStyle(fontWeight: FontWeight.w700),
-              ),
+              Text(
+                  tr(context,
+                      ko: "구글 계정 로그인",
+                      en: "Google Account Login",
+                      es: "Cuenta de Google"),
+                  style: const TextStyle(fontWeight: FontWeight.w700)),
               const SizedBox(height: 8),
               Container(
                 padding: const EdgeInsets.all(12),
@@ -306,10 +344,8 @@ class SettingsPage extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    Text(
-                      accountName,
-                      style: const TextStyle(fontWeight: FontWeight.w700),
-                    ),
+                    Text(accountName,
+                        style: const TextStyle(fontWeight: FontWeight.w700)),
                     const SizedBox(height: 4),
                     Text(accountEmail),
                     const SizedBox(height: 10),
@@ -319,7 +355,8 @@ class SettingsPage extends StatelessWidget {
                           child: FilledButton.tonalIcon(
                             onPressed: isGoogleLoggedIn ? null : onGoogleLogin,
                             icon: const Icon(Icons.login),
-                            label: const Text("Login"),
+                            label: Text(tr(context,
+                                ko: "로그인", en: "Login", es: "Entrar")),
                           ),
                         ),
                         const SizedBox(width: 8),
@@ -327,7 +364,8 @@ class SettingsPage extends StatelessWidget {
                           child: OutlinedButton.icon(
                             onPressed: isGoogleLoggedIn ? onGoogleLogout : null,
                             icon: const Icon(Icons.logout),
-                            label: const Text("Logout"),
+                            label: Text(tr(context,
+                                ko: "로그아웃", en: "Logout", es: "Salir")),
                           ),
                         ),
                       ],
@@ -339,15 +377,25 @@ class SettingsPage extends StatelessWidget {
               ListTile(
                 contentPadding: EdgeInsets.zero,
                 leading: const Icon(Icons.support_agent_outlined),
-                title: const Text("Customer Center"),
-                subtitle: const Text("Support contact and FAQ"),
+                title: Text(tr(context,
+                    ko: "고객센터", en: "Customer Center", es: "Centro de ayuda")),
+                subtitle: Text(tr(context,
+                    ko: "문의 및 FAQ",
+                    en: "Support and FAQ",
+                    es: "Soporte y FAQ")),
                 onTap: () => _showCustomerCenter(context),
               ),
               ListTile(
                 contentPadding: EdgeInsets.zero,
                 leading: const Icon(Icons.privacy_tip_outlined),
-                title: const Text("Privacy Terms"),
-                subtitle: const Text("Data collection and terms guide"),
+                title: Text(tr(context,
+                    ko: "개인정보 수집 약관 안내",
+                    en: "Privacy Terms",
+                    es: "Privacidad")),
+                subtitle: Text(tr(context,
+                    ko: "수집 항목 및 이용 목적",
+                    en: "Data collection and terms",
+                    es: "Recopilacion de datos y terminos")),
                 onTap: () => _showPrivacyTerms(context),
               ),
             ],

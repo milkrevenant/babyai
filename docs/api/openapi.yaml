@@ -541,9 +541,11 @@ components:
       type: object
       properties:
         date: { type: string, format: date }
+        formula_count: { type: integer }
         formula_times:
           type: array
           items: { type: string, format: date-time }
+        formula_total_ml: { type: integer }
         formula_amount_by_time_band_ml:
           type: object
           properties:
@@ -552,9 +554,19 @@ components:
             afternoon: { type: integer }
             evening: { type: integer }
         last_formula_time: { type: string, format: date-time, nullable: true }
+        breastfeed_count: { type: integer }
+        breastfeed_times:
+          type: array
+          items: { type: string, format: date-time }
+        last_breastfeed_time: { type: string, format: date-time, nullable: true }
         recent_sleep_time: { type: string, format: date-time, nullable: true }
         recent_sleep_duration_min: { type: integer, nullable: true }
         minutes_since_last_sleep: { type: integer, nullable: true }
+        diaper_pee_count: { type: integer }
+        diaper_poo_count: { type: integer }
+        last_diaper_time: { type: string, format: date-time, nullable: true }
+        medication_count: { type: integer }
+        last_medication_time: { type: string, format: date-time, nullable: true }
         special_memo: { type: string }
         reference_text: { type: string }
 

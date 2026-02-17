@@ -33,11 +33,18 @@ enum AppBottomMenu {
   community,
 }
 
+enum AppLanguage {
+  ko,
+  en,
+  es,
+}
+
 class AppThemeController extends ChangeNotifier {
   AppThemeMode _mode = AppThemeMode.system;
   AppMainFont _mainFont = AppMainFont.notoSans;
   AppHighlightFont _highlightFont = AppHighlightFont.ibmPlexSans;
   AppAccentTone _accentTone = AppAccentTone.gold;
+  AppLanguage _language = AppLanguage.ko;
   final Map<AppBottomMenu, bool> _bottomMenuEnabled = <AppBottomMenu, bool>{
     AppBottomMenu.chat: true,
     AppBottomMenu.statistics: true,
@@ -50,6 +57,7 @@ class AppThemeController extends ChangeNotifier {
   AppMainFont get mainFont => _mainFont;
   AppHighlightFont get highlightFont => _highlightFont;
   AppAccentTone get accentTone => _accentTone;
+  AppLanguage get language => _language;
   Map<AppBottomMenu, bool> get bottomMenuEnabled =>
       Map<AppBottomMenu, bool>.unmodifiable(_bottomMenuEnabled);
 
@@ -146,6 +154,14 @@ class AppThemeController extends ChangeNotifier {
       return;
     }
     _accentTone = next;
+    notifyListeners();
+  }
+
+  void setLanguage(AppLanguage next) {
+    if (_language == next) {
+      return;
+    }
+    _language = next;
     notifyListeners();
   }
 
