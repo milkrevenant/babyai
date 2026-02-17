@@ -1,6 +1,7 @@
 import "dart:convert";
 import "dart:io";
 
+import "app_env.dart";
 import "../network/babyai_api.dart";
 
 class AppSessionStore {
@@ -29,13 +30,22 @@ class AppSessionStore {
         return;
       }
 
+      final bool hasDefineBabyId = AppEnv.babyId.trim().isNotEmpty;
+      final bool hasDefineHouseholdId = AppEnv.householdId.trim().isNotEmpty;
+      final bool hasDefineAlbumId = AppEnv.albumId.trim().isNotEmpty;
+      final bool hasDefineToken = AppEnv.apiBearerToken.trim().isNotEmpty;
+
       BabyAIApi.setRuntimeIds(
-        babyId: (parsed["baby_id"] ?? "").toString(),
-        householdId: (parsed["household_id"] ?? "").toString(),
-        albumId: (parsed["album_id"] ?? "").toString(),
+        babyId: hasDefineBabyId ? null : (parsed["baby_id"] ?? "").toString(),
+        householdId: hasDefineHouseholdId
+            ? null
+            : (parsed["household_id"] ?? "").toString(),
+        albumId:
+            hasDefineAlbumId ? null : (parsed["album_id"] ?? "").toString(),
       );
+
       final String token = (parsed["token"] ?? "").toString().trim();
-      if (token.isNotEmpty) {
+      if (!hasDefineToken && token.isNotEmpty) {
         BabyAIApi.setBearerToken(token);
       }
     } catch (_) {

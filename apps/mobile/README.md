@@ -24,6 +24,16 @@ flutter run \
   --dart-define=ALBUM_ID=<album-id>
 ```
 
+PowerShell (Windows):
+```powershell
+flutter run -d windows --debug `
+  --dart-define=API_BASE_URL=http://127.0.0.1:8000 `
+  --dart-define=API_BEARER_TOKEN=<jwt-token> `
+  --dart-define=BABY_ID=<baby-id> `
+  --dart-define=HOUSEHOLD_ID=<household-id> `
+  --dart-define=ALBUM_ID=<album-id>
+```
+
 ## Integrated API flows
 - `Record` tab:
   - `POST /api/v1/events/voice`
