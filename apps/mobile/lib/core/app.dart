@@ -389,11 +389,23 @@ class _HomeShellState extends State<_HomeShell> {
       );
     }
 
+    final int? amountMl =
+        payload.amountMl ?? _extractAmountMlFromText(normalizedQuery);
+    if (amountMl != null && amountMl > 0) {
+      prefill["amount_ml"] = amountMl;
+    }
+
     HomeTileType? tile =
         _tileFromFeature(normalizedFeature) ?? _tileFromQuery(normalizedQuery);
+    if (tile == null && amountMl != null && amountMl > 0) {
+      tile = HomeTileType.formula;
+    }
     if (tile == null) {
+      final bool looksLikeRecordCommand =
+          _hasRecordIntent(normalizedQuery) ||
+          (normalizedQuery?.toLowerCase().contains("ml") ?? false);
       return _AssistantRecordAction(
-        routeToChat: normalizedQuery != null,
+        routeToChat: looksLikeRecordCommand ? false : normalizedQuery != null,
         chatPrompt: normalizedQuery,
       );
     }
@@ -404,11 +416,6 @@ class _HomeShellState extends State<_HomeShell> {
       prefill["diaper_type"] = "POO";
     }
 
-    final int? amountMl =
-        payload.amountMl ?? _extractAmountMlFromText(normalizedQuery);
-    if (amountMl != null && amountMl > 0) {
-      prefill["amount_ml"] = amountMl;
-    }
     final int? durationMin =
         payload.durationMin ?? _extractDurationMinFromText(normalizedQuery);
     if (durationMin != null && durationMin > 0) {
@@ -493,6 +500,20 @@ class _HomeShellState extends State<_HomeShell> {
 
   void _processAssistantAction(AssistantActionPayload payload) {
     final _AssistantRecordAction action = _buildAssistantRecordAction(payload);
+
+    if (!action.routeToChat &&
+        action.tile == null &&
+        (_hasRecordIntent(action.chatPrompt) ||
+            (action.chatPrompt?.toLowerCase().contains("ml") ?? false))) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            "Record command was not parsed. Try: formula 120ml record.",
+          ),
+        ),
+      );
+      return;
+    }
 
     if (action.routeToChat) {
       setState(() => _index = _chatPage);
