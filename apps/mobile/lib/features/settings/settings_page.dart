@@ -12,6 +12,7 @@ class SettingsPage extends StatelessWidget {
     required this.accountEmail,
     required this.onGoogleLogin,
     required this.onGoogleLogout,
+    required this.onManageChildProfile,
   });
 
   final AppThemeController themeController;
@@ -20,6 +21,7 @@ class SettingsPage extends StatelessWidget {
   final String accountEmail;
   final Future<void> Function() onGoogleLogin;
   final VoidCallback onGoogleLogout;
+  final Future<void> Function() onManageChildProfile;
 
   Future<void> _selectTheme(AppThemeMode mode) async {
     await themeController.setMode(mode);
@@ -30,8 +32,12 @@ class SettingsPage extends StatelessWidget {
       case AppMainFont.notoSans:
         return "Noto Sans";
       case AppMainFont.systemSans:
-        return tr(context,
-            ko: "시스템 산세리프", en: "System Sans", es: "Sans del sistema");
+        return tr(
+          context,
+          ko: "시스템 산세리프",
+          en: "System Sans",
+          es: "Sans del sistema",
+        );
     }
   }
 
@@ -127,10 +133,12 @@ class SettingsPage extends StatelessWidget {
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
-          title: Text(tr(context,
-              ko: "개인정보 수집 약관 안내",
-              en: "Privacy Terms",
-              es: "Terminos de privacidad")),
+          title: Text(tr(
+            context,
+            ko: "개인정보 수집 약관 안내",
+            en: "Privacy Terms",
+            es: "Terminos de privacidad",
+          )),
           content: Text(
             tr(
               context,
@@ -169,8 +177,12 @@ class SettingsPage extends StatelessWidget {
               DropdownButtonFormField<AppLanguage>(
                 initialValue: themeController.language,
                 decoration: InputDecoration(
-                  labelText: tr(context,
-                      ko: "앱 언어", en: "App language", es: "Idioma de la app"),
+                  labelText: tr(
+                    context,
+                    ko: "앱 언어",
+                    en: "App language",
+                    es: "Idioma de la app",
+                  ),
                   border: const OutlineInputBorder(),
                 ),
                 items: AppLanguage.values
@@ -189,9 +201,10 @@ class SettingsPage extends StatelessWidget {
               ),
               const Divider(height: 24),
               Text(
-                  tr(context,
-                      ko: "표시 모드", en: "Display Mode", es: "Modo de pantalla"),
-                  style: const TextStyle(fontWeight: FontWeight.w700)),
+                tr(context,
+                    ko: "표시 모드", en: "Display Mode", es: "Modo de pantalla"),
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
               RadioGroup<AppThemeMode>(
                 groupValue: themeController.mode,
                 onChanged: (AppThemeMode? value) {
@@ -290,8 +303,9 @@ class SettingsPage extends StatelessWidget {
                               width: 10,
                               height: 10,
                               decoration: BoxDecoration(
-                                  color: _toneColor(tone),
-                                  shape: BoxShape.circle),
+                                color: _toneColor(tone),
+                                shape: BoxShape.circle,
+                              ),
                             ),
                             const SizedBox(width: 6),
                             Text(_toneLabel(context, tone)),
@@ -326,6 +340,20 @@ class SettingsPage extends StatelessWidget {
                     themeController.setBottomMenuEnabled(menu, value);
                   },
                 ),
+              ),
+              const Divider(height: 24),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.child_care_outlined),
+                title: Text(tr(context,
+                    ko: "아이 등록/수정",
+                    en: "Child Registration",
+                    es: "Registro del bebe")),
+                subtitle: Text(tr(context,
+                    ko: "아이 프로필, 수유 방식, 분유 정보를 입력합니다.",
+                    en: "Manage profile, feeding method, and formula type.",
+                    es: "Gestiona perfil, metodo de alimentacion y formula.")),
+                onTap: () => onManageChildProfile(),
               ),
               const Divider(height: 24),
               Text(

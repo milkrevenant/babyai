@@ -91,6 +91,8 @@ func (a *App) Router() *gin.Engine {
 	api.POST("/events/confirm", a.confirmEvents)
 	api.GET("/settings/me", a.getMySettings)
 	api.PATCH("/settings/me", a.upsertMySettings)
+	api.GET("/babies/profile", a.getBabyProfile)
+	api.PATCH("/babies/profile", a.upsertBabyProfile)
 	api.GET("/quick/last-poo-time", a.quickLastPooTime)
 	api.GET("/quick/next-feeding-eta", a.quickNextFeedingETA)
 	api.GET("/quick/today-summary", a.quickTodaySummary)

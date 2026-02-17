@@ -7,10 +7,15 @@ import "../../core/i18n/app_i18n.dart";
 import "../../core/network/babyai_api.dart";
 import "../../core/widgets/simple_line_chart.dart";
 
-enum _LandingRange { day, week, month }
+enum RecordRange { day, week, month }
 
 class RecordingPage extends StatefulWidget {
-  const RecordingPage({super.key});
+  const RecordingPage({
+    super.key,
+    required this.range,
+  });
+
+  final RecordRange range;
 
   @override
   State<RecordingPage> createState() => _RecordingPageState();
@@ -28,8 +33,6 @@ class _RecordingPageState extends State<RecordingPage> {
   Map<String, dynamic>? _snapshot;
   Map<String, dynamic>? _parsed;
   Map<String, dynamic>? _confirmed;
-
-  _LandingRange _range = _LandingRange.week;
 
   @override
   void initState() {
@@ -96,10 +99,14 @@ class _RecordingPageState extends State<RecordingPage> {
             (dynamic key, dynamic value) => MapEntry(key.toString(), value)))
         .toList();
     if (clipId == null || events.isEmpty) {
-      setState(() => _recordError = tr(context,
-          ko: "확정할 파싱 이벤트가 없습니다.",
+      setState(() {
+        _recordError = tr(
+          context,
+          ko: "No parsed events to confirm.",
           en: "No parsed events to confirm.",
-          es: "No hay eventos para confirmar."));
+          es: "No hay eventos para confirmar.",
+        );
+      });
       return;
     }
 
@@ -129,8 +136,9 @@ class _RecordingPageState extends State<RecordingPage> {
     }
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-          content: Text(tr(context,
-              ko: "문구를 복사했습니다.", en: "Phrase copied.", es: "Frase copiada."))),
+        content: Text(tr(context,
+            ko: "Phrase copied.", en: "Phrase copied.", es: "Frase copiada.")),
+      ),
     );
   }
 
@@ -164,7 +172,7 @@ class _RecordingPageState extends State<RecordingPage> {
         "night": 0,
         "morning": 0,
         "afternoon": 0,
-        "evening": 0
+        "evening": 0,
       };
     }
     return <String, int>{
@@ -203,14 +211,14 @@ class _RecordingPageState extends State<RecordingPage> {
 
   String _rangeLabel() {
     final DateTime now = DateTime.now();
-    switch (_range) {
-      case _LandingRange.day:
+    switch (widget.range) {
+      case RecordRange.day:
         return "${now.year}-${now.month.toString().padLeft(2, "0")}-${now.day.toString().padLeft(2, "0")}";
-      case _LandingRange.week:
+      case RecordRange.week:
         final DateTime monday = now.subtract(Duration(days: now.weekday - 1));
         final DateTime sunday = monday.add(const Duration(days: 6));
         return "${monday.month}/${monday.day} - ${sunday.month}/${sunday.day}";
-      case _LandingRange.month:
+      case RecordRange.month:
         return "${now.year}-${now.month.toString().padLeft(2, "0")}";
     }
   }
@@ -278,9 +286,33 @@ class _RecordingPageState extends State<RecordingPage> {
 
     final String specialMemo = _asString(snapshot["special_memo"]) ??
         tr(context,
-            ko: "오늘의 특별 메모가 없습니다.",
+            ko: "No special memo for today.",
             en: "No special memo for today.",
             es: "No hay nota especial hoy.");
+
+    final String formulaDisplayName =
+        _asString(snapshot["formula_display_name"]) ??
+            _asString(snapshot["formula_type"]) ??
+            tr(
+              context,
+              ko: "미설정",
+              en: "Not set",
+              es: "No configurado",
+            );
+    final int? recommendedPerFeed =
+        _asInt(snapshot["recommended_formula_per_feed_ml"]);
+    final int? recommendedInterval =
+        _asInt(snapshot["recommended_feed_interval_min"]);
+    final int? recommendedNextIn =
+        _asInt(snapshot["recommended_next_feeding_in_min"]);
+    final String recommendationNote =
+        _asString(snapshot["recommendation_note"]) ??
+            tr(
+              context,
+              ko: "프로필 기반 권장값입니다.",
+              en: "Profile-based recommendation.",
+              es: "Recomendacion basada en perfil.",
+            );
 
     final List<double> formulaSeries = <double>[
       formulaBands["night"]!.toDouble(),
@@ -294,27 +326,6 @@ class _RecordingPageState extends State<RecordingPage> {
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: <Widget>[
-          SegmentedButton<_LandingRange>(
-            segments: <ButtonSegment<_LandingRange>>[
-              ButtonSegment<_LandingRange>(
-                value: _LandingRange.day,
-                label: Text(tr(context, ko: "일", en: "Day", es: "Dia")),
-              ),
-              ButtonSegment<_LandingRange>(
-                value: _LandingRange.week,
-                label: Text(tr(context, ko: "주", en: "Week", es: "Semana")),
-              ),
-              ButtonSegment<_LandingRange>(
-                value: _LandingRange.month,
-                label: Text(tr(context, ko: "월", en: "Month", es: "Mes")),
-              ),
-            ],
-            selected: <_LandingRange>{_range},
-            onSelectionChanged: (Set<_LandingRange> values) {
-              setState(() => _range = values.first);
-            },
-          ),
-          const SizedBox(height: 8),
           Row(
             children: <Widget>[
               const Icon(Icons.calendar_month, size: 18),
@@ -347,15 +358,28 @@ class _RecordingPageState extends State<RecordingPage> {
                       Expanded(
                         child: Text(
                           tr(context,
-                              ko: "오늘의 아이 기록",
+                              ko: "Today baby snapshot",
                               en: "Today baby snapshot",
                               es: "Resumen de hoy"),
                           style: const TextStyle(
                               fontSize: 17, fontWeight: FontWeight.w700),
                         ),
                       ),
-                      Text(
-                          "${tr(context, ko: "총 수유량", en: "Total formula", es: "Formula total")}: $formulaTotal ml"),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: <Widget>[
+                          Text(
+                              "${tr(context, ko: "Total formula", en: "Total formula", es: "Formula total")}: $formulaTotal ml"),
+                          Text(
+                            "${tr(context, ko: "Formula type", en: "Formula type", es: "Tipo")}: $formulaDisplayName",
+                            style: TextStyle(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant,
+                                fontSize: 12),
+                          ),
+                        ],
+                      ),
                     ],
                   ),
                   const SizedBox(height: 12),
@@ -368,79 +392,65 @@ class _RecordingPageState extends State<RecordingPage> {
                     childAspectRatio: 2.2,
                     children: <Widget>[
                       _statTile(
-                        label: tr(context,
-                            ko: "마지막 분유 시간",
-                            en: "Last formula time",
-                            es: "Ultima formula"),
-                        value: lastFormula,
-                        icon: Icons.local_drink_outlined,
-                      ),
+                          label: "Last formula",
+                          value: lastFormula,
+                          icon: Icons.local_drink_outlined),
                       _statTile(
-                        label: tr(context,
-                            ko: "마지막 모유수유",
-                            en: "Last breastfeed",
-                            es: "Ultima lactancia"),
-                        value: lastBreastfeed,
-                        icon: Icons.favorite_outline,
-                      ),
+                          label: "Last breastfeed",
+                          value: lastBreastfeed,
+                          icon: Icons.favorite_outline),
                       _statTile(
-                        label: tr(context,
-                            ko: "최근 잔 시간",
-                            en: "Recent sleep time",
-                            es: "Hora reciente de sueno"),
-                        value: recentSleep,
-                        icon: Icons.bedtime_outlined,
-                      ),
+                          label: "Recent sleep",
+                          value: recentSleep,
+                          icon: Icons.bedtime_outlined),
                       _statTile(
-                        label: tr(context,
-                            ko: "최근 잠 지속 시간",
-                            en: "Recent sleep duration",
-                            es: "Duracion reciente"),
-                        value: recentSleepDuration,
-                        icon: Icons.timelapse_outlined,
-                      ),
+                          label: "Sleep duration",
+                          value: recentSleepDuration,
+                          icon: Icons.timelapse_outlined),
                       _statTile(
-                        label: tr(context,
-                            ko: "마지막 잠 이후 시간",
-                            en: "Time since last sleep",
-                            es: "Tiempo desde ultimo sueno"),
-                        value: sinceLastSleep,
-                        icon: Icons.hourglass_top_outlined,
-                      ),
+                          label: "Since last sleep",
+                          value: sinceLastSleep,
+                          icon: Icons.hourglass_top_outlined),
                       _statTile(
-                        label: tr(context,
-                            ko: "마지막 기저귀 시간",
-                            en: "Last diaper time",
-                            es: "Ultimo panal"),
-                        value: lastDiaper,
-                        icon: Icons.baby_changing_station_outlined,
-                      ),
+                          label: "Last diaper",
+                          value: lastDiaper,
+                          icon: Icons.baby_changing_station_outlined),
                       _statTile(
-                        label: tr(context,
-                            ko: "기저귀(소변/대변)",
-                            en: "Diaper (pee/poo)",
-                            es: "Panal (orina/heces)"),
-                        value: "$diaperPeeCount / $diaperPooCount",
-                        icon: Icons.water_drop_outlined,
-                      ),
+                          label: "Diaper pee/poo",
+                          value: "$diaperPeeCount / $diaperPooCount",
+                          icon: Icons.water_drop_outlined),
                       _statTile(
-                        label: tr(context,
-                            ko: "투약 횟수(마지막)",
-                            en: "Medication count (last)",
-                            es: "Medicacion (ultima)"),
-                        value: "$medicationCount / $lastMedication",
-                        icon: Icons.medication_outlined,
-                      ),
+                          label: "Medication (last)",
+                          value: "$medicationCount / $lastMedication",
+                          icon: Icons.medication_outlined),
+                      _statTile(
+                          label: "Recommended / feed",
+                          value: recommendedPerFeed == null
+                              ? "-"
+                              : "$recommendedPerFeed ml",
+                          icon: Icons.auto_awesome_outlined),
+                      _statTile(
+                          label: "Recommended interval",
+                          value: recommendedInterval == null
+                              ? "-"
+                              : _formatDuration(recommendedInterval),
+                          icon: Icons.schedule_outlined),
                     ],
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    tr(context,
-                        ko: "수유 횟수: 분유 $formulaCount회, 모유 $breastfeedCount회",
-                        en: "Feedings: formula $formulaCount, breastfeed $breastfeedCount",
-                        es: "Tomas: formula $formulaCount, lactancia $breastfeedCount"),
+                      "Feedings: formula $formulaCount, breastfeed $breastfeedCount",
+                      style: TextStyle(
+                          color:
+                              Theme.of(context).colorScheme.onSurfaceVariant)),
+                  const SizedBox(height: 6),
+                  Text(
+                    recommendedNextIn == null
+                        ? recommendationNote
+                        : "Next recommendation in ${_formatDuration(recommendedNextIn)}. $recommendationNote",
                     style: TextStyle(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant),
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        fontSize: 12),
                   ),
                 ],
               ),
@@ -453,13 +463,8 @@ class _RecordingPageState extends State<RecordingPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  Text(
-                    tr(context,
-                        ko: "분유 시간대별 수유량 (ml)",
-                        en: "Formula by time band (ml)",
-                        es: "Formula por franja"),
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
+                  const Text("Formula by time band (ml)",
+                      style: TextStyle(fontWeight: FontWeight.w700)),
                   const SizedBox(height: 8),
                   Text(
                       "Night ${formulaBands["night"]} / Morning ${formulaBands["morning"]} / Afternoon ${formulaBands["afternoon"]} / Evening ${formulaBands["evening"]}"),
@@ -475,14 +480,8 @@ class _RecordingPageState extends State<RecordingPage> {
                   const SizedBox(height: 6),
                   Text(
                     formulaTimes.isEmpty
-                        ? tr(context,
-                            ko: "분유 시간 기록 없음",
-                            en: "Formula times: no records",
-                            es: "Sin registros de formula")
-                        : tr(context,
-                            ko: "분유 시간: ${formulaTimes.map(_formatTime).join(", ")}",
-                            en: "Formula times: ${formulaTimes.map(_formatTime).join(", ")}",
-                            es: "Horas de formula: ${formulaTimes.map(_formatTime).join(", ")}"),
+                        ? "Formula times: no records"
+                        : "Formula times: ${formulaTimes.map(_formatTime).join(", ")}",
                   ),
                 ],
               ),
@@ -492,48 +491,36 @@ class _RecordingPageState extends State<RecordingPage> {
           Card(
             child: ListTile(
               leading: const Icon(Icons.sticky_note_2_outlined),
-              title: Text(tr(context,
-                  ko: "특별 메모", en: "Special memo", es: "Nota especial")),
+              title: const Text("Special memo"),
               subtitle: Text(specialMemo),
             ),
           ),
           const SizedBox(height: 10),
           ExpansionTile(
-            title: Text(tr(context,
-                ko: "기록 입력", en: "Record now", es: "Registrar ahora")),
-            subtitle: Text(tr(context,
-                ko: "홈에서 음성 텍스트 파싱 후 이벤트 확정",
-                en: "Parse and confirm events directly from Home",
-                es: "Analiza y confirma eventos desde Inicio")),
+            title: const Text("Record now"),
+            subtitle: const Text("Parse and confirm events directly from Home"),
             childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
             children: <Widget>[
               TextField(
                 controller: _transcriptController,
                 minLines: 2,
                 maxLines: 3,
-                decoration: InputDecoration(
-                  border: const OutlineInputBorder(),
-                  labelText: tr(context,
-                      ko: "음성 텍스트 힌트(선택)",
-                      en: "Voice text hint (optional)",
-                      es: "Texto de voz (opcional)"),
+                decoration: const InputDecoration(
+                  border: OutlineInputBorder(),
+                  labelText: "Voice text hint (optional)",
                 ),
               ),
               const SizedBox(height: 10),
               FilledButton.icon(
                 onPressed: _recordLoading ? null : _parse,
                 icon: const Icon(Icons.graphic_eq_outlined),
-                label: Text(tr(context,
-                    ko: "음성 파싱", en: "Parse voice text", es: "Analizar voz")),
+                label: const Text("Parse voice text"),
               ),
               const SizedBox(height: 8),
               OutlinedButton.icon(
                 onPressed: _recordLoading || _parsed == null ? null : _confirm,
                 icon: const Icon(Icons.check_circle_outline),
-                label: Text(tr(context,
-                    ko: "파싱 결과 확정",
-                    en: "Confirm parsed events",
-                    es: "Confirmar eventos")),
+                label: const Text("Confirm parsed events"),
               ),
               if (_recordLoading) ...<Widget>[
                 const SizedBox(height: 10),
@@ -548,21 +535,11 @@ class _RecordingPageState extends State<RecordingPage> {
               ],
               if (_parsed != null) ...<Widget>[
                 const SizedBox(height: 10),
-                _JsonPanel(
-                    title: tr(context,
-                        ko: "파싱 응답",
-                        en: "Parsed response",
-                        es: "Respuesta parseada"),
-                    data: _parsed!),
+                _JsonPanel(title: "Parsed response", data: _parsed!),
               ],
               if (_confirmed != null) ...<Widget>[
                 const SizedBox(height: 10),
-                _JsonPanel(
-                    title: tr(context,
-                        ko: "확정 응답",
-                        en: "Confirm response",
-                        es: "Respuesta confirmada"),
-                    data: _confirmed!),
+                _JsonPanel(title: "Confirm response", data: _confirmed!),
               ],
             ],
           ),
@@ -573,44 +550,21 @@ class _RecordingPageState extends State<RecordingPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  Text(
-                    tr(context,
-                        ko: "기기 어시스턴트 입력 (Siri / Bixby)",
-                        en: "Device assistant input (Siri / Bixby)",
-                        es: "Asistente del dispositivo"),
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
+                  const Text("Device assistant input (Siri / Bixby)",
+                      style: TextStyle(fontWeight: FontWeight.w700)),
                   const SizedBox(height: 8),
-                  Text(
-                    tr(
-                      context,
-                      ko: "홈/잠금화면/다른 앱에서 기기 어시스턴트를 호출해 입력합니다. 앱 내부 마이크 탭과는 다른 흐름입니다.",
-                      en: "Use the phone assistant from home/lock screen/other apps. This is external invocation, not an in-app mic tab.",
-                      es: "Use el asistente del telefono desde inicio/bloqueo/otras apps.",
-                    ),
-                  ),
+                  const Text(
+                      "Use the phone assistant from home/lock screen/other apps. This is external invocation, not an in-app mic tab."),
                   const SizedBox(height: 10),
-                  _AssistantStepRow(
-                    icon: Icons.smartphone,
-                    text: tr(context,
-                        ko: "1) 측면 버튼 길게 누르거나 호출어로 어시스턴트 실행",
-                        en: "1) Long-press side button or wake-word",
-                        es: "1) Boton lateral o palabra clave"),
-                  ),
-                  _AssistantStepRow(
-                    icon: Icons.record_voice_over_outlined,
-                    text: tr(context,
-                        ko: "2) 예: \"BabyAI에 분유 120ml 기록해줘\"",
-                        en: "2) Example: Ask BabyAI to record formula 120ml",
-                        es: "2) Ejemplo: registrar formula 120ml"),
-                  ),
-                  _AssistantStepRow(
-                    icon: Icons.sync_outlined,
-                    text: tr(context,
-                        ko: "3) 앱으로 연결되어 기록 결과 확인",
-                        en: "3) Open app and verify recorded event",
-                        es: "3) Abrir app y verificar"),
-                  ),
+                  const _AssistantStepRow(
+                      icon: Icons.smartphone,
+                      text: "1) Long-press side button or wake-word"),
+                  const _AssistantStepRow(
+                      icon: Icons.record_voice_over_outlined,
+                      text: "2) Ask BabyAI to record formula 120ml"),
+                  const _AssistantStepRow(
+                      icon: Icons.sync_outlined,
+                      text: "3) Open app and verify the event"),
                   const SizedBox(height: 10),
                   Wrap(
                     spacing: 8,
@@ -620,19 +574,13 @@ class _RecordingPageState extends State<RecordingPage> {
                         onPressed: () => _copyPhrase(
                             "Ask BabyAI to record formula 120 ml now"),
                         icon: const Icon(Icons.copy_outlined, size: 18),
-                        label: Text(tr(context,
-                            ko: "분유 문구 복사",
-                            en: "Copy formula phrase",
-                            es: "Copiar frase de formula")),
+                        label: const Text("Copy formula phrase"),
                       ),
                       OutlinedButton.icon(
                         onPressed: () =>
                             _copyPhrase("Ask BabyAI to log diaper pee now"),
                         icon: const Icon(Icons.copy_outlined, size: 18),
-                        label: Text(tr(context,
-                            ko: "기저귀 문구 복사",
-                            en: "Copy diaper phrase",
-                            es: "Copiar frase de panal")),
+                        label: const Text("Copy diaper phrase"),
                       ),
                     ],
                   ),

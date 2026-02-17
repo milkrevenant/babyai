@@ -16,6 +16,7 @@ tags:
   - name: photos
   - name: subscription
   - name: settings
+  - name: babies
   - name: assistants
 paths:
   /health:
@@ -113,6 +114,41 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/UserSettingsResponse'
+
+  /api/v1/babies/profile:
+    get:
+      tags: [babies]
+      summary: Get baby profile and feeding recommendation
+      operationId: getBabyProfile
+      parameters:
+        - in: query
+          name: baby_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Baby profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BabyProfileResponse'
+    patch:
+      tags: [babies]
+      summary: Upsert baby profile settings
+      operationId: upsertBabyProfile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BabyProfileUpdateRequest'
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BabyProfileResponse'
     patch:
       tags: [settings]
       summary: Update current app settings for authenticated user
@@ -439,6 +475,17 @@ components:
         provider: { $ref: '#/components/schemas/AuthProvider' }
         baby_name: { type: string }
         baby_birth_date: { type: string, format: date }
+        baby_sex:
+          type: string
+          enum: [male, female, other, unknown]
+        baby_weight_kg: { type: number, format: float }
+        feeding_method:
+          type: string
+          enum: [formula, breastmilk, mixed]
+        formula_brand: { type: string }
+        formula_product: { type: string }
+        formula_type: { type: string, example: standard }
+        formula_contains_starch: { type: boolean }
         required_consents:
           type: array
           items:
@@ -568,7 +615,69 @@ components:
         medication_count: { type: integer }
         last_medication_time: { type: string, format: date-time, nullable: true }
         special_memo: { type: string }
+        feeding_method: { type: string }
+        formula_type: { type: string }
+        formula_brand: { type: string }
+        formula_product: { type: string }
+        formula_contains_starch: { type: boolean, nullable: true }
+        formula_display_name: { type: string }
+        baby_age_days: { type: integer }
+        baby_weight_kg: { type: number, format: float, nullable: true }
+        recommended_formula_daily_ml: { type: integer, nullable: true }
+        recommended_formula_per_feed_ml: { type: integer, nullable: true }
+        recommended_feed_interval_min: { type: integer }
+        recommended_next_feeding_time: { type: string, format: date-time, nullable: true }
+        recommended_next_feeding_in_min: { type: integer, nullable: true }
+        recommendation_note: { type: string }
+        recommendation_reference_text: { type: string }
         reference_text: { type: string }
+
+    BabyProfileUpdateRequest:
+      type: object
+      required: [baby_id]
+      properties:
+        baby_id: { type: string }
+        baby_name: { type: string }
+        baby_birth_date: { type: string, format: date }
+        baby_sex:
+          type: string
+          enum: [male, female, other, unknown]
+        baby_weight_kg: { type: number, format: float }
+        feeding_method:
+          type: string
+          enum: [formula, breastmilk, mixed]
+        formula_brand: { type: string }
+        formula_product: { type: string }
+        formula_type: { type: string }
+        formula_contains_starch: { type: boolean }
+
+    BabyProfileResponse:
+      type: object
+      properties:
+        baby_id: { type: string }
+        baby_name: { type: string }
+        birth_date: { type: string, format: date }
+        age_days: { type: integer }
+        sex: { type: string }
+        weight_kg: { type: number, format: float, nullable: true }
+        feeding_method: { type: string }
+        formula_brand: { type: string }
+        formula_product: { type: string }
+        formula_type: { type: string }
+        formula_contains_starch: { type: boolean, nullable: true }
+        formula_display_name: { type: string }
+        recommended_formula_daily_ml: { type: integer, nullable: true }
+        recommended_formula_per_feed_ml: { type: integer, nullable: true }
+        recommended_feed_interval_min: { type: integer }
+        recommended_next_feeding_time: { type: string, format: date-time, nullable: true }
+        recommended_next_feeding_in_min: { type: integer, nullable: true }
+        recommendation_reference_text: { type: string }
+        recommendation_note: { type: string }
+        formula_catalog:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
 
     DailyReportResponse:
       type: object

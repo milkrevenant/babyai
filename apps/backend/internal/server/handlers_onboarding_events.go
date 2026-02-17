@@ -33,6 +33,30 @@ func (a *App) onboardingParent(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, "baby_birth_date must be YYYY-MM-DD")
 		return
 	}
+	normalizedSex := normalizeBabySex(payload.BabySex)
+	if strings.TrimSpace(payload.BabySex) != "" && normalizedSex == "" {
+		writeError(c, http.StatusBadRequest, "baby_sex must be one of: male, female, other, unknown")
+		return
+	}
+	if normalizedSex == "" {
+		normalizedSex = "unknown"
+	}
+	feedingMethod := normalizeFeedingMethod(payload.FeedingMethod)
+	if strings.TrimSpace(payload.FeedingMethod) != "" && feedingMethod == "" {
+		writeError(c, http.StatusBadRequest, "feeding_method must be one of: formula, breastmilk, mixed")
+		return
+	}
+	if feedingMethod == "" {
+		feedingMethod = "mixed"
+	}
+	formulaType := normalizeFormulaType(payload.FormulaType)
+	if strings.TrimSpace(payload.FormulaType) != "" && formulaType == "" {
+		writeError(c, http.StatusBadRequest, "formula_type is invalid")
+		return
+	}
+	if formulaType == "" {
+		formulaType = "standard"
+	}
 
 	consentMap := map[string]string{
 		"terms":           "TERMS",
@@ -78,16 +102,47 @@ func (a *App) onboardingParent(c *gin.Context) {
 	}
 
 	babyID := uuid.NewString()
+	var sexValue any
+	if normalizedSex == "unknown" {
+		sexValue = nil
+	} else {
+		sexValue = normalizedSex
+	}
+
 	if _, err := tx.Exec(
 		c.Request.Context(),
-		`INSERT INTO "Baby" (id, "householdId", name, "birthDate", "createdAt")
-		 VALUES ($1, $2, $3, $4, NOW())`,
+		`INSERT INTO "Baby" (id, "householdId", name, "birthDate", sex, "createdAt")
+		 VALUES ($1, $2, $3, $4, $5, NOW())`,
 		babyID,
 		householdID,
 		strings.TrimSpace(payload.BabyName),
 		birthDate,
+		sexValue,
 	); err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to create baby profile")
+		return
+	}
+
+	persona, err := loadPersonaSettingsWithQuerier(c.Request.Context(), tx, user.ID)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to load settings")
+		return
+	}
+	babySettings := readBabySettings(persona, babyID)
+	if payload.BabyWeightKg != nil {
+		babySettings["weight_kg"] = roundToOneDecimal(clampWeightKg(*payload.BabyWeightKg))
+	}
+	babySettings["feeding_method"] = feedingMethod
+	babySettings["formula_brand"] = strings.TrimSpace(payload.FormulaBrand)
+	babySettings["formula_product"] = strings.TrimSpace(payload.FormulaProduct)
+	babySettings["formula_type"] = formulaType
+	if payload.FormulaContainsStarch != nil {
+		babySettings["formula_contains_starch"] = *payload.FormulaContainsStarch
+	}
+	babySettings["updated_at"] = time.Now().UTC().Format(time.RFC3339)
+	writeBabySettings(persona, babyID, babySettings)
+	if err := upsertPersonaSettingsWithQuerier(c.Request.Context(), tx, user.ID, persona); err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to save settings")
 		return
 	}
 

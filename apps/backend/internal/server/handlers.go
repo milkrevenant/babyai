@@ -8,10 +8,17 @@ import (
 )
 
 type parentOnboardingRequest struct {
-	Provider         string   `json:"provider"`
-	BabyName         string   `json:"baby_name"`
-	BabyBirthDate    string   `json:"baby_birth_date"`
-	RequiredConsents []string `json:"required_consents"`
+	Provider              string   `json:"provider"`
+	BabyName              string   `json:"baby_name"`
+	BabyBirthDate         string   `json:"baby_birth_date"`
+	BabySex               string   `json:"baby_sex"`
+	BabyWeightKg          *float64 `json:"baby_weight_kg"`
+	FeedingMethod         string   `json:"feeding_method"`
+	FormulaBrand          string   `json:"formula_brand"`
+	FormulaProduct        string   `json:"formula_product"`
+	FormulaType           string   `json:"formula_type"`
+	FormulaContainsStarch *bool    `json:"formula_contains_starch"`
+	RequiredConsents      []string `json:"required_consents"`
 }
 
 type voiceUploadRequest struct {
@@ -60,6 +67,19 @@ type checkoutRequest struct {
 
 type updateMySettingsRequest struct {
 	ThemeMode string `json:"theme_mode"`
+}
+
+type babyProfileUpsertRequest struct {
+	BabyID                string   `json:"baby_id"`
+	BabyName              string   `json:"baby_name"`
+	BabyBirthDate         string   `json:"baby_birth_date"`
+	BabySex               string   `json:"baby_sex"`
+	BabyWeightKg          *float64 `json:"baby_weight_kg"`
+	FeedingMethod         string   `json:"feeding_method"`
+	FormulaBrand          string   `json:"formula_brand"`
+	FormulaProduct        string   `json:"formula_product"`
+	FormulaType           string   `json:"formula_type"`
+	FormulaContainsStarch *bool    `json:"formula_contains_starch"`
 }
 
 type siriIntentRequest struct {

@@ -337,26 +337,53 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 
 	formulaTotalML := formulaBands["night"] + formulaBands["morning"] + formulaBands["afternoon"] + formulaBands["evening"]
 
+	profile, _, err := a.resolveBabyProfile(c.Request.Context(), user.ID, baby.ID, readRoles)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to resolve baby profile")
+		return
+	}
+	lastFeedingTime, err := a.latestFeedingTime(c.Request.Context(), baby.ID)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to load latest feeding event")
+		return
+	}
+	recommendation := calculateFeedingRecommendation(profile, lastFeedingTime, now)
+
 	c.JSON(http.StatusOK, gin.H{
-		"date":                           start.Format("2006-01-02"),
-		"formula_count":                  formulaCount,
-		"formula_times":                  formulaTimes,
-		"formula_total_ml":               formulaTotalML,
-		"formula_amount_by_time_band_ml": formulaBands,
-		"last_formula_time":              formatNullableTimeRFC3339(lastFormulaTime),
-		"breastfeed_count":               breastfeedCount,
-		"breastfeed_times":               breastfeedTimes,
-		"last_breastfeed_time":           formatNullableTimeRFC3339(lastBreastfeedTime),
-		"recent_sleep_time":              formatNullableTimeRFC3339(recentSleepTime),
-		"recent_sleep_duration_min":      recentSleepDurationMin,
-		"minutes_since_last_sleep":       minutesSinceLastSleep,
-		"diaper_pee_count":               diaperPeeCount,
-		"diaper_poo_count":               diaperPooCount,
-		"last_diaper_time":               formatNullableTimeRFC3339(lastDiaperTime),
-		"medication_count":               medicationCount,
-		"last_medication_time":           formatNullableTimeRFC3339(lastMedicationTime),
-		"special_memo":                   specialMemo,
-		"reference_text":                 "Derived from today's confirmed events.",
+		"date":                            start.Format("2006-01-02"),
+		"formula_count":                   formulaCount,
+		"formula_times":                   formulaTimes,
+		"formula_total_ml":                formulaTotalML,
+		"formula_amount_by_time_band_ml":  formulaBands,
+		"last_formula_time":               formatNullableTimeRFC3339(lastFormulaTime),
+		"breastfeed_count":                breastfeedCount,
+		"breastfeed_times":                breastfeedTimes,
+		"last_breastfeed_time":            formatNullableTimeRFC3339(lastBreastfeedTime),
+		"recent_sleep_time":               formatNullableTimeRFC3339(recentSleepTime),
+		"recent_sleep_duration_min":       recentSleepDurationMin,
+		"minutes_since_last_sleep":        minutesSinceLastSleep,
+		"diaper_pee_count":                diaperPeeCount,
+		"diaper_poo_count":                diaperPooCount,
+		"last_diaper_time":                formatNullableTimeRFC3339(lastDiaperTime),
+		"medication_count":                medicationCount,
+		"last_medication_time":            formatNullableTimeRFC3339(lastMedicationTime),
+		"special_memo":                    specialMemo,
+		"feeding_method":                  profile.FeedingMethod,
+		"formula_type":                    profile.FormulaType,
+		"formula_brand":                   profile.FormulaBrand,
+		"formula_product":                 profile.FormulaProduct,
+		"formula_contains_starch":         profile.FormulaContainsStarch,
+		"formula_display_name":            formulaDisplayName(profile),
+		"baby_age_days":                   profile.AgeDays,
+		"baby_weight_kg":                  profile.WeightKg,
+		"recommended_formula_daily_ml":    recommendation.RecommendedFormulaDailyML,
+		"recommended_formula_per_feed_ml": recommendation.RecommendedFormulaPerFeedML,
+		"recommended_feed_interval_min":   recommendation.RecommendedIntervalMin,
+		"recommended_next_feeding_time":   formatNullableTimeRFC3339(recommendation.RecommendedNextFeedingTime),
+		"recommended_next_feeding_in_min": recommendation.RecommendedNextFeedingInMin,
+		"recommendation_note":             recommendation.Note,
+		"recommendation_reference_text":   recommendation.ReferenceText,
+		"reference_text":                  "Derived from today's confirmed events.",
 	})
 }
 
@@ -469,9 +496,31 @@ func (a *App) aiQuery(c *gin.Context) {
 			}
 		}
 		result := calculateNextFeedingETA(times, time.Now().UTC())
+		lastFeedingTime, latestErr := a.latestFeedingTime(c.Request.Context(), baby.ID)
+		if latestErr != nil {
+			writeError(c, http.StatusInternalServerError, "Failed to load latest feeding event")
+			return
+		}
+		profile, _, profileErr := a.resolveBabyProfile(c.Request.Context(), user.ID, baby.ID, readRoles)
+		if profileErr != nil {
+			writeError(c, http.StatusInternalServerError, "Failed to resolve baby profile")
+			return
+		}
+		recommendation := calculateFeedingRecommendation(profile, lastFeedingTime, time.Now().UTC())
+
 		answer := "Need at least two feeding logs to estimate next feeding."
 		if result.ETAMinutes != nil {
 			answer = "Estimated next feeding in about " + strconv.Itoa(*result.ETAMinutes) + " minutes."
+		}
+		if recommendation.RecommendedFormulaPerFeedML != nil {
+			intervalH := recommendation.RecommendedIntervalMin / 60
+			intervalM := recommendation.RecommendedIntervalMin % 60
+			answer += " Suggested profile-based plan: about " +
+				strconv.Itoa(*recommendation.RecommendedFormulaPerFeedML) +
+				" ml every " + strconv.Itoa(intervalH) + "h " + strconv.Itoa(intervalM) + "m."
+		}
+		if display := formulaDisplayName(profile); display != "" {
+			answer += " Formula profile: " + display + "."
 		}
 		c.JSON(http.StatusOK, gin.H{
 			"answer":            answer,

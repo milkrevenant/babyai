@@ -27,15 +27,37 @@ class BabyAIApi {
 
   static final BabyAIApi instance = BabyAIApi._();
   static String _runtimeBearerToken = AppEnv.apiBearerToken;
+  static String _runtimeBabyId = AppEnv.babyId;
+  static String _runtimeHouseholdId = AppEnv.householdId;
+  static String _runtimeAlbumId = AppEnv.albumId;
   final Dio _dio;
 
   bool get isConfigured =>
-      _runtimeBearerToken.isNotEmpty && AppEnv.babyId.isNotEmpty;
+      _runtimeBearerToken.isNotEmpty && activeBabyId.isNotEmpty;
 
   static String get currentBearerToken => _runtimeBearerToken;
+  static String get activeBabyId => _runtimeBabyId.trim();
+  static String get activeHouseholdId => _runtimeHouseholdId.trim();
+  static String get activeAlbumId => _runtimeAlbumId.trim();
 
   static void setBearerToken(String token) {
     _runtimeBearerToken = token.trim();
+  }
+
+  static void setRuntimeIds({
+    String? babyId,
+    String? householdId,
+    String? albumId,
+  }) {
+    if (babyId != null) {
+      _runtimeBabyId = babyId.trim();
+    }
+    if (householdId != null) {
+      _runtimeHouseholdId = householdId.trim();
+    }
+    if (albumId != null) {
+      _runtimeAlbumId = albumId.trim();
+    }
   }
 
   void _requireToken() {
@@ -45,19 +67,19 @@ class BabyAIApi {
   }
 
   void _requireBabyId() {
-    if (AppEnv.babyId.isEmpty) {
+    if (activeBabyId.isEmpty) {
       throw ApiFailure("Set BABY_ID via --dart-define.");
     }
   }
 
   void _requireHouseholdId() {
-    if (AppEnv.householdId.isEmpty) {
+    if (activeHouseholdId.isEmpty) {
       throw ApiFailure("Set HOUSEHOLD_ID via --dart-define.");
     }
   }
 
   void _requireAlbumId() {
-    if (AppEnv.albumId.isEmpty) {
+    if (activeAlbumId.isEmpty) {
       throw ApiFailure("Set ALBUM_ID via --dart-define.");
     }
   }
@@ -101,12 +123,116 @@ class BabyAIApi {
     throw ApiFailure("Unexpected API response shape");
   }
 
+  Future<Map<String, dynamic>> onboardingParent({
+    required String provider,
+    required String babyName,
+    required String babyBirthDate,
+    String? babySex,
+    double? babyWeightKg,
+    String? feedingMethod,
+    String? formulaBrand,
+    String? formulaProduct,
+    String? formulaType,
+    bool? formulaContainsStarch,
+    List<String> requiredConsents = const <String>[
+      "terms",
+      "privacy",
+      "data_processing",
+    ],
+  }) async {
+    try {
+      final Response<dynamic> response = await _dio.post<dynamic>(
+        "/api/v1/onboarding/parent",
+        data: <String, dynamic>{
+          "provider": provider,
+          "baby_name": babyName,
+          "baby_birth_date": babyBirthDate,
+          if (babySex != null && babySex.trim().isNotEmpty)
+            "baby_sex": babySex.trim(),
+          if (babyWeightKg != null) "baby_weight_kg": babyWeightKg,
+          if (feedingMethod != null && feedingMethod.trim().isNotEmpty)
+            "feeding_method": feedingMethod.trim(),
+          if (formulaBrand != null && formulaBrand.trim().isNotEmpty)
+            "formula_brand": formulaBrand.trim(),
+          if (formulaProduct != null && formulaProduct.trim().isNotEmpty)
+            "formula_product": formulaProduct.trim(),
+          if (formulaType != null && formulaType.trim().isNotEmpty)
+            "formula_type": formulaType.trim(),
+          if (formulaContainsStarch != null)
+            "formula_contains_starch": formulaContainsStarch,
+          "required_consents": requiredConsents,
+        },
+        options: _authOptions(),
+      );
+      return _requireMap(response);
+    } catch (error) {
+      throw _toFailure(error);
+    }
+  }
+
+  Future<Map<String, dynamic>> getBabyProfile() async {
+    try {
+      _requireBabyId();
+      final Response<dynamic> response = await _dio.get<dynamic>(
+        "/api/v1/babies/profile",
+        queryParameters: <String, dynamic>{"baby_id": activeBabyId},
+        options: _authOptions(),
+      );
+      return _requireMap(response);
+    } catch (error) {
+      throw _toFailure(error);
+    }
+  }
+
+  Future<Map<String, dynamic>> upsertBabyProfile({
+    String? babyName,
+    String? babyBirthDate,
+    String? babySex,
+    double? babyWeightKg,
+    String? feedingMethod,
+    String? formulaBrand,
+    String? formulaProduct,
+    String? formulaType,
+    bool? formulaContainsStarch,
+  }) async {
+    try {
+      _requireBabyId();
+      final Response<dynamic> response = await _dio.patch<dynamic>(
+        "/api/v1/babies/profile",
+        data: <String, dynamic>{
+          "baby_id": activeBabyId,
+          if (babyName != null && babyName.trim().isNotEmpty)
+            "baby_name": babyName.trim(),
+          if (babyBirthDate != null && babyBirthDate.trim().isNotEmpty)
+            "baby_birth_date": babyBirthDate.trim(),
+          if (babySex != null && babySex.trim().isNotEmpty)
+            "baby_sex": babySex.trim(),
+          if (babyWeightKg != null) "baby_weight_kg": babyWeightKg,
+          if (feedingMethod != null && feedingMethod.trim().isNotEmpty)
+            "feeding_method": feedingMethod.trim(),
+          if (formulaBrand != null && formulaBrand.trim().isNotEmpty)
+            "formula_brand": formulaBrand.trim(),
+          if (formulaProduct != null && formulaProduct.trim().isNotEmpty)
+            "formula_product": formulaProduct.trim(),
+          if (formulaType != null && formulaType.trim().isNotEmpty)
+            "formula_type": formulaType.trim(),
+          if (formulaContainsStarch != null)
+            "formula_contains_starch": formulaContainsStarch,
+        },
+        options: _authOptions(),
+      );
+      return _requireMap(response);
+    } catch (error) {
+      throw _toFailure(error);
+    }
+  }
+
   Future<Map<String, dynamic>> quickLastPooTime() async {
     try {
       _requireBabyId();
       final Response<dynamic> response = await _dio.get<dynamic>(
         "/api/v1/quick/last-poo-time",
-        queryParameters: <String, dynamic>{"baby_id": AppEnv.babyId},
+        queryParameters: <String, dynamic>{"baby_id": activeBabyId},
         options: _authOptions(),
       );
       return _requireMap(response);
@@ -120,7 +246,7 @@ class BabyAIApi {
       _requireBabyId();
       final Response<dynamic> response = await _dio.get<dynamic>(
         "/api/v1/quick/next-feeding-eta",
-        queryParameters: <String, dynamic>{"baby_id": AppEnv.babyId},
+        queryParameters: <String, dynamic>{"baby_id": activeBabyId},
         options: _authOptions(),
       );
       return _requireMap(response);
@@ -134,7 +260,7 @@ class BabyAIApi {
       _requireBabyId();
       final Response<dynamic> response = await _dio.get<dynamic>(
         "/api/v1/quick/today-summary",
-        queryParameters: <String, dynamic>{"baby_id": AppEnv.babyId},
+        queryParameters: <String, dynamic>{"baby_id": activeBabyId},
         options: _authOptions(),
       );
       return _requireMap(response);
@@ -177,7 +303,7 @@ class BabyAIApi {
       _requireBabyId();
       final Response<dynamic> response = await _dio.get<dynamic>(
         "/api/v1/quick/landing-snapshot",
-        queryParameters: <String, dynamic>{"baby_id": AppEnv.babyId},
+        queryParameters: <String, dynamic>{"baby_id": activeBabyId},
         options: _authOptions(),
       );
       return _requireMap(response);
@@ -197,7 +323,7 @@ class BabyAIApi {
       final Response<dynamic> response = await _dio.post<dynamic>(
         "/api/v1/assistants/siri/$resolvedIntent",
         data: <String, dynamic>{
-          "baby_id": AppEnv.babyId,
+          "baby_id": activeBabyId,
           "tone": tone,
         },
         options: _authOptions(),
@@ -220,7 +346,7 @@ class BabyAIApi {
         "/api/v1/assistants/bixby/query",
         data: <String, dynamic>{
           "capsule_action": resolvedAction,
-          "baby_id": AppEnv.babyId,
+          "baby_id": activeBabyId,
           "tone": tone,
         },
         options: _authOptions(),
@@ -237,7 +363,7 @@ class BabyAIApi {
       final Response<dynamic> response = await _dio.post<dynamic>(
         "/api/v1/ai/query",
         data: <String, dynamic>{
-          "baby_id": AppEnv.babyId,
+          "baby_id": activeBabyId,
           "question": question,
           "tone": "neutral",
           "use_personal_data": true,
@@ -256,7 +382,7 @@ class BabyAIApi {
       final Response<dynamic> response = await _dio.post<dynamic>(
         "/api/v1/events/voice",
         data: <String, dynamic>{
-          "baby_id": AppEnv.babyId,
+          "baby_id": activeBabyId,
           if (transcriptHint != null && transcriptHint.trim().isNotEmpty)
             "transcript_hint": transcriptHint.trim(),
         },
@@ -294,7 +420,7 @@ class BabyAIApi {
       final Response<dynamic> response = await _dio.get<dynamic>(
         "/api/v1/reports/daily",
         queryParameters: <String, dynamic>{
-          "baby_id": AppEnv.babyId,
+          "baby_id": activeBabyId,
           "date": day,
         },
         options: _authOptions(),
@@ -312,7 +438,7 @@ class BabyAIApi {
       final Response<dynamic> response = await _dio.get<dynamic>(
         "/api/v1/reports/weekly",
         queryParameters: <String, dynamic>{
-          "baby_id": AppEnv.babyId,
+          "baby_id": activeBabyId,
           "week_start": day,
         },
         options: _authOptions(),
@@ -328,7 +454,7 @@ class BabyAIApi {
       _requireAlbumId();
       final Response<dynamic> response = await _dio.post<dynamic>(
         "/api/v1/photos/upload-url",
-        queryParameters: <String, dynamic>{"album_id": AppEnv.albumId},
+        queryParameters: <String, dynamic>{"album_id": activeAlbumId},
         options: _authOptions(),
       );
       return _requireMap(response);
@@ -346,7 +472,7 @@ class BabyAIApi {
       final Response<dynamic> response = await _dio.post<dynamic>(
         "/api/v1/photos/complete",
         data: <String, dynamic>{
-          "album_id": AppEnv.albumId,
+          "album_id": activeAlbumId,
           "object_key": objectKey,
           "downloadable": downloadable,
         },
@@ -363,7 +489,7 @@ class BabyAIApi {
       _requireHouseholdId();
       final Response<dynamic> response = await _dio.get<dynamic>(
         "/api/v1/subscription/me",
-        queryParameters: <String, dynamic>{"household_id": AppEnv.householdId},
+        queryParameters: <String, dynamic>{"household_id": activeHouseholdId},
         options: _authOptions(),
       );
       return _requireMap(response);
