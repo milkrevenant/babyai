@@ -58,6 +58,10 @@ type checkoutRequest struct {
 	Plan        string `json:"plan"`
 }
 
+type updateMySettingsRequest struct {
+	ThemeMode string `json:"theme_mode"`
+}
+
 type siriIntentRequest struct {
 	BabyID string `json:"baby_id"`
 	Tone   string `json:"tone"`

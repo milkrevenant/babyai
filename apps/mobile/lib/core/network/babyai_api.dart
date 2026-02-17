@@ -9,7 +9,8 @@ class ApiFailure implements Exception {
   final int? statusCode;
 
   @override
-  String toString() => statusCode == null ? message : "$message (HTTP $statusCode)";
+  String toString() =>
+      statusCode == null ? message : "$message (HTTP $statusCode)";
 }
 
 class BabyAIApi {
@@ -25,13 +26,20 @@ class BabyAIApi {
         );
 
   static final BabyAIApi instance = BabyAIApi._();
+  static String _runtimeBearerToken = AppEnv.apiBearerToken;
   final Dio _dio;
 
   bool get isConfigured =>
-      AppEnv.apiBearerToken.isNotEmpty && AppEnv.babyId.isNotEmpty;
+      _runtimeBearerToken.isNotEmpty && AppEnv.babyId.isNotEmpty;
+
+  static String get currentBearerToken => _runtimeBearerToken;
+
+  static void setBearerToken(String token) {
+    _runtimeBearerToken = token.trim();
+  }
 
   void _requireToken() {
-    if (AppEnv.apiBearerToken.isEmpty) {
+    if (_runtimeBearerToken.isEmpty) {
       throw ApiFailure("Set API_BEARER_TOKEN via --dart-define.");
     }
   }
@@ -58,7 +66,7 @@ class BabyAIApi {
     _requireToken();
     return Options(
       headers: <String, String>{
-        "Authorization": "Bearer ${AppEnv.apiBearerToken}",
+        "Authorization": "Bearer $_runtimeBearerToken",
       },
     );
   }
@@ -71,7 +79,8 @@ class BabyAIApi {
       final int? code = error.response?.statusCode;
       final Object? data = error.response?.data;
       if (data is Map<String, dynamic>) {
-        final Object? detail = data["detail"] ?? data["error"] ?? data["message"];
+        final Object? detail =
+            data["detail"] ?? data["error"] ?? data["message"];
         if (detail is String && detail.isNotEmpty) {
           return ApiFailure(detail, statusCode: code);
         }
@@ -126,6 +135,94 @@ class BabyAIApi {
       final Response<dynamic> response = await _dio.get<dynamic>(
         "/api/v1/quick/today-summary",
         queryParameters: <String, dynamic>{"baby_id": AppEnv.babyId},
+        options: _authOptions(),
+      );
+      return _requireMap(response);
+    } catch (error) {
+      throw _toFailure(error);
+    }
+  }
+
+  Future<Map<String, dynamic>> getMySettings() async {
+    try {
+      final Response<dynamic> response = await _dio.get<dynamic>(
+        "/api/v1/settings/me",
+        options: _authOptions(),
+      );
+      return _requireMap(response);
+    } catch (error) {
+      throw _toFailure(error);
+    }
+  }
+
+  Future<Map<String, dynamic>> updateMySettings({
+    required String themeMode,
+  }) async {
+    try {
+      final Response<dynamic> response = await _dio.patch<dynamic>(
+        "/api/v1/settings/me",
+        data: <String, dynamic>{
+          "theme_mode": themeMode,
+        },
+        options: _authOptions(),
+      );
+      return _requireMap(response);
+    } catch (error) {
+      throw _toFailure(error);
+    }
+  }
+
+  Future<Map<String, dynamic>> quickLandingSnapshot() async {
+    try {
+      _requireBabyId();
+      final Response<dynamic> response = await _dio.get<dynamic>(
+        "/api/v1/quick/landing-snapshot",
+        queryParameters: <String, dynamic>{"baby_id": AppEnv.babyId},
+        options: _authOptions(),
+      );
+      return _requireMap(response);
+    } catch (error) {
+      throw _toFailure(error);
+    }
+  }
+
+  Future<Map<String, dynamic>> siriIntent(
+    String intent, {
+    String tone = "neutral",
+  }) async {
+    try {
+      _requireBabyId();
+      final String resolvedIntent =
+          intent.trim().isEmpty ? "GetTodaySummary" : intent.trim();
+      final Response<dynamic> response = await _dio.post<dynamic>(
+        "/api/v1/assistants/siri/$resolvedIntent",
+        data: <String, dynamic>{
+          "baby_id": AppEnv.babyId,
+          "tone": tone,
+        },
+        options: _authOptions(),
+      );
+      return _requireMap(response);
+    } catch (error) {
+      throw _toFailure(error);
+    }
+  }
+
+  Future<Map<String, dynamic>> bixbyQuery(
+    String action, {
+    String tone = "neutral",
+  }) async {
+    try {
+      _requireBabyId();
+      final String resolvedAction =
+          action.trim().isEmpty ? "GetTodaySummary" : action.trim();
+      final Response<dynamic> response = await _dio.post<dynamic>(
+        "/api/v1/assistants/bixby/query",
+        data: <String, dynamic>{
+          "capsule_action": resolvedAction,
+          "baby_id": AppEnv.babyId,
+          "tone": tone,
+        },
         options: _authOptions(),
       );
       return _requireMap(response);

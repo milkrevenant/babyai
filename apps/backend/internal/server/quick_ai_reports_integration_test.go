@@ -154,6 +154,68 @@ func TestQuickTodaySummaryBuildsExpectedLines(t *testing.T) {
 	}
 }
 
+func TestQuickLandingSnapshotReturnsStructuredDashboardData(t *testing.T) {
+	resetDatabase(t)
+	fixture := seedOwnerFixture(t)
+	base := startOfUTCDay(time.Now().UTC())
+
+	seedEvent(t, "", fixture.BabyID, "FORMULA", base.Add(8*time.Hour), nil, map[string]any{"ml": 120}, fixture.UserID)
+	seedEvent(t, "", fixture.BabyID, "FORMULA", base.Add(19*time.Hour+15*time.Minute), nil, map[string]any{"ml": 140}, fixture.UserID)
+	sleepStart := base.Add(11 * time.Hour)
+	sleepEnd := sleepStart.Add(95 * time.Minute)
+	seedEvent(t, "", fixture.BabyID, "SLEEP", sleepStart, &sleepEnd, map[string]any{}, fixture.UserID)
+	seedEvent(t, "", fixture.BabyID, "MEMO", base.Add(20*time.Hour), nil, map[string]any{"text": "Needs vitamin D after lunch"}, fixture.UserID)
+
+	rec := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodGet,
+		"/api/v1/quick/landing-snapshot?baby_id="+fixture.BabyID,
+		signToken(t, fixture.UserID, nil),
+		nil,
+		nil,
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	body := decodeJSONMap(t, rec)
+	formulaTimes := decodeStringList(t, body["formula_times"])
+	if len(formulaTimes) != 2 {
+		t.Fatalf("expected 2 formula times, got %v", formulaTimes)
+	}
+	if body["last_formula_time"] == nil {
+		t.Fatalf("expected last_formula_time, got nil")
+	}
+	if body["recent_sleep_time"] == nil {
+		t.Fatalf("expected recent_sleep_time, got nil")
+	}
+	duration, ok := body["recent_sleep_duration_min"].(float64)
+	if !ok || int(duration) != 95 {
+		t.Fatalf("expected recent_sleep_duration_min=95, got %v", body["recent_sleep_duration_min"])
+	}
+	elapsed, ok := body["minutes_since_last_sleep"].(float64)
+	if !ok || elapsed < 0 {
+		t.Fatalf("expected minutes_since_last_sleep>=0, got %v", body["minutes_since_last_sleep"])
+	}
+	if body["special_memo"] != "Needs vitamin D after lunch" {
+		t.Fatalf("unexpected special_memo: %v", body["special_memo"])
+	}
+
+	bands, ok := body["formula_amount_by_time_band_ml"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected formula_amount_by_time_band_ml object, got %T", body["formula_amount_by_time_band_ml"])
+	}
+	morning, ok := bands["morning"].(float64)
+	if !ok || int(morning) != 120 {
+		t.Fatalf("expected morning formula ml=120, got %v", bands["morning"])
+	}
+	evening, ok := bands["evening"].(float64)
+	if !ok || int(evening) != 140 {
+		t.Fatalf("expected evening formula ml=140, got %v", bands["evening"])
+	}
+}
+
 func TestAIQueryReturnsRecordBasedPooAnswer(t *testing.T) {
 	resetDatabase(t)
 	fixture := seedOwnerFixture(t)

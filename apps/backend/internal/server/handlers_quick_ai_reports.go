@@ -192,6 +192,158 @@ func (a *App) quickTodaySummary(c *gin.Context) {
 	})
 }
 
+func (a *App) quickLandingSnapshot(c *gin.Context) {
+	user, ok := authUserFromContext(c)
+	if !ok {
+		writeError(c, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	babyID := c.Query("baby_id")
+
+	baby, statusCode, err := a.getBabyWithAccess(c.Request.Context(), user.ID, babyID, readRoles)
+	if err != nil {
+		writeError(c, statusCode, err.Error())
+		return
+	}
+
+	now := time.Now().UTC()
+	start := startOfUTCDay(now)
+	end := start.Add(24 * time.Hour)
+
+	rows, err := a.db.Query(
+		c.Request.Context(),
+		`SELECT type, "startTime", "endTime", "valueJson"
+		 FROM "Event"
+		 WHERE "babyId" = $1
+		   AND "startTime" >= $2
+		   AND "startTime" < $3
+		   AND type IN ('FORMULA', 'SLEEP', 'MEMO')
+		 ORDER BY "startTime" DESC`,
+		baby.ID,
+		start,
+		end,
+	)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to load events")
+		return
+	}
+	defer rows.Close()
+
+	formulaBands := map[string]int{
+		"night":     0,
+		"morning":   0,
+		"afternoon": 0,
+		"evening":   0,
+	}
+	formulaTimes := make([]string, 0)
+	var lastFormulaTime *time.Time
+	var recentSleepTime *time.Time
+	var recentSleepDurationMin *int
+	var sleepReferenceTime *time.Time
+	specialMemo := "No special memo for today."
+
+	for rows.Next() {
+		var eventType string
+		var startedAt time.Time
+		var endedAt *time.Time
+		var valueRaw []byte
+		if err := rows.Scan(&eventType, &startedAt, &endedAt, &valueRaw); err != nil {
+			writeError(c, http.StatusInternalServerError, "Failed to parse events")
+			return
+		}
+
+		startedUTC := startedAt.UTC()
+		valueMap := parseJSONStringMap(valueRaw)
+
+		switch eventType {
+		case "FORMULA":
+			if lastFormulaTime == nil {
+				lastFormulaTime = &startedUTC
+			}
+			formulaTimes = append(formulaTimes, startedUTC.Format(time.RFC3339))
+			amountML := int(extractNumberFromMap(valueMap, "ml", "amount_ml", "volume_ml") + 0.5)
+			formulaBands[landingFormulaBand(startedUTC.Hour())] += amountML
+
+		case "SLEEP":
+			if recentSleepTime == nil {
+				recentSleepTime = &startedUTC
+				if endedAt != nil {
+					endedUTC := endedAt.UTC()
+					sleepReferenceTime = &endedUTC
+					duration := int(endedUTC.Sub(startedUTC).Minutes())
+					if duration < 0 {
+						duration = 0
+					}
+					recentSleepDurationMin = &duration
+				} else {
+					sleepReferenceTime = &startedUTC
+				}
+			}
+
+		case "MEMO":
+			if specialMemo == "No special memo for today." {
+				memoText := extractMemoText(valueMap)
+				if memoText == "" {
+					memoText = "Memo recorded today."
+				}
+				specialMemo = memoText
+			}
+		}
+	}
+
+	var minutesSinceLastSleep *int
+	if sleepReferenceTime != nil {
+		elapsed := int(now.Sub(sleepReferenceTime.UTC()).Minutes())
+		if elapsed < 0 {
+			elapsed = 0
+		}
+		minutesSinceLastSleep = &elapsed
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"date":                           start.Format("2006-01-02"),
+		"formula_times":                  formulaTimes,
+		"formula_amount_by_time_band_ml": formulaBands,
+		"last_formula_time":              formatNullableTimeRFC3339(lastFormulaTime),
+		"recent_sleep_time":              formatNullableTimeRFC3339(recentSleepTime),
+		"recent_sleep_duration_min":      recentSleepDurationMin,
+		"minutes_since_last_sleep":       minutesSinceLastSleep,
+		"special_memo":                   specialMemo,
+		"reference_text":                 "Derived from today's confirmed events.",
+	})
+}
+
+func landingFormulaBand(hour int) string {
+	switch {
+	case hour < 6:
+		return "night"
+	case hour < 12:
+		return "morning"
+	case hour < 18:
+		return "afternoon"
+	default:
+		return "evening"
+	}
+}
+
+func extractMemoText(value map[string]any) string {
+	for _, key := range []string{"memo", "note", "text", "content", "message"} {
+		memoText := strings.TrimSpace(toString(value[key]))
+		if memoText != "" {
+			return memoText
+		}
+	}
+	return ""
+}
+
+func formatNullableTimeRFC3339(value *time.Time) *string {
+	if value == nil {
+		return nil
+	}
+	formatted := value.UTC().Format(time.RFC3339)
+	return &formatted
+}
+
 func (a *App) aiQuery(c *gin.Context) {
 	user, ok := authUserFromContext(c)
 	if !ok {

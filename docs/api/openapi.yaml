@@ -15,6 +15,7 @@ tags:
   - name: reports
   - name: photos
   - name: subscription
+  - name: settings
   - name: assistants
 paths:
   /health:
@@ -100,6 +101,36 @@ paths:
                   clip_id: { type: string }
                   saved_event_count: { type: integer }
 
+  /api/v1/settings/me:
+    get:
+      tags: [settings]
+      summary: Get current app settings for authenticated user
+      operationId: getMySettings
+      responses:
+        '200':
+          description: User settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserSettingsResponse'
+    patch:
+      tags: [settings]
+      summary: Update current app settings for authenticated user
+      operationId: updateMySettings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserSettingsUpdateRequest'
+      responses:
+        '200':
+          description: Updated user settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserSettingsResponse'
+
   /api/v1/ai/query:
     post:
       tags: [ai]
@@ -178,6 +209,24 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TodaySummaryResponse'
+
+  /api/v1/quick/landing-snapshot:
+    get:
+      tags: [ai]
+      summary: Get landing dashboard snapshot for today's records
+      operationId: quickLandingSnapshot
+      parameters:
+        - in: query
+          name: baby_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Landing dashboard snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LandingSnapshotResponse'
 
   /api/v1/reports/daily:
     get:
@@ -379,6 +428,10 @@ components:
       type: string
       enum: [PHOTO_SHARE, AI_ONLY, AI_PHOTO]
 
+    ThemeMode:
+      type: string
+      enum: [system, dark, light]
+
     ParentOnboardingRequest:
       type: object
       required: [provider, baby_name, baby_birth_date, required_consents]
@@ -484,6 +537,27 @@ components:
           items: { type: string }
         reference_text: { type: string }
 
+    LandingSnapshotResponse:
+      type: object
+      properties:
+        date: { type: string, format: date }
+        formula_times:
+          type: array
+          items: { type: string, format: date-time }
+        formula_amount_by_time_band_ml:
+          type: object
+          properties:
+            night: { type: integer }
+            morning: { type: integer }
+            afternoon: { type: integer }
+            evening: { type: integer }
+        last_formula_time: { type: string, format: date-time, nullable: true }
+        recent_sleep_time: { type: string, format: date-time, nullable: true }
+        recent_sleep_duration_min: { type: integer, nullable: true }
+        minutes_since_last_sleep: { type: integer, nullable: true }
+        special_memo: { type: string }
+        reference_text: { type: string }
+
     DailyReportResponse:
       type: object
       properties:
@@ -510,6 +584,17 @@ components:
         labels:
           type: array
           items: { type: string }
+
+    UserSettingsResponse:
+      type: object
+      properties:
+        theme_mode: { $ref: '#/components/schemas/ThemeMode' }
+
+    UserSettingsUpdateRequest:
+      type: object
+      required: [theme_mode]
+      properties:
+        theme_mode: { $ref: '#/components/schemas/ThemeMode' }
 
     PhotoUploadCompleteRequest:
       type: object
@@ -548,4 +633,3 @@ components:
           enum: [GetLastPooTime, GetNextFeedingEta, GetTodaySummary]
         baby_id: { type: string }
         tone: { $ref: '#/components/schemas/AiTone' }
-

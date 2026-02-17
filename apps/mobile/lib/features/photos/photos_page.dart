@@ -5,6 +5,10 @@ import "package:flutter/material.dart";
 import "../../core/config/app_env.dart";
 import "../../core/network/babyai_api.dart";
 
+enum _PhotoViewMode { tiles, albums }
+
+enum _PhotoSortMode { album, date, views, likes }
+
 class PhotosPage extends StatefulWidget {
   const PhotosPage({super.key});
 
@@ -20,10 +24,91 @@ class _PhotosPageState extends State<PhotosPage> {
   Map<String, dynamic>? _uploadUrl;
   Map<String, dynamic>? _completed;
 
+  _PhotoViewMode _viewMode = _PhotoViewMode.tiles;
+  _PhotoSortMode _sortMode = _PhotoSortMode.date;
+
+  final List<_PhotoItem> _items = <_PhotoItem>[
+    _PhotoItem(
+      id: "p1",
+      album: "Daily",
+      createdAt: DateTime.now().subtract(const Duration(hours: 2)),
+      views: 24,
+      likes: 7,
+      title: "Morning nap",
+      color: const Color(0xFF7C7FB6),
+    ),
+    _PhotoItem(
+      id: "p2",
+      album: "Daily",
+      createdAt: DateTime.now().subtract(const Duration(hours: 5)),
+      views: 41,
+      likes: 12,
+      title: "Bottle time",
+      color: const Color(0xFF5E6CA0),
+    ),
+    _PhotoItem(
+      id: "p3",
+      album: "Outing",
+      createdAt: DateTime.now().subtract(const Duration(days: 1)),
+      views: 13,
+      likes: 4,
+      title: "Park walk",
+      color: const Color(0xFF7D6A9A),
+    ),
+    _PhotoItem(
+      id: "p4",
+      album: "Family",
+      createdAt: DateTime.now().subtract(const Duration(days: 2)),
+      views: 56,
+      likes: 23,
+      title: "Grandma visit",
+      color: const Color(0xFF8A7C58),
+    ),
+    _PhotoItem(
+      id: "p5",
+      album: "Outing",
+      createdAt: DateTime.now().subtract(const Duration(days: 4)),
+      views: 8,
+      likes: 1,
+      title: "Sleeping in stroller",
+      color: const Color(0xFF6F88A3),
+    ),
+    _PhotoItem(
+      id: "p6",
+      album: "Daily",
+      createdAt: DateTime.now().subtract(const Duration(days: 5)),
+      views: 18,
+      likes: 6,
+      title: "Night feed",
+      color: const Color(0xFF5B5F86),
+    ),
+  ];
+
   @override
   void dispose() {
     _objectKeyController.dispose();
     super.dispose();
+  }
+
+  List<_PhotoItem> _sortedItems() {
+    final List<_PhotoItem> result = List<_PhotoItem>.from(_items);
+    switch (_sortMode) {
+      case _PhotoSortMode.album:
+        result.sort((a, b) {
+          final int byAlbum = a.album.compareTo(b.album);
+          if (byAlbum != 0) {
+            return byAlbum;
+          }
+          return b.createdAt.compareTo(a.createdAt);
+        });
+      case _PhotoSortMode.date:
+        result.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      case _PhotoSortMode.views:
+        result.sort((a, b) => b.views.compareTo(a.views));
+      case _PhotoSortMode.likes:
+        result.sort((a, b) => b.likes.compareTo(a.likes));
+    }
+    return result;
   }
 
   Future<void> _createUploadUrl() async {
@@ -33,7 +118,8 @@ class _PhotosPageState extends State<PhotosPage> {
     });
 
     try {
-      final Map<String, dynamic> result = await BabyAIApi.instance.createUploadUrl();
+      final Map<String, dynamic> result =
+          await BabyAIApi.instance.createUploadUrl();
       final String? objectKey = result["object_key"] as String?;
       if (objectKey != null && objectKey.isNotEmpty) {
         _objectKeyController.text = objectKey;
@@ -60,11 +146,26 @@ class _PhotosPageState extends State<PhotosPage> {
       _error = null;
     });
     try {
-      final Map<String, dynamic> result = await BabyAIApi.instance.completeUpload(
+      final Map<String, dynamic> result =
+          await BabyAIApi.instance.completeUpload(
         objectKey: objectKey,
         downloadable: _downloadable,
       );
-      setState(() => _completed = result);
+      setState(() {
+        _completed = result;
+        _items.insert(
+          0,
+          _PhotoItem(
+            id: DateTime.now().microsecondsSinceEpoch.toString(),
+            album: "Daily",
+            createdAt: DateTime.now(),
+            views: 0,
+            likes: 0,
+            title: "New upload",
+            color: const Color(0xFF8088BA),
+          ),
+        );
+      });
     } catch (error) {
       setState(() => _error = error.toString());
     } finally {
@@ -74,92 +175,276 @@ class _PhotosPageState extends State<PhotosPage> {
     }
   }
 
+  String _sortLabel(_PhotoSortMode mode) {
+    switch (mode) {
+      case _PhotoSortMode.album:
+        return "Albums";
+      case _PhotoSortMode.date:
+        return "Date";
+      case _PhotoSortMode.views:
+        return "Views";
+      case _PhotoSortMode.likes:
+        return "Likes";
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     const JsonEncoder encoder = JsonEncoder.withIndent("  ");
+    final List<_PhotoItem> sorted = _sortedItems();
+    final Map<String, List<_PhotoItem>> albumMap = <String, List<_PhotoItem>>{};
+    for (final _PhotoItem item in sorted) {
+      albumMap.putIfAbsent(item.album, () => <_PhotoItem>[]).add(item);
+    }
 
-    return Scaffold(
-      appBar: AppBar(title: const Text("Photo Share")),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: <Widget>[
-          Text("Album ID: ${AppEnv.albumId.isEmpty ? "(not set)" : AppEnv.albumId}"),
-          const SizedBox(height: 12),
-          FilledButton.icon(
-            onPressed: _loading ? null : _createUploadUrl,
-            icon: const Icon(Icons.link),
-            label: const Text("Create Upload URL"),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _objectKeyController,
-            decoration: const InputDecoration(
-              border: OutlineInputBorder(),
-              labelText: "Object key",
-            ),
-          ),
-          const SizedBox(height: 8),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            value: _downloadable,
-            onChanged: _loading ? null : (bool value) => setState(() => _downloadable = value),
-            title: const Text("Downloadable"),
-          ),
-          OutlinedButton.icon(
-            onPressed: _loading ? null : _completeUpload,
-            icon: const Icon(Icons.cloud_done_outlined),
-            label: const Text("Complete Upload"),
-          ),
-          if (_loading) ...<Widget>[
-            const SizedBox(height: 16),
-            const LinearProgressIndicator(),
-          ],
-          if (_error != null) ...<Widget>[
-            const SizedBox(height: 16),
-            Text(
-              _error!,
-              style: TextStyle(
-                color: Theme.of(context).colorScheme.error,
-                fontWeight: FontWeight.w600,
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: <Widget>[
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: SegmentedButton<_PhotoViewMode>(
+                segments: const <ButtonSegment<_PhotoViewMode>>[
+                  ButtonSegment<_PhotoViewMode>(
+                    value: _PhotoViewMode.tiles,
+                    label: Text("Tiles"),
+                    icon: Icon(Icons.grid_view_rounded),
+                  ),
+                  ButtonSegment<_PhotoViewMode>(
+                    value: _PhotoViewMode.albums,
+                    label: Text("Albums"),
+                    icon: Icon(Icons.folder_copy_outlined),
+                  ),
+                ],
+                selected: <_PhotoViewMode>{_viewMode},
+                onSelectionChanged: (Set<_PhotoViewMode> next) {
+                  setState(() => _viewMode = next.first);
+                },
               ),
             ),
           ],
-          if (_uploadUrl != null) ...<Widget>[
-            const SizedBox(height: 16),
-            const Text(
-              "Upload URL Response",
-              style: TextStyle(fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: _PhotoSortMode.values
+              .map(
+                (_PhotoSortMode mode) => ChoiceChip(
+                  selected: _sortMode == mode,
+                  label: Text(_sortLabel(mode)),
+                  onSelected: (_) => setState(() => _sortMode = mode),
+                ),
+              )
+              .toList(),
+        ),
+        const SizedBox(height: 12),
+        if (_viewMode == _PhotoViewMode.tiles)
+          GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: sorted.length,
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3,
+              crossAxisSpacing: 8,
+              mainAxisSpacing: 8,
+              childAspectRatio: 0.8,
             ),
-            const SizedBox(height: 8),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(12),
+            itemBuilder: (BuildContext context, int index) {
+              final _PhotoItem item = sorted[index];
+              return Container(
+                decoration: BoxDecoration(
+                  color: item.color,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                padding: const EdgeInsets.all(8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Expanded(
+                      child: Center(
+                        child: Icon(
+                          Icons.image_outlined,
+                          size: 28,
+                          color: Colors.white.withValues(alpha: 0.95),
+                        ),
+                      ),
+                    ),
+                    Text(
+                      item.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      "Views ${item.views}  Likes ${item.likes}",
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.9),
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          )
+        else
+          Column(
+            children: albumMap.entries
+                .map((MapEntry<String, List<_PhotoItem>> entry) {
+              final _PhotoItem head = entry.value.first;
+              final int views = entry.value.fold<int>(
+                0,
+                (int sum, _PhotoItem item) => sum + item.views,
+              );
+              final int likes = entry.value.fold<int>(
+                0,
+                (int sum, _PhotoItem item) => sum + item.likes,
+              );
+              return Card(
+                child: ListTile(
+                  leading: Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: head.color,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child:
+                        const Icon(Icons.folder_outlined, color: Colors.white),
+                  ),
+                  title: Text(entry.key),
+                  subtitle: Text(
+                    "${entry.value.length} photos | Views $views | Likes $likes",
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                ),
+              );
+            }).toList(),
+          ),
+        const SizedBox(height: 16),
+        ExpansionTile(
+          title: const Text("Upload manager"),
+          subtitle: Text(
+            "Album ID: ${AppEnv.albumId.isEmpty ? "(not set)" : AppEnv.albumId}",
+          ),
+          childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          children: <Widget>[
+            FilledButton.icon(
+              onPressed: _loading ? null : _createUploadUrl,
+              icon: const Icon(Icons.link),
+              label: const Text("Create upload URL"),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _objectKeyController,
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                labelText: "Object key",
               ),
-              child: SelectableText(encoder.convert(_uploadUrl)),
             ),
-          ],
-          if (_completed != null) ...<Widget>[
-            const SizedBox(height: 16),
-            const Text(
-              "Complete Response",
-              style: TextStyle(fontWeight: FontWeight.w700),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: _downloadable,
+              onChanged: _loading
+                  ? null
+                  : (bool value) => setState(() => _downloadable = value),
+              title: const Text("Downloadable"),
             ),
-            const SizedBox(height: 8),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(12),
+            OutlinedButton.icon(
+              onPressed: _loading ? null : _completeUpload,
+              icon: const Icon(Icons.cloud_done_outlined),
+              label: const Text("Complete upload"),
+            ),
+            if (_loading) ...<Widget>[
+              const SizedBox(height: 10),
+              const LinearProgressIndicator(),
+            ],
+            if (_error != null) ...<Widget>[
+              const SizedBox(height: 10),
+              Text(
+                _error!,
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.error,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
-              child: SelectableText(encoder.convert(_completed)),
-            ),
+            ],
+            if (_uploadUrl != null) ...<Widget>[
+              const SizedBox(height: 10),
+              _JsonPanel(
+                title: "Upload URL response",
+                data: _uploadUrl!,
+                encoder: encoder,
+              ),
+            ],
+            if (_completed != null) ...<Widget>[
+              const SizedBox(height: 10),
+              _JsonPanel(
+                title: "Complete response",
+                data: _completed!,
+                encoder: encoder,
+              ),
+            ],
           ],
-        ],
-      ),
+        ),
+      ],
     );
   }
+}
+
+class _JsonPanel extends StatelessWidget {
+  const _JsonPanel({
+    required this.title,
+    required this.data,
+    required this.encoder,
+  });
+
+  final String title;
+  final Map<String, dynamic> data;
+  final JsonEncoder encoder;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
+        const SizedBox(height: 6),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: SelectableText(encoder.convert(data)),
+        ),
+      ],
+    );
+  }
+}
+
+class _PhotoItem {
+  const _PhotoItem({
+    required this.id,
+    required this.album,
+    required this.createdAt,
+    required this.views,
+    required this.likes,
+    required this.title,
+    required this.color,
+  });
+
+  final String id;
+  final String album;
+  final DateTime createdAt;
+  final int views;
+  final int likes;
+  final String title;
+  final Color color;
 }
