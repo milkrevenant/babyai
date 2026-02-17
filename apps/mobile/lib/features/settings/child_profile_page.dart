@@ -49,6 +49,51 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
   bool _consentPrivacy = true;
   bool _consentData = true;
 
+  String _sexLabel(String sex) {
+    switch (sex) {
+      case "female":
+        return tr(context, ko: "여아", en: "Female", es: "Nina");
+      case "male":
+        return tr(context, ko: "남아", en: "Male", es: "Nino");
+      case "other":
+        return tr(context, ko: "기타", en: "Other", es: "Otro");
+      case "unknown":
+      default:
+        return tr(context, ko: "미지정", en: "Unknown", es: "Desconocido");
+    }
+  }
+
+  String _feedingMethodLabel(String method) {
+    switch (method) {
+      case "formula":
+        return tr(context, ko: "분유", en: "Formula", es: "Formula");
+      case "breastmilk":
+        return tr(context, ko: "모유", en: "Breastmilk", es: "Lactancia");
+      case "mixed":
+      default:
+        return tr(context, ko: "혼합", en: "Mixed", es: "Mixto");
+    }
+  }
+
+  String _formulaTypeLabel(String type) {
+    switch (type) {
+      case "hydrolyzed":
+        return tr(context, ko: "가수분해", en: "Hydrolyzed", es: "Hidrolizada");
+      case "thickened":
+        return tr(context,
+            ko: "농후/AR", en: "Thickened (AR)", es: "Espesada (AR)");
+      case "soy":
+        return tr(context, ko: "대두", en: "Soy", es: "Soja");
+      case "goat":
+        return tr(context, ko: "산양", en: "Goat", es: "Cabra");
+      case "specialty":
+        return tr(context, ko: "특수", en: "Specialty", es: "Especial");
+      case "standard":
+      default:
+        return tr(context, ko: "일반", en: "Standard", es: "Estandar");
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -348,11 +393,14 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
                 labelText: tr(context, ko: "성별", en: "Sex", es: "Sexo"),
                 border: const OutlineInputBorder(),
               ),
-              items: const <DropdownMenuItem<String>>[
-                DropdownMenuItem(value: "unknown", child: Text("Unknown")),
-                DropdownMenuItem(value: "female", child: Text("Female")),
-                DropdownMenuItem(value: "male", child: Text("Male")),
-                DropdownMenuItem(value: "other", child: Text("Other")),
+              items: <DropdownMenuItem<String>>[
+                DropdownMenuItem(
+                    value: "unknown", child: Text(_sexLabel("unknown"))),
+                DropdownMenuItem(
+                    value: "female", child: Text(_sexLabel("female"))),
+                DropdownMenuItem(value: "male", child: Text(_sexLabel("male"))),
+                DropdownMenuItem(
+                    value: "other", child: Text(_sexLabel("other"))),
               ],
               onChanged: (String? value) {
                 if (value != null) {
@@ -387,11 +435,15 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
                 ),
                 border: const OutlineInputBorder(),
               ),
-              items: const <DropdownMenuItem<String>>[
-                DropdownMenuItem(value: "mixed", child: Text("Mixed")),
-                DropdownMenuItem(value: "formula", child: Text("Formula")),
+              items: <DropdownMenuItem<String>>[
                 DropdownMenuItem(
-                    value: "breastmilk", child: Text("Breastmilk")),
+                    value: "mixed", child: Text(_feedingMethodLabel("mixed"))),
+                DropdownMenuItem(
+                    value: "formula",
+                    child: Text(_feedingMethodLabel("formula"))),
+                DropdownMenuItem(
+                    value: "breastmilk",
+                    child: Text(_feedingMethodLabel("breastmilk"))),
               ],
               onChanged: (String? value) {
                 if (value != null) {
@@ -411,15 +463,23 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
                 ),
                 border: const OutlineInputBorder(),
               ),
-              items: const <DropdownMenuItem<String>>[
-                DropdownMenuItem(value: "standard", child: Text("Standard")),
+              items: <DropdownMenuItem<String>>[
                 DropdownMenuItem(
-                    value: "hydrolyzed", child: Text("Hydrolyzed")),
+                    value: "standard",
+                    child: Text(_formulaTypeLabel("standard"))),
                 DropdownMenuItem(
-                    value: "thickened", child: Text("Thickened (AR)")),
-                DropdownMenuItem(value: "soy", child: Text("Soy")),
-                DropdownMenuItem(value: "goat", child: Text("Goat")),
-                DropdownMenuItem(value: "specialty", child: Text("Specialty")),
+                    value: "hydrolyzed",
+                    child: Text(_formulaTypeLabel("hydrolyzed"))),
+                DropdownMenuItem(
+                    value: "thickened",
+                    child: Text(_formulaTypeLabel("thickened"))),
+                DropdownMenuItem(
+                    value: "soy", child: Text(_formulaTypeLabel("soy"))),
+                DropdownMenuItem(
+                    value: "goat", child: Text(_formulaTypeLabel("goat"))),
+                DropdownMenuItem(
+                    value: "specialty",
+                    child: Text(_formulaTypeLabel("specialty"))),
               ],
               onChanged: (String? value) {
                 if (value != null) {

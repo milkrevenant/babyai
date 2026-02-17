@@ -209,6 +209,37 @@ class _RecordingPageState extends State<RecordingPage> {
     return "${hours}h ${mins}m";
   }
 
+  String _formulaTypeLabel(String? code) {
+    switch ((code ?? "").trim().toLowerCase()) {
+      case "hydrolyzed":
+        return tr(
+          context,
+          ko: "\uAC00\uC218\uBD84\uD574",
+          en: "Hydrolyzed",
+          es: "Hidrolizada",
+        );
+      case "thickened":
+        return tr(
+          context,
+          ko: "\uB18D\uD6C4/AR",
+          en: "Thickened (AR)",
+          es: "Espesada (AR)",
+        );
+      case "soy":
+        return tr(context, ko: "\uB300\uB450", en: "Soy", es: "Soja");
+      case "goat":
+        return tr(context, ko: "\uC0B0\uC591", en: "Goat", es: "Cabra");
+      case "specialty":
+        return tr(context, ko: "\uD2B9\uC218", en: "Specialty", es: "Especial");
+      case "standard":
+        return tr(context, ko: "\uC77C\uBC18", en: "Standard", es: "Estandar");
+      default:
+        return (code ?? "").trim().isEmpty
+            ? tr(context, ko: "\uC77C\uBC18", en: "Standard", es: "Estandar")
+            : (code ?? "").trim();
+    }
+  }
+
   String _rangeLabel() {
     final DateTime now = DateTime.now();
     switch (widget.range) {
@@ -290,15 +321,18 @@ class _RecordingPageState extends State<RecordingPage> {
             en: "No special memo for today.",
             es: "No hay nota especial hoy.");
 
-    final String formulaDisplayName =
-        _asString(snapshot["formula_display_name"]) ??
-            _asString(snapshot["formula_type"]) ??
-            tr(
-              context,
-              ko: "미설정",
-              en: "Not set",
-              es: "No configurado",
-            );
+    final String? formulaBrand = _asString(snapshot["formula_brand"]);
+    final String? formulaProduct = _asString(snapshot["formula_product"]);
+    final String? formulaTypeCode = _asString(snapshot["formula_type"]);
+    final List<String> formulaDisplayParts = <String>[
+      if (formulaBrand != null) formulaBrand,
+      if (formulaProduct != null) formulaProduct,
+      if (formulaTypeCode != null && formulaTypeCode.isNotEmpty)
+        _formulaTypeLabel(formulaTypeCode),
+    ];
+    final String formulaDisplayName = formulaDisplayParts.isEmpty
+        ? tr(context, ko: "미설정", en: "Not set", es: "No configurado")
+        : formulaDisplayParts.join(" / ");
     final int? recommendedPerFeed =
         _asInt(snapshot["recommended_formula_per_feed_ml"]);
     final int? recommendedInterval =
@@ -309,7 +343,7 @@ class _RecordingPageState extends State<RecordingPage> {
         _asString(snapshot["recommendation_note"]) ??
             tr(
               context,
-              ko: "프로필 기반 권장값입니다.",
+              ko: "?꾨줈??湲곕컲 沅뚯옣媛믪엯?덈떎.",
               en: "Profile-based recommendation.",
               es: "Recomendacion basada en perfil.",
             );
@@ -358,7 +392,7 @@ class _RecordingPageState extends State<RecordingPage> {
                       Expanded(
                         child: Text(
                           tr(context,
-                              ko: "Today baby snapshot",
+                              ko: "오늘 아이 기록 요약",
                               en: "Today baby snapshot",
                               es: "Resumen de hoy"),
                           style: const TextStyle(
@@ -369,9 +403,9 @@ class _RecordingPageState extends State<RecordingPage> {
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: <Widget>[
                           Text(
-                              "${tr(context, ko: "Total formula", en: "Total formula", es: "Formula total")}: $formulaTotal ml"),
+                              "${tr(context, ko: "총 분유량", en: "Total formula", es: "Formula total")}: $formulaTotal ml"),
                           Text(
-                            "${tr(context, ko: "Formula type", en: "Formula type", es: "Tipo")}: $formulaDisplayName",
+                            "${tr(context, ko: "분유 타입", en: "Formula type", es: "Tipo")}: $formulaDisplayName",
                             style: TextStyle(
                                 color: Theme.of(context)
                                     .colorScheme
