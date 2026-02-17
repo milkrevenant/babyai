@@ -1,53 +1,69 @@
 # Mobile (Flutter)
 
-Flutter app screens are wired to real backend APIs via `Dio`.
+Flutter app wired to backend APIs via `Dio`.
 
 ## Prerequisites
 - Flutter SDK
-- Xcode `16+` (for iOS 18.0+ builds on macOS)
-- Running backend (`apps/backend`) on `http://127.0.0.1:8000` or your custom base URL
-- Valid JWT token for backend auth
+- Running backend on `http://127.0.0.1:8000`
+- Valid backend JWT token (HS256, signed with backend `JWT_SECRET`)
 - Platform requirements:
-  - Android: `14+` (min API 34), target API `35`, `64-bit only` (`arm64-v8a`, `x86_64`)
-  - iOS: `18.0+`
+  - Android `14+` (min API 34), target API `35`
+  - iOS `18.0+` (Xcode `16+`)
 
-## Install / Run
-```bash
-cd apps/mobile
-flutter create .
+## Local Setup
+```powershell
+cd C:\Users\milkrevenant\Documents\code\babyai\apps\mobile
 flutter pub get
-flutter run \
-  --dart-define=API_BASE_URL=http://127.0.0.1:8000 \
-  --dart-define=API_BEARER_TOKEN=<jwt-token> \
-  --dart-define=BABY_ID=<baby-id> \
-  --dart-define=HOUSEHOLD_ID=<household-id> \
-  --dart-define=ALBUM_ID=<album-id>
 ```
 
-PowerShell (Windows):
+## Run (Windows)
 ```powershell
 flutter run -d windows --debug `
   --dart-define=API_BASE_URL=http://127.0.0.1:8000 `
-  --dart-define=API_BEARER_TOKEN=<jwt-token> `
-  --dart-define=BABY_ID=<baby-id> `
-  --dart-define=HOUSEHOLD_ID=<household-id> `
-  --dart-define=ALBUM_ID=<album-id>
+  --dart-define=API_BEARER_TOKEN=<jwt-token>
 ```
 
-## Integrated API flows
-- `Record` tab:
+Optional defines:
+```text
+--dart-define=BABY_ID=<baby-id>
+--dart-define=HOUSEHOLD_ID=<household-id>
+--dart-define=ALBUM_ID=<album-id>
+```
+
+`BABY_ID/HOUSEHOLD_ID/ALBUM_ID` are optional for first onboarding.
+
+## Token Input Rules (Current)
+- On onboarding `Save & Start`, token is required.
+- Token can come from:
+  - `--dart-define=API_BEARER_TOKEN`
+  - onboarding token text input
+- If missing, app blocks submission before API call with an explicit message.
+
+## Android Studio
+`Run/Debug Configurations` -> `Additional run args`:
+```text
+--dart-define=API_BASE_URL=http://10.0.2.2:8000 --dart-define=API_BEARER_TOKEN=<jwt-token>
+```
+
+## Integrated API Flows
+- Home/Record:
+  - `GET /api/v1/quick/landing-snapshot`
   - `POST /api/v1/events/voice`
   - `POST /api/v1/events/confirm`
-- `AI` tab:
+- Chat:
   - `GET /api/v1/quick/last-poo-time`
   - `GET /api/v1/quick/next-feeding-eta`
   - `GET /api/v1/quick/today-summary`
   - `POST /api/v1/ai/query`
-- `Report` tab:
+- Statistics:
   - `GET /api/v1/reports/daily`
   - `GET /api/v1/reports/weekly`
-- `Photos` tab:
+- Photos:
   - `POST /api/v1/photos/upload-url`
   - `POST /api/v1/photos/complete`
 
-All tabs include loading and error handling for API requests.
+## Troubleshooting
+- `Bearer token required`: token not provided
+- `Invalid bearer token`: wrong signature/secret mismatch
+- `User not found`: backend has `AUTH_AUTOCREATE_USER=false` and `sub` is unknown
+- connection error: backend not running or wrong `API_BASE_URL`

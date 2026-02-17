@@ -1,17 +1,23 @@
 # Siri App Intents Integration
 
-## 제공 인텐트
+## Implemented Intents (Backend Side)
 - `GetLastPooTimeIntent`
 - `GetNextFeedingEtaIntent`
 - `GetTodaySummaryIntent`
-- `StartRecordFlowIntent`
+- `StartRecordFlowIntent` (planned flow trigger)
 
-## 백엔드 계약
+## Backend Contract
 - `POST /api/v1/assistants/siri/GetLastPooTime`
 - `POST /api/v1/assistants/siri/GetNextFeedingEta`
 - `POST /api/v1/assistants/siri/GetTodaySummary`
+- `POST /api/v1/assistants/siri/{intent_name}`
 
-요청 바디
+All endpoints require:
+```http
+Authorization: Bearer <jwt>
+```
+
+Request body:
 ```json
 {
   "baby_id": "baby_123",
@@ -19,11 +25,14 @@
 }
 ```
 
-응답 바디
+Response body:
 ```json
 {
-  "dialog": "다음 수유까지 35분 남았어.",
-  "reference": "최근 5회 평균 텀 기준"
+  "dialog": "Next feeding in about 35 minutes.",
+  "reference": "Based on recent feeding pattern"
 }
 ```
 
+## Notes
+- Siri integration currently depends on the same backend auth as the mobile app.
+- For local testing, use the same dev JWT flow documented in `apps/backend/README.md`.
