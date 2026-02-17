@@ -1,0 +1,10 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="shortcut_record_formula">Record formula</string>
+    <string name="shortcut_record_breastfeed">Record breastfeed</string>
+    <string name="shortcut_record_weaning">Record weaning</string>
+    <string name="shortcut_record_diaper">Record diaper</string>
+    <string name="shortcut_record_sleep">Record sleep</string>
+    <string name="shortcut_record_medication">Record medication</string>
+    <string name="shortcut_open_chat">Open AI chat</string>
+</resources>

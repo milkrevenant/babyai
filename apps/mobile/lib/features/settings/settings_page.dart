@@ -2,6 +2,7 @@ import "package:flutter/material.dart";
 
 import "../../core/i18n/app_i18n.dart";
 import "../../core/theme/app_theme_controller.dart";
+import "home_tile_settings_page.dart";
 
 class SettingsPage extends StatelessWidget {
   const SettingsPage({
@@ -472,6 +473,25 @@ Aviso de recopilacion y uso de privacidad de BabyAI
                     themeController.setBottomMenuEnabled(menu, value);
                   },
                 ),
+              ),
+              const Divider(height: 24),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.dashboard_customize_outlined),
+                title: Text(tr(context,
+                    ko: "홈 타일 관리", en: "Home Tiles", es: "Tiles de inicio")),
+                subtitle: Text(tr(context,
+                    ko: "홈 화면 타일을 추가/삭제하고 유형별 기본 세트를 적용합니다.",
+                    en: "Add/remove home tiles and apply profile defaults.",
+                    es: "Agrega/elimina tiles y aplica valores por perfil.")),
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (BuildContext context) => HomeTileSettingsPage(
+                          themeController: themeController),
+                    ),
+                  );
+                },
               ),
               const Divider(height: 24),
               ListTile(

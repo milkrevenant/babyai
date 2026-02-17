@@ -1,4 +1,9 @@
+import "dart:async";
+
 import "package:flutter/material.dart";
+import "package:speech_to_text/speech_recognition_error.dart";
+import "package:speech_to_text/speech_recognition_result.dart";
+import "package:speech_to_text/speech_to_text.dart" as stt;
 
 import "../../core/network/babyai_api.dart";
 
@@ -6,15 +11,20 @@ class ChatPage extends StatefulWidget {
   const ChatPage({super.key});
 
   @override
-  State<ChatPage> createState() => _ChatPageState();
+  State<ChatPage> createState() => ChatPageState();
 }
 
-class _ChatPageState extends State<ChatPage> {
+class ChatPageState extends State<ChatPage> {
   final TextEditingController _questionController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+  final stt.SpeechToText _speechToText = stt.SpeechToText();
 
   bool _loading = false;
+  bool _speechReady = false;
+  bool _isListening = false;
   String? _error;
+  String? _speechError;
+
   final List<_ChatMessage> _messages = <_ChatMessage>[
     const _ChatMessage(
       role: _ChatRole.assistant,
@@ -27,7 +37,19 @@ class _ChatPageState extends State<ChatPage> {
   void dispose() {
     _questionController.dispose();
     _scrollController.dispose();
+    _speechToText.cancel();
     super.dispose();
+  }
+
+  Future<void> sendAssistantPrompt(String prompt) async {
+    final String normalized = prompt.trim();
+    if (normalized.isEmpty) {
+      return;
+    }
+    _questionController
+      ..text = normalized
+      ..selection = TextSelection.collapsed(offset: normalized.length);
+    await _sendQuestionText(normalized, clearInput: true);
   }
 
   Future<void> _appendAssistantFromAction(
@@ -85,19 +107,116 @@ class _ChatPageState extends State<ChatPage> {
     });
   }
 
-  Future<void> _sendCustomQuestion() async {
-    final String question = _questionController.text.trim();
-    if (question.isEmpty || _loading) {
+  Future<void> _sendQuestionText(
+    String question, {
+    bool clearInput = false,
+  }) async {
+    final String normalized = question.trim();
+    if (normalized.isEmpty || _loading) {
       return;
     }
-    _questionController.clear();
+    if (clearInput) {
+      _questionController.clear();
+    }
     setState(() {
-      _messages.add(_ChatMessage(role: _ChatRole.user, text: question));
+      _messages.add(_ChatMessage(role: _ChatRole.user, text: normalized));
       _error = null;
     });
     _scrollToBottom();
     await _appendAssistantFromAction(
-        () => BabyAIApi.instance.queryAi(question));
+      () => BabyAIApi.instance.queryAi(normalized),
+    );
+  }
+
+  Future<void> _sendCustomQuestion() async {
+    await _sendQuestionText(
+      _questionController.text,
+      clearInput: true,
+    );
+  }
+
+  Future<void> _ensureSpeechReady() async {
+    if (_speechReady) {
+      return;
+    }
+    final bool available = await _speechToText.initialize(
+      onError: _handleSpeechError,
+      onStatus: _handleSpeechStatus,
+      debugLogging: false,
+    );
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _speechReady = available;
+      if (!available) {
+        _speechError = "Speech recognition is unavailable on this device.";
+      }
+    });
+  }
+
+  void _handleSpeechError(SpeechRecognitionError error) {
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _isListening = false;
+      _speechError = error.errorMsg;
+    });
+  }
+
+  void _handleSpeechStatus(String status) {
+    if (!mounted) {
+      return;
+    }
+    if (status == "done" || status == "notListening") {
+      setState(() => _isListening = false);
+    }
+  }
+
+  void _handleSpeechResult(SpeechRecognitionResult result) {
+    final String words = result.recognizedWords.trim();
+    if (words.isEmpty) {
+      return;
+    }
+    _questionController
+      ..text = words
+      ..selection = TextSelection.collapsed(offset: words.length);
+    if (!result.finalResult) {
+      return;
+    }
+    setState(() => _isListening = false);
+    unawaited(_speechToText.stop());
+    unawaited(_sendQuestionText(words, clearInput: true));
+  }
+
+  Future<void> _toggleListening() async {
+    if (_loading) {
+      return;
+    }
+    if (_isListening) {
+      await _speechToText.stop();
+      if (mounted) {
+        setState(() => _isListening = false);
+      }
+      return;
+    }
+
+    await _ensureSpeechReady();
+    if (!_speechReady) {
+      return;
+    }
+    setState(() {
+      _speechError = null;
+      _isListening = true;
+    });
+    await _speechToText.listen(
+      onResult: _handleSpeechResult,
+      listenOptions: stt.SpeechListenOptions(
+        partialResults: true,
+        listenMode: stt.ListenMode.dictation,
+      ),
+    );
   }
 
   @override
@@ -112,7 +231,8 @@ class _ChatPageState extends State<ChatPage> {
             color: color.surfaceContainerHighest.withValues(alpha: 0.35),
             border: Border(
               bottom: BorderSide(
-                  color: color.outlineVariant.withValues(alpha: 0.5)),
+                color: color.outlineVariant.withValues(alpha: 0.5),
+              ),
             ),
           ),
           child: Wrap(
@@ -170,6 +290,16 @@ class _ChatPageState extends State<ChatPage> {
               style: TextStyle(color: color.onErrorContainer),
             ),
           ),
+        if (_speechError != null)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            color: color.tertiaryContainer,
+            child: Text(
+              _speechError!,
+              style: TextStyle(color: color.onTertiaryContainer),
+            ),
+          ),
         Container(
           padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
           decoration: BoxDecoration(
@@ -194,6 +324,15 @@ class _ChatPageState extends State<ChatPage> {
                     border: OutlineInputBorder(),
                     isDense: true,
                   ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              FilledButton.tonal(
+                onPressed: _loading ? null : _toggleListening,
+                child: Icon(
+                  _isListening
+                      ? Icons.mic_off_outlined
+                      : Icons.mic_none_outlined,
                 ),
               ),
               const SizedBox(width: 8),

@@ -66,7 +66,23 @@ type checkoutRequest struct {
 }
 
 type updateMySettingsRequest struct {
-	ThemeMode string `json:"theme_mode"`
+	ThemeMode        *string         `json:"theme_mode"`
+	Language         *string         `json:"language"`
+	MainFont         *string         `json:"main_font"`
+	HighlightFont    *string         `json:"highlight_font"`
+	AccentTone       *string         `json:"accent_tone"`
+	BottomMenu       map[string]bool `json:"bottom_menu_enabled"`
+	ChildCareProfile *string         `json:"child_care_profile"`
+	HomeTiles        map[string]bool `json:"home_tiles"`
+}
+
+type manualEventCreateRequest struct {
+	BabyID    string         `json:"baby_id"`
+	Type      string         `json:"type"`
+	StartTime time.Time      `json:"start_time"`
+	EndTime   *time.Time     `json:"end_time,omitempty"`
+	Value     map[string]any `json:"value"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
 }
 
 type babyProfileUpsertRequest struct {

@@ -7,6 +7,8 @@ import "../network/babyai_api.dart";
 class AppSessionStore {
   const AppSessionStore._();
 
+  static DateTime? _pendingSleepStart;
+
   static File _sessionFile() {
     final String home = Platform.environment["USERPROFILE"] ??
         Platform.environment["HOME"] ??
@@ -48,9 +50,28 @@ class AppSessionStore {
       if (!hasDefineToken && token.isNotEmpty) {
         BabyAIApi.setBearerToken(token);
       }
+
+      final String pendingSleepRaw =
+          (parsed["pending_sleep_start"] ?? "").toString().trim();
+      if (pendingSleepRaw.isNotEmpty) {
+        try {
+          _pendingSleepStart = DateTime.parse(pendingSleepRaw).toUtc();
+        } catch (_) {
+          _pendingSleepStart = null;
+        }
+      } else {
+        _pendingSleepStart = null;
+      }
     } catch (_) {
       // Keep runtime defaults when local session cannot be loaded.
     }
+  }
+
+  static DateTime? get pendingSleepStart => _pendingSleepStart;
+
+  static Future<void> setPendingSleepStart(DateTime? value) async {
+    _pendingSleepStart = value?.toUtc();
+    await persistRuntimeState();
   }
 
   static Future<void> persistRuntimeState() async {
@@ -60,6 +81,8 @@ class AppSessionStore {
         "household_id": BabyAIApi.activeHouseholdId,
         "album_id": BabyAIApi.activeAlbumId,
         "token": BabyAIApi.currentBearerToken.trim(),
+        if (_pendingSleepStart != null)
+          "pending_sleep_start": _pendingSleepStart!.toIso8601String(),
       };
       final File file = _sessionFile();
       await file.writeAsString(jsonEncode(payload), flush: true);

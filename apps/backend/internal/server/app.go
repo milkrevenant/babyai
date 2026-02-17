@@ -89,6 +89,7 @@ func (a *App) Router() *gin.Engine {
 	api.POST("/onboarding/parent", a.onboardingParent)
 	api.POST("/events/voice", a.parseVoiceEvent)
 	api.POST("/events/confirm", a.confirmEvents)
+	api.POST("/events/manual", a.createManualEvent)
 	api.GET("/settings/me", a.getMySettings)
 	api.PATCH("/settings/me", a.upsertMySettings)
 	api.GET("/babies/profile", a.getBabyProfile)

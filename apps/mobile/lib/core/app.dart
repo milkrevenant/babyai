@@ -3,6 +3,7 @@ import "dart:convert";
 
 import "package:flutter/material.dart";
 
+import "assistant/assistant_intent_bridge.dart";
 import "../features/chat/chat_page.dart";
 import "../features/community/community_page.dart";
 import "../features/market/market_page.dart";
@@ -129,22 +130,22 @@ class _BabyAIAppState extends State<BabyAIApp> {
       );
     }
 
-    return AnimatedBuilder(
-      animation: _themeController,
-      builder: (BuildContext context, _) {
-        return MaterialApp(
-          title: "BabyAI",
-          debugShowCheckedModeBanner: false,
-          themeMode: _themeController.themeMode,
-          locale: _localeFromLanguage(_themeController.language),
-          theme: _buildTheme(brightness: Brightness.light),
-          darkTheme: _buildTheme(brightness: Brightness.dark),
-          home: AppSettingsScope(
-            controller: _themeController,
-            child: _HomeShell(themeController: _themeController),
-          ),
-        );
-      },
+    return AppSettingsScope(
+      controller: _themeController,
+      child: AnimatedBuilder(
+        animation: _themeController,
+        builder: (BuildContext context, _) {
+          return MaterialApp(
+            title: "BabyAI",
+            debugShowCheckedModeBanner: false,
+            themeMode: _themeController.themeMode,
+            locale: _localeFromLanguage(_themeController.language),
+            theme: _buildTheme(brightness: Brightness.light),
+            darkTheme: _buildTheme(brightness: Brightness.dark),
+            home: _HomeShell(themeController: _themeController),
+          );
+        },
+      ),
     );
   }
 }
@@ -167,8 +168,13 @@ class _HomeShellState extends State<_HomeShell> {
   static const int _communityPage = 5;
 
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  final GlobalKey<RecordingPageState> _recordPageKey =
+      GlobalKey<RecordingPageState>();
+  final GlobalKey<ChatPageState> _chatPageKey = GlobalKey<ChatPageState>();
   final GlobalKey<ReportPageState> _reportPageKey =
       GlobalKey<ReportPageState>();
+  StreamSubscription<AssistantActionPayload>? _assistantSubscription;
+  AssistantActionPayload? _pendingAssistantAction;
 
   int _index = 0;
   bool _isGoogleLoggedIn = false;
@@ -184,6 +190,333 @@ class _HomeShellState extends State<_HomeShell> {
   void initState() {
     super.initState();
     _bootstrapAccountFromToken();
+    _initializeAssistantBridge();
+  }
+
+  @override
+  void dispose() {
+    _assistantSubscription?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _initializeAssistantBridge() async {
+    await AssistantIntentBridge.initialize();
+    _assistantSubscription = AssistantIntentBridge.stream.listen(
+      _handleAssistantAction,
+    );
+  }
+
+  void _handleAssistantAction(AssistantActionPayload payload) {
+    if (!mounted) {
+      return;
+    }
+    if (BabyAIApi.activeBabyId.isEmpty) {
+      _pendingAssistantAction = payload;
+      return;
+    }
+    _processAssistantAction(payload);
+  }
+
+  void _flushPendingAssistantActionIfAny() {
+    final AssistantActionPayload? payload = _pendingAssistantAction;
+    if (payload == null || !mounted || BabyAIApi.activeBabyId.isEmpty) {
+      return;
+    }
+    _pendingAssistantAction = null;
+    _processAssistantAction(payload);
+  }
+
+  HomeTileType? _tileFromFeature(String? feature) {
+    if (feature == null) {
+      return null;
+    }
+    switch (feature.trim().toLowerCase()) {
+      case "formula":
+        return HomeTileType.formula;
+      case "breastfeed":
+      case "breastfeeding":
+        return HomeTileType.breastfeed;
+      case "weaning":
+      case "solid":
+        return HomeTileType.weaning;
+      case "diaper":
+      case "pee":
+      case "poo":
+        return HomeTileType.diaper;
+      case "sleep":
+        return HomeTileType.sleep;
+      case "medication":
+      case "medicine":
+        return HomeTileType.medication;
+      case "memo":
+      case "note":
+        return HomeTileType.memo;
+      default:
+        return null;
+    }
+  }
+
+  HomeTileType? _tileFromQuery(String? query) {
+    if (query == null) {
+      return null;
+    }
+    final String text = query.toLowerCase();
+    if (text.contains("formula") || text.contains("분유")) {
+      return HomeTileType.formula;
+    }
+    if (text.contains("breast") || text.contains("모유")) {
+      return HomeTileType.breastfeed;
+    }
+    if (text.contains("weaning") ||
+        text.contains("solid") ||
+        text.contains("이유식")) {
+      return HomeTileType.weaning;
+    }
+    if (text.contains("diaper") ||
+        text.contains("pee") ||
+        text.contains("poo") ||
+        text.contains("기저귀") ||
+        text.contains("소변") ||
+        text.contains("대변") ||
+        text.contains("오줌") ||
+        text.contains("응가") ||
+        text.contains("똥")) {
+      return HomeTileType.diaper;
+    }
+    if (text.contains("sleep") ||
+        text.contains("잠") ||
+        text.contains("수면") ||
+        text.contains("기상")) {
+      return HomeTileType.sleep;
+    }
+    if (text.contains("medication") ||
+        text.contains("medicine") ||
+        text.contains("투약") ||
+        text.contains("약")) {
+      return HomeTileType.medication;
+    }
+    if (text.contains("memo") || text.contains("note") || text.contains("메모")) {
+      return HomeTileType.memo;
+    }
+    return null;
+  }
+
+  bool _containsAny(String text, List<String> keywords) {
+    for (final String keyword in keywords) {
+      if (text.contains(keyword)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool _hasRecordIntent(String? query) {
+    if (query == null) {
+      return false;
+    }
+    final String text = query.toLowerCase();
+    return _containsAny(text, <String>[
+      "기록",
+      "저장",
+      "추가",
+      "입력",
+      "등록",
+      "record",
+      "log",
+      "save",
+      "add",
+      "track",
+    ]);
+  }
+
+  int? _extractAmountMlFromText(String? text) {
+    if (text == null || text.trim().isEmpty) {
+      return null;
+    }
+    final RegExpMatch? match = RegExp(
+      r"(\d{1,4})\s*(ml|mL|ML|cc|㎖|밀리)",
+      caseSensitive: false,
+    ).firstMatch(text);
+    if (match == null) {
+      return null;
+    }
+    return int.tryParse(match.group(1) ?? "");
+  }
+
+  int? _extractDurationMinFromText(String? text) {
+    if (text == null || text.trim().isEmpty) {
+      return null;
+    }
+    final RegExp hourRegExp = RegExp(
+      r"(\d{1,2})\s*(시간|hour|hours|hr|hrs)",
+      caseSensitive: false,
+    );
+    final RegExp minuteRegExp = RegExp(
+      r"(\d{1,3})\s*(분|min|mins|minute|minutes)",
+      caseSensitive: false,
+    );
+
+    int total = 0;
+    final RegExpMatch? hourMatch = hourRegExp.firstMatch(text);
+    final RegExpMatch? minuteMatch = minuteRegExp.firstMatch(text);
+    if (hourMatch != null) {
+      total += (int.tryParse(hourMatch.group(1) ?? "") ?? 0) * 60;
+    }
+    if (minuteMatch != null) {
+      total += int.tryParse(minuteMatch.group(1) ?? "") ?? 0;
+    }
+    if (total > 0) {
+      return total;
+    }
+    return null;
+  }
+
+  _AssistantRecordAction _buildAssistantRecordAction(
+    AssistantActionPayload payload,
+  ) {
+    final String normalizedFeature =
+        (payload.feature ?? "").trim().toLowerCase();
+    final String? normalizedQuery =
+        payload.query?.trim().isEmpty ?? true ? null : payload.query!.trim();
+    final String queryLower = normalizedQuery?.toLowerCase() ?? "";
+    final Map<String, dynamic> prefill =
+        Map<String, dynamic>.from(payload.asPrefillMap());
+
+    if (normalizedFeature == "chat") {
+      return _AssistantRecordAction(
+        routeToChat: true,
+        chatPrompt: normalizedQuery,
+      );
+    }
+
+    HomeTileType? tile =
+        _tileFromFeature(normalizedFeature) ?? _tileFromQuery(normalizedQuery);
+    if (tile == null) {
+      return _AssistantRecordAction(
+        routeToChat: normalizedQuery != null,
+        chatPrompt: normalizedQuery,
+      );
+    }
+
+    if (normalizedFeature == "pee") {
+      prefill["diaper_type"] = "PEE";
+    } else if (normalizedFeature == "poo") {
+      prefill["diaper_type"] = "POO";
+    }
+
+    final int? amountMl =
+        payload.amountMl ?? _extractAmountMlFromText(normalizedQuery);
+    if (amountMl != null && amountMl > 0) {
+      prefill["amount_ml"] = amountMl;
+    }
+    final int? durationMin =
+        payload.durationMin ?? _extractDurationMinFromText(normalizedQuery);
+    if (durationMin != null && durationMin > 0) {
+      prefill["duration_min"] = durationMin;
+    }
+
+    if (tile == HomeTileType.diaper && !prefill.containsKey("diaper_type")) {
+      if (_containsAny(
+          queryLower, <String>["대변", "응가", "똥", "poo", "poop", "stool"])) {
+        prefill["diaper_type"] = "POO";
+      } else if (_containsAny(
+          queryLower, <String>["소변", "오줌", "pee", "urine"])) {
+        prefill["diaper_type"] = "PEE";
+      }
+    }
+
+    if (tile == HomeTileType.sleep) {
+      if (_containsAny(queryLower, <String>[
+        "수면시작",
+        "잠시작",
+        "재우기 시작",
+        "잠들",
+        "sleep start",
+        "start sleep",
+      ])) {
+        prefill["sleep_action"] = "start";
+      } else if (_containsAny(queryLower, <String>[
+        "수면종료",
+        "잠종료",
+        "기상",
+        "깼",
+        "wake",
+        "woke",
+        "sleep end",
+        "stop sleep",
+      ])) {
+        prefill["sleep_action"] = "end";
+      }
+    }
+
+    String medicationName =
+        (prefill["medication_name"] ?? prefill["memo"] ?? normalizedQuery ?? "")
+            .toString()
+            .trim();
+    if (tile == HomeTileType.medication && medicationName.isNotEmpty) {
+      prefill["medication_name"] = medicationName;
+    }
+
+    bool autoSubmit =
+        normalizedFeature.isNotEmpty || _hasRecordIntent(normalizedQuery);
+    if (tile == HomeTileType.formula && !prefill.containsKey("amount_ml")) {
+      autoSubmit = false;
+    }
+    if (tile == HomeTileType.diaper && !prefill.containsKey("diaper_type")) {
+      autoSubmit = false;
+    }
+    if (tile == HomeTileType.sleep &&
+        !prefill.containsKey("sleep_action") &&
+        !prefill.containsKey("duration_min")) {
+      autoSubmit = false;
+    }
+    if (tile == HomeTileType.medication) {
+      medicationName = (prefill["medication_name"] ??
+              prefill["memo"] ??
+              normalizedQuery ??
+              "")
+          .toString()
+          .trim();
+      if (medicationName.isEmpty) {
+        autoSubmit = false;
+      } else {
+        prefill["medication_name"] = medicationName;
+      }
+    }
+
+    return _AssistantRecordAction(
+      tile: tile,
+      prefill: prefill,
+      autoSubmit: autoSubmit,
+    );
+  }
+
+  void _processAssistantAction(AssistantActionPayload payload) {
+    final _AssistantRecordAction action = _buildAssistantRecordAction(payload);
+
+    if (action.routeToChat) {
+      setState(() => _index = _chatPage);
+      if (action.chatPrompt != null && action.chatPrompt!.trim().isNotEmpty) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _chatPageKey.currentState?.sendAssistantPrompt(action.chatPrompt!);
+        });
+      }
+      return;
+    }
+
+    final HomeTileType? tile = action.tile;
+    if (tile == null) {
+      return;
+    }
+
+    setState(() => _index = _homePage);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _recordPageKey.currentState?.openQuickEntryFromExternal(
+        tile,
+        prefill: action.prefill,
+        autoSubmit: action.autoSubmit,
+      );
+    });
   }
 
   String _labelForIndex(BuildContext context, int index) {
@@ -253,9 +586,9 @@ class _HomeShellState extends State<_HomeShell> {
   Widget _buildCurrentPage() {
     switch (_index) {
       case _homePage:
-        return RecordingPage(range: _recordRange);
+        return RecordingPage(key: _recordPageKey, range: _recordRange);
       case _chatPage:
-        return const ChatPage();
+        return ChatPage(key: _chatPageKey);
       case _statisticsPage:
         return ReportPage(key: _reportPageKey);
       case _photosPage:
@@ -309,6 +642,7 @@ class _HomeShellState extends State<_HomeShell> {
     );
     await AppSessionStore.persistRuntimeState();
     _bootstrapAccountFromToken();
+    _flushPendingAssistantActionIfAny();
   }
 
   Map<String, dynamic> _decodeJwtPayload(String token) {
@@ -796,6 +1130,22 @@ class _BottomMenuTab {
   final int pageIndex;
   final IconData icon;
   final String label;
+}
+
+class _AssistantRecordAction {
+  const _AssistantRecordAction({
+    this.tile,
+    this.prefill = const <String, dynamic>{},
+    this.autoSubmit = false,
+    this.routeToChat = false,
+    this.chatPrompt,
+  });
+
+  final HomeTileType? tile;
+  final Map<String, dynamic> prefill;
+  final bool autoSubmit;
+  final bool routeToChat;
+  final String? chatPrompt;
 }
 
 class _RoundTopButton extends StatelessWidget {

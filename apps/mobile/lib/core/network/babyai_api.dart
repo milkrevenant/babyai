@@ -282,14 +282,35 @@ class BabyAIApi {
   }
 
   Future<Map<String, dynamic>> updateMySettings({
-    required String themeMode,
+    String? themeMode,
+    String? language,
+    String? mainFont,
+    String? highlightFont,
+    String? accentTone,
+    Map<String, bool>? bottomMenuEnabled,
+    String? childCareProfile,
+    Map<String, bool>? homeTiles,
   }) async {
     try {
+      final Map<String, dynamic> payload = <String, dynamic>{
+        if (themeMode != null && themeMode.trim().isNotEmpty)
+          "theme_mode": themeMode.trim(),
+        if (language != null && language.trim().isNotEmpty)
+          "language": language.trim(),
+        if (mainFont != null && mainFont.trim().isNotEmpty)
+          "main_font": mainFont.trim(),
+        if (highlightFont != null && highlightFont.trim().isNotEmpty)
+          "highlight_font": highlightFont.trim(),
+        if (accentTone != null && accentTone.trim().isNotEmpty)
+          "accent_tone": accentTone.trim(),
+        if (bottomMenuEnabled != null) "bottom_menu_enabled": bottomMenuEnabled,
+        if (childCareProfile != null && childCareProfile.trim().isNotEmpty)
+          "child_care_profile": childCareProfile.trim(),
+        if (homeTiles != null) "home_tiles": homeTiles,
+      };
       final Response<dynamic> response = await _dio.patch<dynamic>(
         "/api/v1/settings/me",
-        data: <String, dynamic>{
-          "theme_mode": themeMode,
-        },
+        data: payload,
         options: _authOptions(),
       );
       return _requireMap(response);
@@ -404,6 +425,33 @@ class BabyAIApi {
         data: <String, dynamic>{
           "clip_id": clipId,
           "events": events,
+        },
+        options: _authOptions(),
+      );
+      return _requireMap(response);
+    } catch (error) {
+      throw _toFailure(error);
+    }
+  }
+
+  Future<Map<String, dynamic>> createManualEvent({
+    required String type,
+    required DateTime startTime,
+    DateTime? endTime,
+    Map<String, dynamic> value = const <String, dynamic>{},
+    Map<String, dynamic>? metadata,
+  }) async {
+    try {
+      _requireBabyId();
+      final Response<dynamic> response = await _dio.post<dynamic>(
+        "/api/v1/events/manual",
+        data: <String, dynamic>{
+          "baby_id": activeBabyId,
+          "type": type.trim(),
+          "start_time": startTime.toUtc().toIso8601String(),
+          if (endTime != null) "end_time": endTime.toUtc().toIso8601String(),
+          "value": value,
+          if (metadata != null) "metadata": metadata,
         },
         options: _authOptions(),
       );

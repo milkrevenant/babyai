@@ -17,6 +17,12 @@ class AppSettingsScope extends InheritedNotifier<AppThemeController> {
     }
     return scope.notifier!;
   }
+
+  static AppThemeController? maybeOf(BuildContext context) {
+    final AppSettingsScope? scope =
+        context.dependOnInheritedWidgetOfExactType<AppSettingsScope>();
+    return scope?.notifier;
+  }
 }
 
 String tr(
@@ -25,7 +31,8 @@ String tr(
   required String en,
   required String es,
 }) {
-  final AppLanguage language = AppSettingsScope.of(context).language;
+  final AppLanguage language =
+      AppSettingsScope.maybeOf(context)?.language ?? AppLanguage.ko;
   switch (language) {
     case AppLanguage.ko:
       return ko;

@@ -1,3 +1,5 @@
+import "dart:async";
+
 import "package:flutter/material.dart";
 
 import "../network/babyai_api.dart";
@@ -39,13 +41,25 @@ enum AppLanguage {
   es,
 }
 
+enum ChildCareProfile {
+  breastfeeding,
+  formula,
+  weaning,
+}
+
+enum HomeTileType {
+  formula,
+  breastfeed,
+  weaning,
+  diaper,
+  sleep,
+  medication,
+  memo,
+}
+
 class AppThemeController extends ChangeNotifier {
-  AppThemeMode _mode = AppThemeMode.system;
-  AppMainFont _mainFont = AppMainFont.notoSans;
-  AppHighlightFont _highlightFont = AppHighlightFont.ibmPlexSans;
-  AppAccentTone _accentTone = AppAccentTone.gold;
-  AppLanguage _language = AppLanguage.ko;
-  final Map<AppBottomMenu, bool> _bottomMenuEnabled = <AppBottomMenu, bool>{
+  static const Map<AppBottomMenu, bool> _defaultBottomMenuEnabled =
+      <AppBottomMenu, bool>{
     AppBottomMenu.chat: true,
     AppBottomMenu.statistics: true,
     AppBottomMenu.photos: true,
@@ -53,13 +67,62 @@ class AppThemeController extends ChangeNotifier {
     AppBottomMenu.community: false,
   };
 
+  static const Map<HomeTileType, bool> _defaultHomeTilesFormula =
+      <HomeTileType, bool>{
+    HomeTileType.formula: true,
+    HomeTileType.breastfeed: false,
+    HomeTileType.weaning: false,
+    HomeTileType.diaper: true,
+    HomeTileType.sleep: true,
+    HomeTileType.medication: false,
+    HomeTileType.memo: false,
+  };
+
+  static const Map<HomeTileType, bool> _defaultHomeTilesBreastfeeding =
+      <HomeTileType, bool>{
+    HomeTileType.formula: false,
+    HomeTileType.breastfeed: true,
+    HomeTileType.weaning: false,
+    HomeTileType.diaper: true,
+    HomeTileType.sleep: true,
+    HomeTileType.medication: false,
+    HomeTileType.memo: false,
+  };
+
+  static const Map<HomeTileType, bool> _defaultHomeTilesWeaning =
+      <HomeTileType, bool>{
+    HomeTileType.formula: false,
+    HomeTileType.breastfeed: false,
+    HomeTileType.weaning: true,
+    HomeTileType.diaper: true,
+    HomeTileType.sleep: true,
+    HomeTileType.medication: false,
+    HomeTileType.memo: false,
+  };
+
+  AppThemeMode _mode = AppThemeMode.system;
+  AppMainFont _mainFont = AppMainFont.notoSans;
+  AppHighlightFont _highlightFont = AppHighlightFont.ibmPlexSans;
+  AppAccentTone _accentTone = AppAccentTone.gold;
+  AppLanguage _language = AppLanguage.ko;
+  ChildCareProfile _childCareProfile = ChildCareProfile.formula;
+
+  final Map<AppBottomMenu, bool> _bottomMenuEnabled =
+      Map<AppBottomMenu, bool>.from(_defaultBottomMenuEnabled);
+  final Map<HomeTileType, bool> _homeTileEnabled =
+      Map<HomeTileType, bool>.from(_defaultHomeTilesFormula);
+
   AppThemeMode get mode => _mode;
   AppMainFont get mainFont => _mainFont;
   AppHighlightFont get highlightFont => _highlightFont;
   AppAccentTone get accentTone => _accentTone;
   AppLanguage get language => _language;
+  ChildCareProfile get childCareProfile => _childCareProfile;
+
   Map<AppBottomMenu, bool> get bottomMenuEnabled =>
       Map<AppBottomMenu, bool>.unmodifiable(_bottomMenuEnabled);
+  Map<HomeTileType, bool> get homeTileEnabled =>
+      Map<HomeTileType, bool>.unmodifiable(_homeTileEnabled);
 
   ThemeMode get themeMode {
     switch (_mode) {
@@ -108,13 +171,43 @@ class AppThemeController extends ChangeNotifier {
     try {
       final Map<String, dynamic> settings =
           await BabyAIApi.instance.getMySettings();
-      final String raw = (settings["theme_mode"] ?? "system").toString();
-      _mode = AppThemeMode.values.firstWhere(
-        (AppThemeMode item) => item.name == raw,
-        orElse: () => AppThemeMode.system,
+      _mode = _enumByName<AppThemeMode>(
+        AppThemeMode.values,
+        (settings["theme_mode"] ?? "system").toString(),
+        AppThemeMode.system,
       );
+      _language = _enumByName<AppLanguage>(
+        AppLanguage.values,
+        (settings["language"] ?? "ko").toString(),
+        AppLanguage.ko,
+      );
+      _mainFont = _enumByName<AppMainFont>(
+        AppMainFont.values,
+        (settings["main_font"] ?? AppMainFont.notoSans.name).toString(),
+        AppMainFont.notoSans,
+      );
+      _highlightFont = _enumByName<AppHighlightFont>(
+        AppHighlightFont.values,
+        (settings["highlight_font"] ?? AppHighlightFont.ibmPlexSans.name)
+            .toString(),
+        AppHighlightFont.ibmPlexSans,
+      );
+      _accentTone = _enumByName<AppAccentTone>(
+        AppAccentTone.values,
+        (settings["accent_tone"] ?? AppAccentTone.gold.name).toString(),
+        AppAccentTone.gold,
+      );
+      _childCareProfile = _enumByName<ChildCareProfile>(
+        ChildCareProfile.values,
+        (settings["child_care_profile"] ?? ChildCareProfile.formula.name)
+            .toString(),
+        ChildCareProfile.formula,
+      );
+
+      _applyBottomMenuFromPayload(settings["bottom_menu_enabled"]);
+      _applyHomeTilesFromPayload(settings["home_tiles"]);
     } catch (_) {
-      // If server settings are unavailable (e.g. missing token), keep defaults.
+      // Keep defaults when server settings are unavailable.
     } finally {
       notifyListeners();
     }
@@ -126,11 +219,7 @@ class AppThemeController extends ChangeNotifier {
     }
     _mode = next;
     notifyListeners();
-    try {
-      await BabyAIApi.instance.updateMySettings(themeMode: next.name);
-    } catch (_) {
-      // Keep local mode even if sync fails.
-    }
+    await _syncSettings();
   }
 
   void setMainFont(AppMainFont next) {
@@ -139,6 +228,7 @@ class AppThemeController extends ChangeNotifier {
     }
     _mainFont = next;
     notifyListeners();
+    unawaited(_syncSettings());
   }
 
   void setHighlightFont(AppHighlightFont next) {
@@ -147,6 +237,7 @@ class AppThemeController extends ChangeNotifier {
     }
     _highlightFont = next;
     notifyListeners();
+    unawaited(_syncSettings());
   }
 
   void setAccentTone(AppAccentTone next) {
@@ -155,6 +246,7 @@ class AppThemeController extends ChangeNotifier {
     }
     _accentTone = next;
     notifyListeners();
+    unawaited(_syncSettings());
   }
 
   void setLanguage(AppLanguage next) {
@@ -163,6 +255,7 @@ class AppThemeController extends ChangeNotifier {
     }
     _language = next;
     notifyListeners();
+    unawaited(_syncSettings());
   }
 
   bool isBottomMenuEnabled(AppBottomMenu menu) {
@@ -176,5 +269,147 @@ class AppThemeController extends ChangeNotifier {
     }
     _bottomMenuEnabled[menu] = enabled;
     notifyListeners();
+    unawaited(_syncSettings());
+  }
+
+  bool isHomeTileEnabled(HomeTileType tile) {
+    return _homeTileEnabled[tile] ?? false;
+  }
+
+  void setHomeTileEnabled(HomeTileType tile, bool enabled) {
+    final bool current = _homeTileEnabled[tile] ?? false;
+    if (current == enabled) {
+      return;
+    }
+    _homeTileEnabled[tile] = enabled;
+    notifyListeners();
+    unawaited(_syncSettings());
+  }
+
+  Future<void> setChildCareProfile(
+    ChildCareProfile next, {
+    bool applyDefaultTiles = false,
+  }) async {
+    final bool changed = _childCareProfile != next;
+    _childCareProfile = next;
+    if (applyDefaultTiles) {
+      _applyDefaultHomeTiles(next);
+    }
+    if (!changed && !applyDefaultTiles) {
+      return;
+    }
+    notifyListeners();
+    await _syncSettings();
+  }
+
+  Future<void> applyDefaultHomeTilesForProfile({
+    ChildCareProfile? profile,
+  }) async {
+    _applyDefaultHomeTiles(profile ?? _childCareProfile);
+    notifyListeners();
+    await _syncSettings();
+  }
+
+  void _applyDefaultHomeTiles(ChildCareProfile profile) {
+    _homeTileEnabled.clear();
+    switch (profile) {
+      case ChildCareProfile.breastfeeding:
+        _homeTileEnabled.addAll(_defaultHomeTilesBreastfeeding);
+        break;
+      case ChildCareProfile.weaning:
+        _homeTileEnabled.addAll(_defaultHomeTilesWeaning);
+        break;
+      case ChildCareProfile.formula:
+        _homeTileEnabled.addAll(_defaultHomeTilesFormula);
+        break;
+    }
+  }
+
+  T _enumByName<T extends Enum>(List<T> values, String raw, T fallback) {
+    final String key = raw.trim();
+    for (final T item in values) {
+      if (item.name == key) {
+        return item;
+      }
+    }
+    return fallback;
+  }
+
+  bool? _asBool(dynamic value) {
+    if (value is bool) {
+      return value;
+    }
+    if (value is num) {
+      return value != 0;
+    }
+    if (value is String) {
+      final String lowered = value.trim().toLowerCase();
+      if (lowered == "true" || lowered == "1") {
+        return true;
+      }
+      if (lowered == "false" || lowered == "0") {
+        return false;
+      }
+    }
+    return null;
+  }
+
+  void _applyBottomMenuFromPayload(Object? raw) {
+    _bottomMenuEnabled
+      ..clear()
+      ..addAll(_defaultBottomMenuEnabled);
+    if (raw is! Map<dynamic, dynamic>) {
+      return;
+    }
+    for (final AppBottomMenu menu in AppBottomMenu.values) {
+      final bool? parsed = _asBool(raw[menu.name]);
+      if (parsed != null) {
+        _bottomMenuEnabled[menu] = parsed;
+      }
+    }
+  }
+
+  void _applyHomeTilesFromPayload(Object? raw) {
+    _applyDefaultHomeTiles(_childCareProfile);
+    if (raw is! Map<dynamic, dynamic>) {
+      return;
+    }
+    for (final HomeTileType tile in HomeTileType.values) {
+      final bool? parsed = _asBool(raw[tile.name]);
+      if (parsed != null) {
+        _homeTileEnabled[tile] = parsed;
+      }
+    }
+  }
+
+  Map<String, bool> _serializeBottomMenu() {
+    return <String, bool>{
+      for (final AppBottomMenu menu in AppBottomMenu.values)
+        menu.name: _bottomMenuEnabled[menu] ?? false,
+    };
+  }
+
+  Map<String, bool> _serializeHomeTiles() {
+    return <String, bool>{
+      for (final HomeTileType tile in HomeTileType.values)
+        tile.name: _homeTileEnabled[tile] ?? false,
+    };
+  }
+
+  Future<void> _syncSettings() async {
+    try {
+      await BabyAIApi.instance.updateMySettings(
+        themeMode: _mode.name,
+        language: _language.name,
+        mainFont: _mainFont.name,
+        highlightFont: _highlightFont.name,
+        accentTone: _accentTone.name,
+        bottomMenuEnabled: _serializeBottomMenu(),
+        childCareProfile: _childCareProfile.name,
+        homeTiles: _serializeHomeTiles(),
+      );
+    } catch (_) {
+      // Keep local state if sync fails.
+    }
   }
 }

@@ -390,3 +390,115 @@ func (a *App) confirmEvents(c *gin.Context) {
 		"saved_event_count": len(payload.Events),
 	})
 }
+
+func (a *App) createManualEvent(c *gin.Context) {
+	user, ok := authUserFromContext(c)
+	if !ok {
+		writeError(c, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	var payload manualEventCreateRequest
+	if !mustJSON(c, &payload) {
+		return
+	}
+
+	babyID := strings.TrimSpace(payload.BabyID)
+	if babyID == "" {
+		writeError(c, http.StatusBadRequest, "baby_id is required")
+		return
+	}
+
+	eventType, valid := normalizeEventType(payload.Type)
+	if !valid {
+		writeError(c, http.StatusBadRequest, "type is invalid")
+		return
+	}
+	if payload.StartTime.IsZero() {
+		writeError(c, http.StatusBadRequest, "start_time is required")
+		return
+	}
+
+	startTime := payload.StartTime.UTC()
+	var endTime any
+	if payload.EndTime != nil {
+		if payload.EndTime.UTC().Before(startTime) {
+			writeError(c, http.StatusBadRequest, "end_time must be after start_time")
+			return
+		}
+		parsed := payload.EndTime.UTC()
+		endTime = parsed
+	} else {
+		endTime = nil
+	}
+
+	baby, statusCode, err := a.getBabyWithAccess(c.Request.Context(), user.ID, babyID, writeRoles)
+	if err != nil {
+		writeError(c, statusCode, err.Error())
+		return
+	}
+
+	value := payload.Value
+	if value == nil {
+		value = map[string]any{}
+	}
+	metadata := payload.Metadata
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	metadata["entry_mode"] = "manual_form"
+
+	eventID := uuid.NewString()
+	tx, err := a.db.Begin(c.Request.Context())
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to start transaction")
+		return
+	}
+	defer tx.Rollback(c.Request.Context())
+
+	if _, err := tx.Exec(
+		c.Request.Context(),
+		`INSERT INTO "Event" (
+			id, "babyId", type, "startTime", "endTime", "valueJson", "metadataJson", source, "createdBy", "createdAt"
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, 'MANUAL', $8, NOW())`,
+		eventID,
+		baby.ID,
+		eventType,
+		startTime,
+		endTime,
+		mustMarshalJSON(value),
+		mustMarshalJSON(metadata),
+		user.ID,
+	); err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to save event")
+		return
+	}
+
+	if err := recordAuditLog(
+		c.Request.Context(),
+		tx,
+		baby.HouseholdID,
+		user.ID,
+		"EVENT_MANUAL_CREATED",
+		"Event",
+		&eventID,
+		gin.H{
+			"baby_id": baby.ID,
+			"type":    eventType,
+		},
+	); err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to write audit log")
+		return
+	}
+
+	if err := tx.Commit(c.Request.Context()); err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to commit transaction")
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":   "CREATED",
+		"event_id": eventID,
+		"type":     eventType,
+	})
+}
