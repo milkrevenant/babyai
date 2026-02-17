@@ -3,15 +3,19 @@ import "dart:convert";
 import "package:flutter/material.dart";
 
 import "../../core/config/app_env.dart";
-import "../../core/i18n/app_i18n.dart";
 import "../../core/network/babyai_api.dart";
 
-enum _PhotoViewMode { tiles, albums }
+enum PhotosViewMode { tiles, albums }
 
 enum _PhotoSortMode { album, date, views, likes }
 
 class PhotosPage extends StatefulWidget {
-  const PhotosPage({super.key});
+  const PhotosPage({
+    super.key,
+    required this.viewMode,
+  });
+
+  final PhotosViewMode viewMode;
 
   @override
   State<PhotosPage> createState() => _PhotosPageState();
@@ -26,44 +30,43 @@ class _PhotosPageState extends State<PhotosPage> {
   Map<String, dynamic>? _uploadUrl;
   Map<String, dynamic>? _completed;
 
-  _PhotoViewMode _viewMode = _PhotoViewMode.tiles;
   _PhotoSortMode _sortMode = _PhotoSortMode.date;
 
   final List<_PhotoItem> _items = <_PhotoItem>[
     _PhotoItem(
       id: "p1",
-      album: "일상",
+      album: "Daily",
       createdAt: DateTime.now().subtract(const Duration(hours: 2)),
       views: 24,
       likes: 7,
-      title: "오전 낮잠",
+      title: "Morning nap",
       color: const Color(0xFF7C7FB6),
     ),
     _PhotoItem(
       id: "p2",
-      album: "일상",
+      album: "Daily",
       createdAt: DateTime.now().subtract(const Duration(hours: 5)),
       views: 41,
       likes: 12,
-      title: "분유 시간",
+      title: "Formula time",
       color: const Color(0xFF5E6CA0),
     ),
     _PhotoItem(
       id: "p3",
-      album: "외출",
+      album: "Outing",
       createdAt: DateTime.now().subtract(const Duration(days: 1)),
       views: 13,
       likes: 4,
-      title: "공원 산책",
+      title: "Park walk",
       color: const Color(0xFF7D6A9A),
     ),
     _PhotoItem(
       id: "p4",
-      album: "가족",
+      album: "Family",
       createdAt: DateTime.now().subtract(const Duration(days: 2)),
       views: 56,
       likes: 23,
-      title: "주말 방문",
+      title: "Weekend visit",
       color: const Color(0xFF8A7C58),
     ),
   ];
@@ -121,14 +124,7 @@ class _PhotosPageState extends State<PhotosPage> {
   Future<void> _completeUpload() async {
     final String objectKey = _objectKeyController.text.trim();
     if (objectKey.isEmpty) {
-      setState(
-        () => _error = tr(
-          context,
-          ko: "오브젝트 키가 필요합니다.",
-          en: "Object key is required.",
-          es: "Se requiere object key.",
-        ),
-      );
+      setState(() => _error = "Object key is required.");
       return;
     }
 
@@ -155,13 +151,13 @@ class _PhotosPageState extends State<PhotosPage> {
   String _sortLabel(_PhotoSortMode mode) {
     switch (mode) {
       case _PhotoSortMode.album:
-        return tr(context, ko: "앨범", en: "Album", es: "Album");
+        return "Album";
       case _PhotoSortMode.date:
-        return tr(context, ko: "날짜", en: "Date", es: "Fecha");
+        return "Date";
       case _PhotoSortMode.views:
-        return tr(context, ko: "조회수", en: "Views", es: "Vistas");
+        return "Views";
       case _PhotoSortMode.likes:
-        return tr(context, ko: "좋아요", en: "Likes", es: "Me gusta");
+        return "Likes";
     }
   }
 
@@ -178,25 +174,6 @@ class _PhotosPageState extends State<PhotosPage> {
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
       children: <Widget>[
         Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: <Widget>[
-            _OvalIconChoice(
-              selected: _viewMode == _PhotoViewMode.tiles,
-              icon: Icons.grid_view_rounded,
-              label: tr(context, ko: "타일", en: "Tiles", es: "Mosaico"),
-              onTap: () => setState(() => _viewMode = _PhotoViewMode.tiles),
-            ),
-            _OvalIconChoice(
-              selected: _viewMode == _PhotoViewMode.albums,
-              icon: Icons.folder_copy_outlined,
-              label: tr(context, ko: "앨범", en: "Albums", es: "Albumes"),
-              onTap: () => setState(() => _viewMode = _PhotoViewMode.albums),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Wrap(
           spacing: 8,
           runSpacing: 8,
           children: _PhotoSortMode.values
@@ -210,7 +187,7 @@ class _PhotosPageState extends State<PhotosPage> {
               .toList(),
         ),
         const SizedBox(height: 12),
-        if (_viewMode == _PhotoViewMode.tiles)
+        if (widget.viewMode == PhotosViewMode.tiles)
           GridView.builder(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
@@ -250,7 +227,7 @@ class _PhotosPageState extends State<PhotosPage> {
                     ),
                     const SizedBox(height: 3),
                     Text(
-                      "조회 ${item.views}  좋아요 ${item.likes}",
+                      "Views ${item.views}  Likes ${item.likes}",
                       style: TextStyle(
                           color: Colors.white.withValues(alpha: 0.9),
                           fontSize: 11),
@@ -281,8 +258,8 @@ class _PhotosPageState extends State<PhotosPage> {
                         const Icon(Icons.folder_outlined, color: Colors.white),
                   ),
                   title: Text(entry.key),
-                  subtitle:
-                      Text("${entry.value.length}장 | 조회 $views | 좋아요 $likes"),
+                  subtitle: Text(
+                      "${entry.value.length} photos | Views $views | Likes $likes"),
                   trailing: const Icon(Icons.chevron_right),
                 ),
               );
@@ -290,8 +267,7 @@ class _PhotosPageState extends State<PhotosPage> {
           ),
         const SizedBox(height: 16),
         ExpansionTile(
-          title: Text(tr(context,
-              ko: "업로드 관리자", en: "Upload manager", es: "Gestor de carga")),
+          title: const Text("Upload manager"),
           subtitle: Text(
               "Album ID: ${AppEnv.albumId.isEmpty ? "(not set)" : AppEnv.albumId}"),
           childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
@@ -299,16 +275,14 @@ class _PhotosPageState extends State<PhotosPage> {
             FilledButton.icon(
               onPressed: _loading ? null : _createUploadUrl,
               icon: const Icon(Icons.link),
-              label: Text(tr(context,
-                  ko: "업로드 URL 생성", en: "Create upload URL", es: "Crear URL")),
+              label: const Text("Create upload URL"),
             ),
             const SizedBox(height: 12),
             TextField(
               controller: _objectKeyController,
-              decoration: InputDecoration(
-                border: const OutlineInputBorder(),
-                labelText: tr(context,
-                    ko: "오브젝트 키", en: "Object key", es: "Object key"),
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                labelText: "Object key",
               ),
             ),
             SwitchListTile(
@@ -317,14 +291,12 @@ class _PhotosPageState extends State<PhotosPage> {
               onChanged: _loading
                   ? null
                   : (bool value) => setState(() => _downloadable = value),
-              title: Text(tr(context,
-                  ko: "다운로드 허용", en: "Downloadable", es: "Descargable")),
+              title: const Text("Downloadable"),
             ),
             OutlinedButton.icon(
               onPressed: _loading ? null : _completeUpload,
               icon: const Icon(Icons.cloud_done_outlined),
-              label: Text(tr(context,
-                  ko: "업로드 완료", en: "Complete upload", es: "Completar carga")),
+              label: const Text("Complete upload"),
             ),
             if (_loading) ...<Widget>[
               const SizedBox(height: 10),
@@ -354,49 +326,6 @@ class _PhotosPageState extends State<PhotosPage> {
           ],
         ),
       ],
-    );
-  }
-}
-
-class _OvalIconChoice extends StatelessWidget {
-  const _OvalIconChoice({
-    required this.selected,
-    required this.icon,
-    required this.label,
-    required this.onTap,
-  });
-
-  final bool selected;
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final ColorScheme color = Theme.of(context).colorScheme;
-    return Material(
-      color: selected
-          ? color.primaryContainer.withValues(alpha: 0.92)
-          : color.surfaceContainerHighest.withValues(alpha: 0.45),
-      borderRadius: BorderRadius.circular(999),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(999),
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              Icon(icon, size: 18),
-              const SizedBox(width: 6),
-              Text(label,
-                  style: TextStyle(
-                      fontWeight:
-                          selected ? FontWeight.w700 : FontWeight.w500)),
-            ],
-          ),
-        ),
-      ),
     );
   }
 }
