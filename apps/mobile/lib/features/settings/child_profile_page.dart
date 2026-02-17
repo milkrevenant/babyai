@@ -510,6 +510,15 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
     return values;
   }
 
+  String _tokenRequiredMessage() {
+    return tr(
+      context,
+      ko: "로그인 토큰이 필요합니다. Google JWT 토큰을 입력하거나 --dart-define=API_BEARER_TOKEN으로 실행해 주세요.",
+      en: "Login token is required. Enter Google JWT token or run with --dart-define=API_BEARER_TOKEN.",
+      es: "Se requiere token. Ingrese JWT de Google o ejecute con --dart-define=API_BEARER_TOKEN.",
+    );
+  }
+
   Future<void> _submit() async {
     if (_loading) {
       return;
@@ -525,6 +534,13 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
 
     try {
       final String typedToken = _tokenController.text.trim();
+      final bool hasBearerToken = typedToken.isNotEmpty ||
+          BabyAIApi.currentBearerToken.trim().isNotEmpty;
+
+      if (widget.initialOnboarding && !hasBearerToken) {
+        throw ApiFailure(_tokenRequiredMessage());
+      }
+
       if (typedToken.isNotEmpty) {
         BabyAIApi.setBearerToken(typedToken);
       }
@@ -678,8 +694,31 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
                     en: "Google JWT token (optional)",
                     es: "Token JWT de Google (opcional)",
                   ),
+                  helperText: BabyAIApi.currentBearerToken.trim().isNotEmpty
+                      ? tr(
+                          context,
+                          ko: "Bearer 토큰이 이미 설정되어 있습니다.",
+                          en: "Bearer token is already configured.",
+                          es: "El token ya esta configurado.",
+                        )
+                      : tr(
+                          context,
+                          ko: "토큰을 입력하거나 --dart-define=API_BEARER_TOKEN으로 실행하세요.",
+                          en: "Provide token here or use --dart-define=API_BEARER_TOKEN.",
+                          es: "Ingrese token aqui o use --dart-define=API_BEARER_TOKEN.",
+                        ),
                   border: const OutlineInputBorder(),
                 ),
+                validator: (String? value) {
+                  if (!widget.initialOnboarding ||
+                      BabyAIApi.currentBearerToken.trim().isNotEmpty) {
+                    return null;
+                  }
+                  if ((value ?? "").trim().isEmpty) {
+                    return _tokenRequiredMessage();
+                  }
+                  return null;
+                },
               ),
               const SizedBox(height: 10),
             ],
