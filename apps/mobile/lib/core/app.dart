@@ -3,6 +3,7 @@ import "dart:convert";
 import "dart:ui" as ui;
 
 import "package:flutter/material.dart";
+import "package:flutter/services.dart";
 
 import "assistant/assistant_intent_bridge.dart";
 import "assistant/assistant_query_router.dart";
@@ -1204,6 +1205,10 @@ class _HomeShellState extends State<_HomeShell> {
   PreferredSizeWidget _buildTopBar(BuildContext context) {
     final ColorScheme color = Theme.of(context).colorScheme;
     final bool isIOS = Theme.of(context).platform == TargetPlatform.iOS;
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    final SystemUiOverlayStyle overlayStyle =
+        (isDark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark)
+            .copyWith(statusBarColor: Colors.transparent);
     final double safeTopInset = MediaQuery.paddingOf(context).top;
     final double iosTitleOffset = isIOS
         ? (safeTopInset >= 54
@@ -1217,6 +1222,7 @@ class _HomeShellState extends State<_HomeShell> {
       toolbarHeight: isIOS ? 58 + iosTitleOffset : 72,
       elevation: 0,
       scrolledUnderElevation: 0,
+      systemOverlayStyle: overlayStyle,
       forceMaterialTransparency: true,
       backgroundColor: Colors.transparent,
       surfaceTintColor: Colors.transparent,
