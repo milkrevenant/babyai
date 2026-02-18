@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -612,9 +614,21 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 		return
 	}
 
-	now := time.Now().UTC()
-	start := startOfUTCDay(now)
-	end := start.Add(24 * time.Hour)
+	localZone, tzNormalized, err := parseTZOffset(c.Query("tz_offset"))
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	rangeKey := strings.ToLower(strings.TrimSpace(c.DefaultQuery("range", "day")))
+	nowUTC := time.Now().UTC()
+	localNow := nowUTC.In(localZone)
+	localStart, localEnd, rangeDays, rangeLabel, err := quickRangeWindow(localNow, rangeKey)
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	start := localStart.UTC()
+	end := localEnd.UTC()
 
 	rows, err := a.db.Query(
 		c.Request.Context(),
@@ -641,16 +655,26 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 		"afternoon": 0,
 		"evening":   0,
 	}
+	formulaByDay := map[string]int{}
+	type formulaPoint struct {
+		StartedAt time.Time
+		AmountML  int
+	}
+	formulaEvents := make([]formulaPoint, 0)
 	formulaCount := 0
 	formulaTimes := make([]string, 0)
 	breastfeedCount := 0
 	breastfeedTimes := make([]string, 0)
+	feedingsCount := 0
 	var lastFormulaTime *time.Time
 	var lastBreastfeedTime *time.Time
 	var recentSleepTime *time.Time
 	var recentSleepDurationMin *int
 	var sleepReferenceTime *time.Time
 	var lastSleepEndTime *time.Time
+	sleepTotalMin := 0
+	sleepNapTotalMin := 0
+	sleepNightTotalMin := 0
 	diaperPeeCount := 0
 	diaperPooCount := 0
 	var lastPeeTime *time.Time
@@ -660,7 +684,7 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 	var lastWeaningTime *time.Time
 	medicationCount := 0
 	var lastMedicationTime *time.Time
-	specialMemo := "No special memo for today."
+	specialMemo := "No special memo in selected range."
 
 	for rows.Next() {
 		var eventType string
@@ -674,20 +698,32 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 		}
 
 		startedUTC := startedAt.UTC()
+		startedLocal := startedUTC.In(localZone)
 		valueMap := parseJSONStringMap(valueRaw)
 		metadataMap := parseJSONStringMap(metadataRaw)
 
 		switch eventType {
 		case "FORMULA":
+			feedingsCount++
 			formulaCount++
 			if lastFormulaTime == nil {
 				lastFormulaTime = &startedUTC
 			}
 			formulaTimes = append(formulaTimes, startedUTC.Format(time.RFC3339))
 			amountML := int(extractNumberFromMap(valueMap, "ml", "amount_ml", "volume_ml") + 0.5)
-			formulaBands[landingFormulaBand(startedUTC.Hour())] += amountML
+			if amountML < 0 {
+				amountML = 0
+			}
+			formulaBands[landingFormulaBand(startedLocal.Hour())] += amountML
+			dayKey := startedLocal.Format("2006-01-02")
+			formulaByDay[dayKey] += amountML
+			formulaEvents = append(formulaEvents, formulaPoint{
+				StartedAt: startedLocal,
+				AmountML:  amountML,
+			})
 
 		case "BREASTFEED":
+			feedingsCount++
 			breastfeedCount++
 			if lastBreastfeedTime == nil {
 				lastBreastfeedTime = &startedUTC
@@ -697,17 +733,28 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 		case "SLEEP":
 			if recentSleepTime == nil {
 				recentSleepTime = &startedUTC
-				if endedAt != nil {
-					endedUTC := endedAt.UTC()
-					sleepReferenceTime = &endedUTC
-					lastSleepEndTime = &endedUTC
-					duration := int(endedUTC.Sub(startedUTC).Minutes())
-					if duration < 0 {
-						duration = 0
-					}
+			}
+			durationPtr := extractDurationMinutes(valueMap, startedUTC, endedAt)
+			duration := 0
+			if durationPtr != nil {
+				duration = int(*durationPtr + 0.5)
+				if duration < 0 {
+					duration = 0
+				}
+				if recentSleepDurationMin == nil {
 					recentSleepDurationMin = &duration
-				} else {
-					sleepReferenceTime = &startedUTC
+				}
+			}
+			sleepTotalMin += duration
+			if startedLocal.Hour() >= 6 && startedLocal.Hour() < 18 {
+				sleepNapTotalMin += duration
+			} else {
+				sleepNightTotalMin += duration
+			}
+			if endedAt != nil {
+				endedUTC := endedAt.UTC()
+				if lastSleepEndTime == nil {
+					lastSleepEndTime = &endedUTC
 				}
 			}
 
@@ -742,19 +789,32 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 					lastWeaningTime = &startedUTC
 				}
 			}
-			if specialMemo == "No special memo for today." {
-				memoText := extractMemoText(valueMap)
-				if memoText == "" {
-					memoText = "Memo recorded today."
-				}
+		}
+
+		if specialMemo == "No special memo in selected range." {
+			memoText := extractMemoText(valueMap)
+			if memoText != "" {
 				specialMemo = memoText
 			}
 		}
 	}
 
+	if recentSleepDurationMin == nil && lastSleepEndTime != nil && recentSleepTime != nil {
+		duration := int(lastSleepEndTime.UTC().Sub(recentSleepTime.UTC()).Minutes())
+		if duration < 0 {
+			duration = 0
+		}
+		recentSleepDurationMin = &duration
+	}
+	if lastSleepEndTime != nil {
+		sleepReferenceTime = lastSleepEndTime
+	} else if recentSleepTime != nil {
+		sleepReferenceTime = recentSleepTime
+	}
+
 	var minutesSinceLastSleep *int
 	if sleepReferenceTime != nil {
-		elapsed := int(now.Sub(sleepReferenceTime.UTC()).Minutes())
+		elapsed := int(nowUTC.Sub(sleepReferenceTime.UTC()).Minutes())
 		if elapsed < 0 {
 			elapsed = 0
 		}
@@ -762,6 +822,48 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 	}
 
 	formulaTotalML := formulaBands["night"] + formulaBands["morning"] + formulaBands["afternoon"] + formulaBands["evening"]
+	avgFormulaMLPerDay := quickAvgPerDay(formulaTotalML, rangeDays)
+	avgFeedingsPerDay := quickAvgPerDay(feedingsCount, rangeDays)
+	avgSleepMinPerDay := quickAvgPerDay(sleepTotalMin, rangeDays)
+	avgNapSleepMinPerDay := quickAvgPerDay(sleepNapTotalMin, rangeDays)
+	avgNightSleepMinPerDay := quickAvgPerDay(sleepNightTotalMin, rangeDays)
+	avgPeePerDay := quickAvgPerDay(diaperPeeCount, rangeDays)
+	avgPooPerDay := quickAvgPerDay(diaperPooCount, rangeDays)
+
+	graphLabels := make([]string, 0)
+	graphPoints := make([]float64, 0)
+	graphMode := ""
+	switch rangeKey {
+	case "day":
+		graphMode = "feeding_by_session"
+		sort.Slice(formulaEvents, func(i, j int) bool {
+			return formulaEvents[i].StartedAt.Before(formulaEvents[j].StartedAt)
+		})
+		for _, event := range formulaEvents {
+			graphLabels = append(graphLabels, event.StartedAt.Format("15:04"))
+			graphPoints = append(graphPoints, float64(event.AmountML))
+		}
+	case "week":
+		graphMode = "daily_total_ml_7d"
+		for day := localStart; day.Before(localEnd); day = day.Add(24 * time.Hour) {
+			dayKey := day.Format("2006-01-02")
+			graphLabels = append(graphLabels, day.Format("1/2"))
+			graphPoints = append(graphPoints, float64(formulaByDay[dayKey]))
+		}
+	case "month":
+		graphMode = "daily_total_ml_month"
+		for day := localStart; day.Before(localEnd); day = day.Add(24 * time.Hour) {
+			dayKey := day.Format("2006-01-02")
+			graphLabels = append(graphLabels, day.Format("2"))
+			graphPoints = append(graphPoints, float64(formulaByDay[dayKey]))
+		}
+	default:
+		graphMode = "daily_total_ml"
+	}
+	if len(graphPoints) == 0 {
+		graphLabels = []string{"-"}
+		graphPoints = []float64{0}
+	}
 
 	profile, _, err := a.resolveBabyProfile(c.Request.Context(), user.ID, baby.ID, readRoles)
 	if err != nil {
@@ -773,13 +875,27 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, "Failed to load latest feeding event")
 		return
 	}
-	recommendation := calculateFeedingRecommendation(profile, lastFeedingTime, now)
+	recommendation := calculateFeedingRecommendation(profile, lastFeedingTime, nowUTC)
+
+	rangeEndDate := localEnd.Add(-24 * time.Hour).Format("2006-01-02")
+	if rangeEndDate < localStart.Format("2006-01-02") {
+		rangeEndDate = localStart.Format("2006-01-02")
+	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"date":                            start.Format("2006-01-02"),
+		"date":                            localNow.Format("2006-01-02"),
+		"range":                           rangeKey,
+		"range_label":                     rangeLabel,
+		"range_start_date":                localStart.Format("2006-01-02"),
+		"range_end_date":                  rangeEndDate,
+		"range_day_count":                 rangeDays,
+		"tz_offset":                       tzNormalized,
 		"formula_count":                   formulaCount,
 		"formula_times":                   formulaTimes,
+		"feedings_count":                  feedingsCount,
 		"formula_total_ml":                formulaTotalML,
+		"avg_formula_ml_per_day":          avgFormulaMLPerDay,
+		"avg_feedings_per_day":            avgFeedingsPerDay,
 		"formula_amount_by_time_band_ml":  formulaBands,
 		"last_formula_time":               formatNullableTimeRFC3339(lastFormulaTime),
 		"breastfeed_count":                breastfeedCount,
@@ -787,10 +903,18 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 		"last_breastfeed_time":            formatNullableTimeRFC3339(lastBreastfeedTime),
 		"recent_sleep_time":               formatNullableTimeRFC3339(recentSleepTime),
 		"recent_sleep_duration_min":       recentSleepDurationMin,
+		"sleep_total_min":                 sleepTotalMin,
+		"sleep_day_total_min":             sleepNapTotalMin,
+		"sleep_night_total_min":           sleepNightTotalMin,
+		"avg_sleep_minutes_per_day":       avgSleepMinPerDay,
+		"avg_nap_minutes_per_day":         avgNapSleepMinPerDay,
+		"avg_night_sleep_minutes_per_day": avgNightSleepMinPerDay,
 		"last_sleep_end_time":             formatNullableTimeRFC3339(lastSleepEndTime),
 		"minutes_since_last_sleep":        minutesSinceLastSleep,
 		"diaper_pee_count":                diaperPeeCount,
 		"diaper_poo_count":                diaperPooCount,
+		"avg_diaper_pee_per_day":          avgPeePerDay,
+		"avg_diaper_poo_per_day":          avgPooPerDay,
 		"last_pee_time":                   formatNullableTimeRFC3339(lastPeeTime),
 		"last_poo_time":                   formatNullableTimeRFC3339(lastPooTime),
 		"last_diaper_time":                formatNullableTimeRFC3339(lastDiaperTime),
@@ -814,8 +938,49 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 		"recommended_next_feeding_in_min": recommendation.RecommendedNextFeedingInMin,
 		"recommendation_note":             recommendation.Note,
 		"recommendation_reference_text":   recommendation.ReferenceText,
-		"reference_text":                  "Derived from today's confirmed events.",
+		"feeding_graph_mode":              graphMode,
+		"feeding_graph_labels":            graphLabels,
+		"feeding_graph_points":            graphPoints,
+		"reference_text":                  "Derived from selected range confirmed events.",
 	})
+}
+
+func quickRangeWindow(localNow time.Time, rangeKey string) (time.Time, time.Time, int, string, error) {
+	location := localNow.Location()
+	year, month, day := localNow.Date()
+	dayStart := time.Date(year, month, day, 0, 0, 0, 0, location)
+
+	switch rangeKey {
+	case "day":
+		return dayStart, dayStart.Add(24 * time.Hour), 1, dayStart.Format("2006-01-02"), nil
+	case "week":
+		weekdayOffset := int(dayStart.Weekday() - time.Monday)
+		if weekdayOffset < 0 {
+			weekdayOffset = 6
+		}
+		weekStart := dayStart.AddDate(0, 0, -weekdayOffset)
+		weekEnd := weekStart.AddDate(0, 0, 7)
+		label := fmt.Sprintf("%d/%d - %d/%d", weekStart.Month(), weekStart.Day(), weekStart.AddDate(0, 0, 6).Month(), weekStart.AddDate(0, 0, 6).Day())
+		return weekStart, weekEnd, 7, label, nil
+	case "month":
+		monthStart := time.Date(year, month, 1, 0, 0, 0, 0, location)
+		monthEnd := monthStart.AddDate(0, 1, 0)
+		days := int(monthEnd.Sub(monthStart).Hours() / 24)
+		if days <= 0 {
+			days = 1
+		}
+		label := monthStart.Format("2006-01")
+		return monthStart, monthEnd, days, label, nil
+	default:
+		return time.Time{}, time.Time{}, 0, "", errors.New("range must be one of: day, week, month")
+	}
+}
+
+func quickAvgPerDay(total int, days int) float64 {
+	if days <= 0 {
+		return 0
+	}
+	return math.Round((float64(total)/float64(days))*10) / 10
 }
 
 func landingFormulaBand(hour int) string {

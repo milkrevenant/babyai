@@ -4,9 +4,15 @@ import "../../core/i18n/app_i18n.dart";
 import "../../core/network/babyai_api.dart";
 import "../../core/widgets/simple_donut_chart.dart";
 import "../../core/widgets/simple_stacked_bar_chart.dart";
+import "../recording/recording_page.dart";
 
 class ReportPage extends StatefulWidget {
-  const ReportPage({super.key});
+  const ReportPage({
+    super.key,
+    required this.range,
+  });
+
+  final RecordRange range;
 
   @override
   State<ReportPage> createState() => ReportPageState();
@@ -33,6 +39,14 @@ class ReportPageState extends State<ReportPage> {
   void initState() {
     super.initState();
     _loadReports();
+  }
+
+  @override
+  void didUpdateWidget(covariant ReportPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.range != widget.range) {
+      _loadReports();
+    }
   }
 
   Future<void> refreshData() async {
@@ -178,6 +192,29 @@ class ReportPageState extends State<ReportPage> {
     return "${start.month}/${start.day} - ${end.month}/${end.day}";
   }
 
+  String _activeDateLabel() {
+    final DateTime now = DateTime.now();
+    switch (widget.range) {
+      case RecordRange.day:
+        return "${now.year}-${now.month.toString().padLeft(2, "0")}-${now.day.toString().padLeft(2, "0")}";
+      case RecordRange.week:
+        return _weekLabel();
+      case RecordRange.month:
+        return "${now.year}-${now.month.toString().padLeft(2, "0")}";
+    }
+  }
+
+  String _activeRangeName(BuildContext context) {
+    switch (widget.range) {
+      case RecordRange.day:
+        return tr(context, ko: "일", en: "Day", es: "Dia");
+      case RecordRange.week:
+        return tr(context, ko: "주", en: "Week", es: "Semana");
+      case RecordRange.month:
+        return tr(context, ko: "월", en: "Month", es: "Mes");
+    }
+  }
+
   String _dayLabel(BuildContext context, DateTime day) {
     switch (day.weekday) {
       case DateTime.monday:
@@ -283,7 +320,7 @@ class ReportPageState extends State<ReportPage> {
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
         children: <Widget>[
           Text(
-            "${tr(context, ko: "기간", en: "Week", es: "Semana")}: ${_weekLabel()}",
+            "${_activeRangeName(context)}: ${_activeDateLabel()}",
             style: TextStyle(
                 color: Theme.of(context).colorScheme.onSurfaceVariant),
           ),

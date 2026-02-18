@@ -36,6 +36,29 @@ class RecordingPageState extends State<RecordingPage> {
     unawaited(_loadLandingSnapshot());
   }
 
+  @override
+  void didUpdateWidget(covariant RecordingPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.range != widget.range) {
+      unawaited(_loadLandingSnapshot());
+    }
+  }
+
+  Future<void> refreshData() async {
+    await _loadLandingSnapshot();
+  }
+
+  String _rangeApiValue() {
+    switch (widget.range) {
+      case RecordRange.day:
+        return "day";
+      case RecordRange.week:
+        return "week";
+      case RecordRange.month:
+        return "month";
+    }
+  }
+
   Future<void> _loadLandingSnapshot() async {
     setState(() {
       _snapshotLoading = true;
@@ -43,8 +66,8 @@ class RecordingPageState extends State<RecordingPage> {
     });
 
     try {
-      final Map<String, dynamic> result =
-          await BabyAIApi.instance.quickLandingSnapshot();
+      final Map<String, dynamic> result = await BabyAIApi.instance
+          .quickLandingSnapshot(range: _rangeApiValue());
       if (!mounted) {
         return;
       }
@@ -74,11 +97,44 @@ class RecordingPageState extends State<RecordingPage> {
     return null;
   }
 
+  double? _asDouble(dynamic value) {
+    if (value is double) {
+      return value;
+    }
+    if (value is int) {
+      return value.toDouble();
+    }
+    if (value is String) {
+      return double.tryParse(value.trim());
+    }
+    return null;
+  }
+
   String? _asString(dynamic value) {
     if (value is String && value.trim().isNotEmpty) {
       return value.trim();
     }
     return null;
+  }
+
+  List<String> _asStringList(dynamic value) {
+    if (value is! List<dynamic>) {
+      return <String>[];
+    }
+    return value
+        .map((dynamic item) => item.toString().trim())
+        .where((String item) => item.isNotEmpty)
+        .toList();
+  }
+
+  List<double> _asDoubleList(dynamic value) {
+    if (value is! List<dynamic>) {
+      return <double>[];
+    }
+    return value
+        .map((dynamic item) => _asDouble(item))
+        .whereType<double>()
+        .toList();
   }
 
   Map<String, int> _asBandMap(dynamic value) {
@@ -122,20 +178,6 @@ class RecordingPageState extends State<RecordingPage> {
       return "${mins}m";
     }
     return "${hours}h ${mins}m";
-  }
-
-  String _rangeLabel() {
-    final DateTime now = DateTime.now();
-    switch (widget.range) {
-      case RecordRange.day:
-        return "${now.year}-${now.month.toString().padLeft(2, "0")}-${now.day.toString().padLeft(2, "0")}";
-      case RecordRange.week:
-        final DateTime monday = now.subtract(Duration(days: now.weekday - 1));
-        final DateTime sunday = monday.add(const Duration(days: 6));
-        return "${monday.month}/${monday.day} - ${sunday.month}/${sunday.day}";
-      case RecordRange.month:
-        return "${now.year}-${now.month.toString().padLeft(2, "0")}";
-    }
   }
 
   int? _intFromPrefill(Map<String, dynamic> prefill, String key) {
@@ -522,23 +564,63 @@ class RecordingPageState extends State<RecordingPage> {
     );
   }
 
+  Widget _graphChip(String label, double value) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    return Container(
+      margin: const EdgeInsets.only(right: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.surfaceContainerHighest.withValues(alpha: 0.35),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        "$label ${value.round()}ml",
+        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 11.5),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final Map<String, dynamic> snapshot = _snapshot ?? <String, dynamic>{};
     final Map<String, int> formulaBands =
         _asBandMap(snapshot["formula_amount_by_time_band_ml"]);
 
+    final bool isDay = widget.range == RecordRange.day;
+    final bool isWeek = widget.range == RecordRange.week;
+    final bool isMonth = widget.range == RecordRange.month;
+
     final int formulaTotal = _asInt(snapshot["formula_total_ml"]) ??
         formulaBands.values.fold<int>(0, (int sum, int value) => sum + value);
     final int formulaCount = _asInt(snapshot["formula_count"]) ?? 0;
     final int breastfeedCount = _asInt(snapshot["breastfeed_count"]) ?? 0;
+    final int feedingsCount =
+        _asInt(snapshot["feedings_count"]) ?? (formulaCount + breastfeedCount);
     final int weaningCount = _asInt(snapshot["weaning_count"]) ?? 0;
     final int diaperPeeCount = _asInt(snapshot["diaper_pee_count"]) ?? 0;
     final int diaperPooCount = _asInt(snapshot["diaper_poo_count"]) ?? 0;
     final int medicationCount = _asInt(snapshot["medication_count"]) ?? 0;
 
+    final double avgFormulaPerDay =
+        _asDouble(snapshot["avg_formula_ml_per_day"]) ??
+            formulaTotal.toDouble();
+    final double avgFeedingsPerDay =
+        _asDouble(snapshot["avg_feedings_per_day"]) ?? feedingsCount.toDouble();
+    final double avgSleepPerDayMin =
+        _asDouble(snapshot["avg_sleep_minutes_per_day"]) ?? 0;
+    final double avgNapPerDayMin =
+        _asDouble(snapshot["avg_nap_minutes_per_day"]) ?? 0;
+    final double avgNightPerDayMin =
+        _asDouble(snapshot["avg_night_sleep_minutes_per_day"]) ?? 0;
+    final double avgPeePerDay = _asDouble(snapshot["avg_diaper_pee_per_day"]) ??
+        diaperPeeCount.toDouble();
+    final double avgPooPerDay = _asDouble(snapshot["avg_diaper_poo_per_day"]) ??
+        diaperPooCount.toDouble();
+
     final String lastFormula =
         _formatTime(_asString(snapshot["last_formula_time"]));
+    final String lastBreastfeed =
+        _formatTime(_asString(snapshot["last_breastfeed_time"]));
     final String recentSleep =
         _formatTime(_asString(snapshot["recent_sleep_time"]));
     final String recentSleepDuration =
@@ -553,38 +635,71 @@ class RecordingPageState extends State<RecordingPage> {
     final String specialMemo = _asString(snapshot["special_memo"]) ??
         tr(
           context,
-          ko: "오늘 특별 메모가 없습니다.",
-          en: "No special memo for today.",
-          es: "No hay nota especial hoy.",
+          ko: "선택 범위에 특별 메모가 없습니다.",
+          en: "No special memo in this range.",
+          es: "No hay nota especial en este rango.",
         );
 
-    final List<double> formulaSeries = <double>[
-      formulaBands["night"]!.toDouble(),
-      formulaBands["morning"]!.toDouble(),
-      formulaBands["afternoon"]!.toDouble(),
-      formulaBands["evening"]!.toDouble(),
-    ];
+    final List<String> graphLabels =
+        _asStringList(snapshot["feeding_graph_labels"]);
+    final List<double> graphPointsRaw =
+        _asDoubleList(snapshot["feeding_graph_points"]);
+    final int graphCount = graphLabels.length < graphPointsRaw.length
+        ? graphLabels.length
+        : graphPointsRaw.length;
+    final List<String> graphLabelsSafe =
+        graphCount == 0 ? <String>["-"] : graphLabels.sublist(0, graphCount);
+    final List<double> graphPoints =
+        graphCount == 0 ? <double>[0] : graphPointsRaw.sublist(0, graphCount);
+
+    String decimalLabel(double value) {
+      if (value.isNaN || value.isInfinite) {
+        return "0";
+      }
+      final double rounded = (value * 10).roundToDouble() / 10;
+      if ((rounded - rounded.roundToDouble()).abs() < 0.05) {
+        return rounded.round().toString();
+      }
+      return rounded.toStringAsFixed(1);
+    }
+
+    final String formulaHeadline =
+        isDay ? "$formulaTotal ml" : "${decimalLabel(avgFormulaPerDay)} ml";
+    final String sleepHeadline = isDay
+        ? recentSleepDuration
+        : _formatDuration(avgSleepPerDayMin.round());
+    final String diaperHeadline = isMonth
+        ? "${decimalLabel(avgPooPerDay)} / ${decimalLabel(avgPeePerDay)}"
+        : "$diaperPooCount / $diaperPeeCount";
+
+    final String graphTitle = isDay
+        ? tr(context,
+            ko: "수유 텀별 수유량",
+            en: "Feeding amount by session",
+            es: "Cantidad por sesion")
+        : isWeek
+            ? tr(context,
+                ko: "1일 총 수유량 (주간)",
+                en: "Daily total feeding (week)",
+                es: "Total diario (semana)")
+            : tr(context,
+                ko: "일자별 총 수유량 (월간)",
+                en: "Daily total feeding (month)",
+                es: "Total diario (mes)");
+    final String graphHint = isMonth
+        ? tr(
+            context,
+            ko: "월 화면은 일자별 총 수유량 추이를 제공합니다.",
+            en: "Month view shows daily total feeding trend.",
+            es: "La vista mensual muestra tendencia diaria de formula.",
+          )
+        : "";
 
     return RefreshIndicator(
       onRefresh: _loadLandingSnapshot,
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: <Widget>[
-          Row(
-            children: <Widget>[
-              const Icon(Icons.calendar_month, size: 18),
-              const SizedBox(width: 6),
-              Text(
-                _rangeLabel(),
-                style: const TextStyle(fontWeight: FontWeight.w700),
-              ),
-              const Spacer(),
-              IconButton(
-                onPressed: _snapshotLoading ? null : _loadLandingSnapshot,
-                icon: const Icon(Icons.refresh),
-              ),
-            ],
-          ),
           if (_snapshotLoading || _entrySaving) const LinearProgressIndicator(),
           if (_snapshotError != null) ...<Widget>[
             const SizedBox(height: 8),
@@ -597,6 +712,21 @@ class RecordingPageState extends State<RecordingPage> {
             ),
           ],
           const SizedBox(height: 8),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.sticky_note_2_outlined),
+              title: Text(
+                tr(
+                  context,
+                  ko: "특별 메모",
+                  en: "Special memo",
+                  es: "Nota especial",
+                ),
+              ),
+              subtitle: Text(specialMemo),
+            ),
+          ),
+          const SizedBox(height: 10),
           Builder(
             builder: (BuildContext context) {
               final AppThemeController? settings =
@@ -609,20 +739,42 @@ class RecordingPageState extends State<RecordingPage> {
                   _metricTile(
                     title: tr(
                       context,
-                      ko: "분유 입력",
-                      en: "Formula Entry",
-                      es: "Registro de formula",
+                      ko: "분유",
+                      en: "Formula",
+                      es: "Formula",
                     ),
-                    headline: lastFormula,
+                    headline: formulaHeadline,
                     icon: Icons.local_drink_outlined,
                     meta: <Widget>[
                       _tileMetaLine(
-                        tr(context, ko: "총 수유량", en: "Total", es: "Total"),
-                        "$formulaTotal ml",
+                        isDay
+                            ? tr(context, ko: "총 수유량", en: "Total", es: "Total")
+                            : tr(context,
+                                ko: "1일 평균 수유량",
+                                en: "Avg/day amount",
+                                es: "Promedio diario"),
+                        isDay
+                            ? "$formulaTotal ml"
+                            : "${decimalLabel(avgFormulaPerDay)} ml",
                       ),
                       _tileMetaLine(
-                        tr(context, ko: "오늘 횟수", en: "Count", es: "Conteo"),
-                        "$formulaCount",
+                        isDay
+                            ? tr(context,
+                                ko: "수유 횟수", en: "Feedings", es: "Tomas")
+                            : tr(context,
+                                ko: "1일 평균 수유 횟수",
+                                en: "Avg/day feedings",
+                                es: "Promedio de tomas"),
+                        isDay
+                            ? "$feedingsCount"
+                            : decimalLabel(avgFeedingsPerDay),
+                      ),
+                      _tileMetaLine(
+                        tr(context,
+                            ko: "마지막 분유/모유",
+                            en: "Last formula/breast",
+                            es: "Ultima formula/lactancia"),
+                        "$lastFormula / $lastBreastfeed",
                       ),
                     ],
                     onTap: _entrySaving
@@ -633,24 +785,52 @@ class RecordingPageState extends State<RecordingPage> {
                   _metricTile(
                     title: tr(
                       context,
-                      ko: "수면 입력",
-                      en: "Sleep Entry",
-                      es: "Registro de sueno",
+                      ko: "수면",
+                      en: "Sleep",
+                      es: "Sueno",
                     ),
-                    headline: recentSleep,
+                    headline: sleepHeadline,
                     icon: Icons.bedtime_outlined,
                     meta: <Widget>[
                       _tileMetaLine(
-                        tr(context,
-                            ko: "최근 잠 지속", en: "Duration", es: "Duracion"),
-                        recentSleepDuration,
+                        isDay
+                            ? tr(context,
+                                ko: "최근 잠 지속", en: "Duration", es: "Duracion")
+                            : tr(context,
+                                ko: "1일 평균 수면 시간",
+                                en: "Avg/day sleep",
+                                es: "Sueno diario"),
+                        isDay
+                            ? recentSleepDuration
+                            : _formatDuration(avgSleepPerDayMin.round()),
                       ),
                       _tileMetaLine(
-                        tr(context,
-                            ko: "마지막 잠 종료",
-                            en: "Last sleep end",
-                            es: "Fin del sueno"),
-                        lastSleepEnd,
+                        isDay
+                            ? tr(context,
+                                ko: "마지막 잠 종료",
+                                en: "Last sleep end",
+                                es: "Fin del sueno")
+                            : tr(context,
+                                ko: "1일 평균 낮잠 지속",
+                                en: "Avg/day nap",
+                                es: "Siesta diaria"),
+                        isDay
+                            ? lastSleepEnd
+                            : _formatDuration(avgNapPerDayMin.round()),
+                      ),
+                      _tileMetaLine(
+                        isDay
+                            ? tr(context,
+                                ko: "최근 잠 시작",
+                                en: "Recent sleep start",
+                                es: "Inicio reciente")
+                            : tr(context,
+                                ko: "1일 평균 밤잠 지속",
+                                en: "Avg/day night sleep",
+                                es: "Sueno nocturno diario"),
+                        isDay
+                            ? recentSleep
+                            : _formatDuration(avgNightPerDayMin.round()),
                       ),
                     ],
                     onTap: _entrySaving
@@ -661,22 +841,54 @@ class RecordingPageState extends State<RecordingPage> {
                   _metricTile(
                     title: tr(
                       context,
-                      ko: "기저귀 입력",
-                      en: "Diaper Entry",
-                      es: "Registro de panal",
+                      ko: "기저귀",
+                      en: "Diaper",
+                      es: "Panal",
                     ),
-                    headline: "$diaperPeeCount / $diaperPooCount",
+                    headline: diaperHeadline,
                     icon: Icons.baby_changing_station_outlined,
                     meta: <Widget>[
                       _tileMetaLine(
-                        tr(context,
-                            ko: "마지막 소변", en: "Last pee", es: "Ultima orina"),
-                        lastPee,
+                        isMonth
+                            ? tr(context,
+                                ko: "1일 평균 대변 횟수",
+                                en: "Avg/day poo",
+                                es: "Promedio heces")
+                            : isWeek
+                                ? tr(context,
+                                    ko: "주 총 대변 횟수",
+                                    en: "Weekly poo total",
+                                    es: "Total heces semana")
+                                : tr(context,
+                                    ko: "마지막 대변",
+                                    en: "Last poo",
+                                    es: "Ultimas heces"),
+                        isMonth
+                            ? decimalLabel(avgPooPerDay)
+                            : isWeek
+                                ? "$diaperPooCount"
+                                : lastPoo,
                       ),
                       _tileMetaLine(
-                        tr(context,
-                            ko: "마지막 대변", en: "Last poo", es: "Ultimas heces"),
-                        lastPoo,
+                        isMonth
+                            ? tr(context,
+                                ko: "1일 평균 소변 횟수",
+                                en: "Avg/day pee",
+                                es: "Promedio orina")
+                            : isWeek
+                                ? tr(context,
+                                    ko: "주 총 소변 횟수",
+                                    en: "Weekly pee total",
+                                    es: "Total orina semana")
+                                : tr(context,
+                                    ko: "마지막 소변",
+                                    en: "Last pee",
+                                    es: "Ultima orina"),
+                        isMonth
+                            ? decimalLabel(avgPeePerDay)
+                            : isWeek
+                                ? "$diaperPeeCount"
+                                : lastPee,
                       ),
                     ],
                     onTap: _entrySaving
@@ -687,9 +899,9 @@ class RecordingPageState extends State<RecordingPage> {
                   _metricTile(
                     title: tr(
                       context,
-                      ko: "이유식 입력",
-                      en: "Weaning Entry",
-                      es: "Registro de destete",
+                      ko: "이유식",
+                      en: "Weaning",
+                      es: "Destete",
                     ),
                     headline: lastWeaning,
                     icon: Icons.rice_bowl_outlined,
@@ -708,9 +920,9 @@ class RecordingPageState extends State<RecordingPage> {
                   _metricTile(
                     title: tr(
                       context,
-                      ko: "투약 입력",
-                      en: "Medication Entry",
-                      es: "Registro de medicacion",
+                      ko: "투약",
+                      en: "Medication",
+                      es: "Medicacion",
                     ),
                     headline: _formatTime(
                         _asString(snapshot["last_medication_time"])),
@@ -748,26 +960,39 @@ class RecordingPageState extends State<RecordingPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
                   Text(
-                    tr(
-                      context,
-                      ko: "시간대별 분유량",
-                      en: "Formula by time band",
-                      es: "Formula por franja",
-                    ),
+                    graphTitle,
                     style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                   const SizedBox(height: 8),
-                  Text(
-                    "${tr(context, ko: "밤", en: "Night", es: "Noche")}: ${formulaBands["night"]} / "
-                    "${tr(context, ko: "아침", en: "Morning", es: "Manana")}: ${formulaBands["morning"]} / "
-                    "${tr(context, ko: "오후", en: "Afternoon", es: "Tarde")}: ${formulaBands["afternoon"]} / "
-                    "${tr(context, ko: "저녁", en: "Evening", es: "Noche")}: ${formulaBands["evening"]}",
+                  if (graphHint.isNotEmpty) Text(graphHint),
+                  if (!isDay) ...<Widget>[
+                    Text(
+                      "${tr(context, ko: "밤", en: "Night", es: "Noche")}: ${formulaBands["night"]} / "
+                      "${tr(context, ko: "아침", en: "Morning", es: "Manana")}: ${formulaBands["morning"]} / "
+                      "${tr(context, ko: "오후", en: "Afternoon", es: "Tarde")}: ${formulaBands["afternoon"]} / "
+                      "${tr(context, ko: "저녁", en: "Evening", es: "Noche")}: ${formulaBands["evening"]}",
+                    ),
+                  ],
+                  const SizedBox(height: 10),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: List<Widget>.generate(
+                        graphPoints.length,
+                        (int index) => _graphChip(
+                          index < graphLabelsSafe.length
+                              ? graphLabelsSafe[index]
+                              : "-",
+                          graphPoints[index],
+                        ),
+                      ),
+                    ),
                   ),
                   const SizedBox(height: 10),
                   SizedBox(
                     height: 120,
                     child: SimpleLineChart(
-                      points: formulaSeries,
+                      points: graphPoints,
                       lineColor: const Color(0xFF8C8ED4),
                       fillColor: const Color(0xFF8C8ED4).withValues(alpha: 0.2),
                     ),
@@ -776,24 +1001,9 @@ class RecordingPageState extends State<RecordingPage> {
               ),
             ),
           ),
-          const SizedBox(height: 10),
-          Card(
-            child: ListTile(
-              leading: const Icon(Icons.sticky_note_2_outlined),
-              title: Text(
-                tr(
-                  context,
-                  ko: "특별 메모",
-                  en: "Special memo",
-                  es: "Nota especial",
-                ),
-              ),
-              subtitle: Text(specialMemo),
-            ),
-          ),
           const SizedBox(height: 8),
           Text(
-            "${tr(context, ko: "오늘 기록", en: "Today records", es: "Registros de hoy")}: "
+            "${tr(context, ko: "기록 요약", en: "Records summary", es: "Resumen")}: "
             "${tr(context, ko: "분유", en: "Formula", es: "Formula")} $formulaCount, "
             "${tr(context, ko: "모유", en: "Breastfeed", es: "Lactancia")} $breastfeedCount, "
             "${tr(context, ko: "이유식", en: "Weaning", es: "Destete")} $weaningCount, "

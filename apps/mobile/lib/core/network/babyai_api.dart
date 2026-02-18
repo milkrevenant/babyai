@@ -445,12 +445,19 @@ class BabyAIApi {
     }
   }
 
-  Future<Map<String, dynamic>> quickLandingSnapshot() async {
+  Future<Map<String, dynamic>> quickLandingSnapshot({
+    String range = "day",
+  }) async {
     try {
       _requireBabyId();
+      final String normalizedRange = range.trim().toLowerCase();
       final Response<dynamic> response = await _dio.get<dynamic>(
         "/api/v1/quick/landing-snapshot",
-        queryParameters: <String, dynamic>{"baby_id": activeBabyId},
+        queryParameters: <String, dynamic>{
+          "baby_id": activeBabyId,
+          "range": normalizedRange.isEmpty ? "day" : normalizedRange,
+          "tz_offset": _localTimezoneOffset(),
+        },
         options: _authOptions(),
       );
       return _requireMap(response);

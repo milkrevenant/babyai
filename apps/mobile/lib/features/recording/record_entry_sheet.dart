@@ -376,6 +376,7 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
     switch (widget.tile) {
       case HomeTileType.formula:
         final int? amount = _parsePositiveInt(_amountController);
+        final String memo = _memoController.text.trim();
         if (amount == null || amount <= 0) {
           setState(() {
             _error = tr(
@@ -406,19 +407,24 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
             value: <String, dynamic>{
               "ml": amount,
               "duration_min": _sleepDurationMinutes(),
+              if (memo.isNotEmpty) "memo": memo,
             },
           ),
         );
         return;
       case HomeTileType.breastfeed:
         final int duration = _parsePositiveInt(_durationController) ?? 0;
+        final String memo = _memoController.text.trim();
         Navigator.of(context).pop(
           RecordEntryInput(
             type: "BREASTFEED",
             startTime: start,
             endTime:
                 duration > 0 ? start.add(Duration(minutes: duration)) : null,
-            value: <String, dynamic>{"duration_min": duration},
+            value: <String, dynamic>{
+              "duration_min": duration,
+              if (memo.isNotEmpty) "memo": memo,
+            },
           ),
         );
         return;
@@ -445,15 +451,20 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
         );
         return;
       case HomeTileType.diaper:
+        final String memo = _memoController.text.trim();
         Navigator.of(context).pop(
           RecordEntryInput(
             type: _diaperType,
             startTime: start,
-            value: const <String, dynamic>{"count": 1},
+            value: <String, dynamic>{
+              "count": 1,
+              if (memo.isNotEmpty) "memo": memo,
+            },
           ),
         );
         return;
       case HomeTileType.sleep:
+        final String memo = _memoController.text.trim();
         if (!_endTime.isAfter(start)) {
           setState(() {
             _error = tr(
@@ -471,11 +482,15 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
             type: "SLEEP",
             startTime: start,
             endTime: _endTime,
-            value: <String, dynamic>{"duration_min": duration},
+            value: <String, dynamic>{
+              "duration_min": duration,
+              if (memo.isNotEmpty) "memo": memo,
+            },
           ),
         );
         return;
       case HomeTileType.medication:
+        final String memo = _memoController.text.trim();
         final String medicationType = _nameController.text.trim();
         if (medicationType.isEmpty) {
           setState(() {
@@ -497,6 +512,7 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
               "name": medicationType,
               "medication_type": medicationType,
               if (dose != null && dose > 0) "dose": dose,
+              if (memo.isNotEmpty) "memo": memo,
             },
           ),
         );
@@ -558,6 +574,19 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
                 border: const OutlineInputBorder(),
               ),
             ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _memoController,
+              decoration: InputDecoration(
+                labelText: tr(
+                  context,
+                  ko: "특별 메모 (선택)",
+                  en: "Special memo (optional)",
+                  es: "Nota especial (opcional)",
+                ),
+                border: const OutlineInputBorder(),
+              ),
+            ),
           ],
         );
       case HomeTileType.breastfeed:
@@ -574,6 +603,19 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
                   ko: "수유 시간 (분)",
                   en: "Duration (min)",
                   es: "Duracion (min)",
+                ),
+                border: const OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _memoController,
+              decoration: InputDecoration(
+                labelText: tr(
+                  context,
+                  ko: "특별 메모 (선택)",
+                  en: "Special memo (optional)",
+                  es: "Nota especial (opcional)",
                 ),
                 border: const OutlineInputBorder(),
               ),
@@ -618,9 +660,9 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
               decoration: InputDecoration(
                 labelText: tr(
                   context,
-                  ko: "이유식 메모 (선택)",
-                  en: "Weaning memo (optional)",
-                  es: "Memo de destete (opcional)",
+                  ko: "특별 메모 (선택)",
+                  en: "Special memo (optional)",
+                  es: "Nota especial (opcional)",
                 ),
                 border: const OutlineInputBorder(),
               ),
@@ -676,6 +718,19 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
                 }
               },
             ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _memoController,
+              decoration: InputDecoration(
+                labelText: tr(
+                  context,
+                  ko: "특별 메모 (선택)",
+                  en: "Special memo (optional)",
+                  es: "Nota especial (opcional)",
+                ),
+                border: const OutlineInputBorder(),
+              ),
+            ),
           ],
         );
       case HomeTileType.sleep:
@@ -696,6 +751,19 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
               child: Text(
                 _sleepDurationLabel(),
                 style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _memoController,
+              decoration: InputDecoration(
+                labelText: tr(
+                  context,
+                  ko: "특별 메모 (선택)",
+                  en: "Special memo (optional)",
+                  es: "Nota especial (opcional)",
+                ),
+                border: const OutlineInputBorder(),
               ),
             ),
           ],
@@ -727,6 +795,19 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
                   ko: "용량 (선택)",
                   en: "Dose (optional)",
                   es: "Dosis (opcional)",
+                ),
+                border: const OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _memoController,
+              decoration: InputDecoration(
+                labelText: tr(
+                  context,
+                  ko: "특별 메모 (선택)",
+                  en: "Special memo (optional)",
+                  es: "Nota especial (opcional)",
                 ),
                 border: const OutlineInputBorder(),
               ),

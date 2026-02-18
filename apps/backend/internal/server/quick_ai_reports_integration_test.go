@@ -449,6 +449,110 @@ func TestQuickLandingSnapshotReturnsStructuredDashboardData(t *testing.T) {
 	}
 }
 
+func TestQuickLandingSnapshotRangeWeekReturnsAveragesAndGraph(t *testing.T) {
+	resetDatabase(t)
+	fixture := seedOwnerFixture(t)
+	now := time.Now().UTC()
+	weekdayOffset := int(now.Weekday() - time.Monday)
+	if weekdayOffset < 0 {
+		weekdayOffset = 6
+	}
+	weekStart := startOfUTCDay(now).AddDate(0, 0, -weekdayOffset)
+
+	seedEvent(t, "", fixture.BabyID, "FORMULA", weekStart.Add(8*time.Hour), nil, map[string]any{"ml": 100, "memo": "after vaccine"}, fixture.UserID)
+	seedEvent(t, "", fixture.BabyID, "FORMULA", weekStart.Add(2*24*time.Hour+9*time.Hour), nil, map[string]any{"ml": 200}, fixture.UserID)
+	seedEvent(t, "", fixture.BabyID, "BREASTFEED", weekStart.Add(3*24*time.Hour+10*time.Hour), nil, map[string]any{}, fixture.UserID)
+
+	napStart := weekStart.Add(1*24*time.Hour + 13*time.Hour)
+	napEnd := napStart.Add(120 * time.Minute)
+	nightStart := weekStart.Add(4*24*time.Hour + 23*time.Hour)
+	nightEnd := nightStart.Add(180 * time.Minute)
+	seedEvent(t, "", fixture.BabyID, "SLEEP", napStart, &napEnd, map[string]any{}, fixture.UserID)
+	seedEvent(t, "", fixture.BabyID, "SLEEP", nightStart, &nightEnd, map[string]any{}, fixture.UserID)
+
+	rec := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodGet,
+		"/api/v1/quick/landing-snapshot?baby_id="+fixture.BabyID+"&range=week&tz_offset=+00:00",
+		signToken(t, fixture.UserID, nil),
+		nil,
+		nil,
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	body := decodeJSONMap(t, rec)
+	if body["range"] != "week" {
+		t.Fatalf("expected range=week, got %v", body["range"])
+	}
+	if dayCount, ok := body["range_day_count"].(float64); !ok || int(dayCount) != 7 {
+		t.Fatalf("expected range_day_count=7, got %v", body["range_day_count"])
+	}
+	if memo, _ := body["special_memo"].(string); memo != "after vaccine" {
+		t.Fatalf("expected special_memo from event memo, got %v", body["special_memo"])
+	}
+
+	if avgFormula, ok := body["avg_formula_ml_per_day"].(float64); !ok || avgFormula < 42.8 || avgFormula > 43.0 {
+		t.Fatalf("expected avg_formula_ml_per_day around 42.9, got %v", body["avg_formula_ml_per_day"])
+	}
+	if avgFeedings, ok := body["avg_feedings_per_day"].(float64); !ok || avgFeedings < 0.3 || avgFeedings > 0.5 {
+		t.Fatalf("expected avg_feedings_per_day around 0.4, got %v", body["avg_feedings_per_day"])
+	}
+	if avgSleep, ok := body["avg_sleep_minutes_per_day"].(float64); !ok || avgSleep < 42.8 || avgSleep > 43.0 {
+		t.Fatalf("expected avg_sleep_minutes_per_day around 42.9, got %v", body["avg_sleep_minutes_per_day"])
+	}
+	if avgNap, ok := body["avg_nap_minutes_per_day"].(float64); !ok || avgNap < 17.0 || avgNap > 17.2 {
+		t.Fatalf("expected avg_nap_minutes_per_day around 17.1, got %v", body["avg_nap_minutes_per_day"])
+	}
+	if avgNight, ok := body["avg_night_sleep_minutes_per_day"].(float64); !ok || avgNight < 25.6 || avgNight > 25.8 {
+		t.Fatalf("expected avg_night_sleep_minutes_per_day around 25.7, got %v", body["avg_night_sleep_minutes_per_day"])
+	}
+
+	labels := decodeStringList(t, body["feeding_graph_labels"])
+	pointsAny, ok := body["feeding_graph_points"].([]any)
+	if !ok {
+		t.Fatalf("expected feeding_graph_points array, got %T", body["feeding_graph_points"])
+	}
+	if len(labels) != 7 || len(pointsAny) != 7 {
+		t.Fatalf("expected 7 graph items, labels=%d points=%d", len(labels), len(pointsAny))
+	}
+
+	total := 0
+	for _, item := range pointsAny {
+		value, ok := item.(float64)
+		if !ok {
+			t.Fatalf("expected numeric graph point, got %T", item)
+		}
+		total += int(value)
+	}
+	if total != 300 {
+		t.Fatalf("expected weekly graph total 300ml, got %d", total)
+	}
+}
+
+func TestQuickLandingSnapshotRangeValidation(t *testing.T) {
+	resetDatabase(t)
+	fixture := seedOwnerFixture(t)
+
+	rec := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodGet,
+		"/api/v1/quick/landing-snapshot?baby_id="+fixture.BabyID+"&range=year",
+		signToken(t, fixture.UserID, nil),
+		nil,
+		nil,
+	)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if detail := responseDetail(t, rec); detail != "range must be one of: day, week, month" {
+		t.Fatalf("unexpected detail: %q", detail)
+	}
+}
+
 func TestAIQueryReturnsRecordBasedPooAnswer(t *testing.T) {
 	resetDatabase(t)
 	fixture := seedOwnerFixture(t)

@@ -1,9 +1,11 @@
 import "dart:async";
 import "dart:convert";
+import "dart:ui" as ui;
 
 import "package:flutter/material.dart";
 
 import "assistant/assistant_intent_bridge.dart";
+import "assistant/assistant_query_router.dart";
 import "../features/chat/chat_page.dart";
 import "../features/community/community_page.dart";
 import "../features/market/market_page.dart";
@@ -173,8 +175,11 @@ class _HomeShellState extends State<_HomeShell> {
   final GlobalKey<ChatPageState> _chatPageKey = GlobalKey<ChatPageState>();
   final GlobalKey<ReportPageState> _reportPageKey =
       GlobalKey<ReportPageState>();
+  final GlobalKey<PhotosPageState> _photosPageKey =
+      GlobalKey<PhotosPageState>();
   StreamSubscription<AssistantActionPayload>? _assistantSubscription;
   AssistantActionPayload? _pendingAssistantAction;
+  String? _pendingChatPrompt;
 
   int _index = 0;
   bool _isGoogleLoggedIn = false;
@@ -200,10 +205,10 @@ class _HomeShellState extends State<_HomeShell> {
   }
 
   Future<void> _initializeAssistantBridge() async {
-    await AssistantIntentBridge.initialize();
     _assistantSubscription = AssistantIntentBridge.stream.listen(
       _handleAssistantAction,
     );
+    await AssistantIntentBridge.initialize();
   }
 
   void _handleAssistantAction(AssistantActionPayload payload) {
@@ -329,6 +334,65 @@ class _HomeShellState extends State<_HomeShell> {
     ]);
   }
 
+  bool _looksLikeQuestion(String? query) {
+    if (query == null) {
+      return false;
+    }
+    final String text = query.trim().toLowerCase();
+    if (text.isEmpty) {
+      return false;
+    }
+    if (text.contains("?")) {
+      return true;
+    }
+    return _containsAny(text, <String>[
+      "when",
+      "what",
+      "how much",
+      "how long",
+      "tell me",
+      "show me",
+      "언제",
+      "뭐",
+      "무엇",
+      "알려",
+      "보여",
+      "요약",
+      "최근",
+      "마지막",
+    ]);
+  }
+
+  String? _queryForReadFeature(String feature) {
+    switch (feature) {
+      case "last_feeding":
+      case "last-feeding":
+        return "last feeding";
+      case "recent_sleep":
+      case "recent-sleep":
+        return "recent sleep";
+      case "last_diaper":
+      case "last-diaper":
+        return "last diaper";
+      case "last_medication":
+      case "last-medication":
+        return "last medication";
+      case "today_summary":
+      case "today-summary":
+        return "today summary";
+      case "last_poo":
+      case "last-poo":
+      case "last_poo_time":
+      case "last-poo-time":
+        return "last poo time";
+      case "next_feeding_eta":
+      case "next-feeding-eta":
+        return "next feeding eta";
+      default:
+        return null;
+    }
+  }
+
   int? _extractAmountMlFromText(String? text) {
     if (text == null || text.trim().isEmpty) {
       return null;
@@ -389,6 +453,24 @@ class _HomeShellState extends State<_HomeShell> {
       );
     }
 
+    final String? readFeatureQuery = _queryForReadFeature(normalizedFeature);
+    if (readFeatureQuery != null) {
+      return _AssistantRecordAction(
+        routeToChat: true,
+        chatPrompt: normalizedQuery ?? readFeatureQuery,
+      );
+    }
+
+    final AssistantQuickRoute quickRoute =
+        AssistantQueryRouter.resolve(normalizedQuery ?? "");
+    if (quickRoute != AssistantQuickRoute.none &&
+        !_hasRecordIntent(normalizedQuery)) {
+      return _AssistantRecordAction(
+        routeToChat: true,
+        chatPrompt: normalizedQuery,
+      );
+    }
+
     final int? amountMl =
         payload.amountMl ?? _extractAmountMlFromText(normalizedQuery);
     if (amountMl != null && amountMl > 0) {
@@ -401,11 +483,12 @@ class _HomeShellState extends State<_HomeShell> {
       tile = HomeTileType.formula;
     }
     if (tile == null) {
-      final bool looksLikeRecordCommand =
-          _hasRecordIntent(normalizedQuery) ||
+      final bool looksLikeRecordCommand = _hasRecordIntent(normalizedQuery) ||
           (normalizedQuery?.toLowerCase().contains("ml") ?? false);
       return _AssistantRecordAction(
-        routeToChat: looksLikeRecordCommand ? false : normalizedQuery != null,
+        routeToChat: looksLikeRecordCommand
+            ? false
+            : normalizedQuery != null || _looksLikeQuestion(normalizedQuery),
         chatPrompt: normalizedQuery,
       );
     }
@@ -518,9 +601,10 @@ class _HomeShellState extends State<_HomeShell> {
     if (action.routeToChat) {
       setState(() => _index = _chatPage);
       if (action.chatPrompt != null && action.chatPrompt!.trim().isNotEmpty) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _chatPageKey.currentState?.sendAssistantPrompt(action.chatPrompt!);
-        });
+        _pendingChatPrompt = action.chatPrompt!.trim();
+        WidgetsBinding.instance.addPostFrameCallback(
+          (_) => _flushPendingChatPrompt(),
+        );
       }
       return;
     }
@@ -538,6 +622,30 @@ class _HomeShellState extends State<_HomeShell> {
         autoSubmit: action.autoSubmit,
       );
     });
+  }
+
+  void _flushPendingChatPrompt({int attempt = 0}) {
+    if (!mounted) {
+      return;
+    }
+    final String? prompt = _pendingChatPrompt;
+    if (prompt == null || prompt.isEmpty) {
+      return;
+    }
+
+    final ChatPageState? chatState = _chatPageKey.currentState;
+    if (chatState == null) {
+      if (attempt >= 8) {
+        return;
+      }
+      Future<void>.delayed(const Duration(milliseconds: 120), () {
+        _flushPendingChatPrompt(attempt: attempt + 1);
+      });
+      return;
+    }
+
+    _pendingChatPrompt = null;
+    unawaited(chatState.sendAssistantPrompt(prompt));
   }
 
   String _labelForIndex(BuildContext context, int index) {
@@ -611,9 +719,9 @@ class _HomeShellState extends State<_HomeShell> {
       case _chatPage:
         return ChatPage(key: _chatPageKey);
       case _statisticsPage:
-        return ReportPage(key: _reportPageKey);
+        return ReportPage(key: _reportPageKey, range: _recordRange);
       case _photosPage:
-        return PhotosPage(viewMode: _photosViewMode);
+        return PhotosPage(key: _photosPageKey, viewMode: _photosViewMode);
       case _marketPage:
         return MarketPage(section: _marketSection);
       case _communityPage:
@@ -812,47 +920,154 @@ class _HomeShellState extends State<_HomeShell> {
   }
 
   void _onTopRefreshPressed() {
+    if (_index == _homePage) {
+      _recordPageKey.currentState?.refreshData();
+      return;
+    }
     if (_index == _statisticsPage) {
       _reportPageKey.currentState?.refreshData();
     }
   }
 
+  String _recordRangeLabel(BuildContext context, RecordRange range) {
+    switch (range) {
+      case RecordRange.day:
+        return tr(context, ko: "일", en: "Day", es: "Dia");
+      case RecordRange.week:
+        return tr(context, ko: "주", en: "Week", es: "Semana");
+      case RecordRange.month:
+        return tr(context, ko: "월", en: "Month", es: "Mes");
+    }
+  }
+
+  bool _showRangeTopActions() {
+    return _index == _homePage || _index == _statisticsPage;
+  }
+
+  String _recordRangeDateLabel() {
+    final DateTime now = DateTime.now();
+    switch (_recordRange) {
+      case RecordRange.day:
+        return "${now.year}-${now.month.toString().padLeft(2, "0")}-${now.day.toString().padLeft(2, "0")}";
+      case RecordRange.week:
+        final DateTime monday = now.subtract(Duration(days: now.weekday - 1));
+        final DateTime sunday = monday.add(const Duration(days: 6));
+        return "${monday.month}/${monday.day}-${sunday.month}/${sunday.day}";
+      case RecordRange.month:
+        return "${now.year}-${now.month.toString().padLeft(2, "0")}";
+    }
+  }
+
+  Widget _buildTopRangeDateChip(BuildContext context) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    return Container(
+      height: 40,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      decoration: BoxDecoration(
+        color: color.surfaceContainerHighest.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          const Icon(Icons.calendar_month_outlined, size: 16),
+          const SizedBox(width: 6),
+          Text(
+            _recordRangeDateLabel(),
+            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _openRecordRangeMenu(BuildContext anchorContext) async {
+    final List<RecordRange> candidates = RecordRange.values
+        .where((RecordRange item) => item != _recordRange)
+        .toList();
+    if (candidates.isEmpty) {
+      return;
+    }
+
+    final RenderBox button = anchorContext.findRenderObject()! as RenderBox;
+    final RenderBox overlay =
+        Overlay.of(anchorContext).context.findRenderObject()! as RenderBox;
+    final RelativeRect position = RelativeRect.fromRect(
+      Rect.fromPoints(
+        button.localToGlobal(Offset.zero, ancestor: overlay),
+        button.localToGlobal(button.size.bottomRight(Offset.zero),
+            ancestor: overlay),
+      ),
+      Offset.zero & overlay.size,
+    );
+
+    final RecordRange? selected = await showMenu<RecordRange>(
+      context: anchorContext,
+      position: position,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      items: candidates
+          .map(
+            (RecordRange value) => PopupMenuItem<RecordRange>(
+              value: value,
+              child: Text(_recordRangeLabel(anchorContext, value)),
+            ),
+          )
+          .toList(),
+    );
+
+    if (selected != null && mounted) {
+      setState(() => _recordRange = selected);
+    }
+  }
+
+  Widget _buildRecordRangeDropdown(BuildContext context) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    return Builder(
+      builder: (BuildContext anchorContext) {
+        return Material(
+          color: color.surfaceContainerHighest.withValues(alpha: 0.45),
+          shape: const StadiumBorder(),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            customBorder: const StadiumBorder(),
+            onTap: () => _openRecordRangeMenu(anchorContext),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Text(
+                    _recordRangeLabel(context, _recordRange),
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(width: 6),
+                  const Icon(Icons.arrow_drop_down, size: 18),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Widget _buildHeaderControls(BuildContext context) {
     switch (_index) {
       case _homePage:
-        return Wrap(
-          spacing: 8,
-          children: <Widget>[
-            _HeaderChoice(
-              selected: _recordRange == RecordRange.day,
-              label: tr(context, ko: "일", en: "Day", es: "Dia"),
-              onTap: () => setState(() => _recordRange = RecordRange.day),
-            ),
-            _HeaderChoice(
-              selected: _recordRange == RecordRange.week,
-              label: tr(context, ko: "주", en: "Week", es: "Semana"),
-              onTap: () => setState(() => _recordRange = RecordRange.week),
-            ),
-            _HeaderChoice(
-              selected: _recordRange == RecordRange.month,
-              label: tr(context, ko: "월", en: "Month", es: "Mes"),
-              onTap: () => setState(() => _recordRange = RecordRange.month),
-            ),
-          ],
-        );
+        return _buildRecordRangeDropdown(context);
       case _photosPage:
         return Wrap(
           spacing: 8,
           children: <Widget>[
             _HeaderChoice(
               selected: _photosViewMode == PhotosViewMode.tiles,
-              label: "Tiles",
+              label: tr(context, ko: "타일", en: "Tiles", es: "Mosaico"),
               onTap: () =>
                   setState(() => _photosViewMode = PhotosViewMode.tiles),
             ),
             _HeaderChoice(
               selected: _photosViewMode == PhotosViewMode.albums,
-              label: "Albums",
+              label: tr(context, ko: "앨범", en: "Albums", es: "Albumes"),
               onTap: () =>
                   setState(() => _photosViewMode = PhotosViewMode.albums),
             ),
@@ -924,9 +1139,7 @@ class _HomeShellState extends State<_HomeShell> {
           ),
         );
       case _statisticsPage:
-        return _HeaderHint(
-            label: tr(context,
-                ko: "일간 + 주간", en: "Daily + Weekly", es: "Diario + Semanal"));
+        return _buildRecordRangeDropdown(context);
       case _chatPage:
       default:
         return _HeaderHint(
@@ -937,42 +1150,77 @@ class _HomeShellState extends State<_HomeShell> {
 
   PreferredSizeWidget _buildTopBar(BuildContext context) {
     final ColorScheme color = Theme.of(context).colorScheme;
+    final bool isIOS = Theme.of(context).platform == TargetPlatform.iOS;
+    final double safeTopInset = MediaQuery.paddingOf(context).top;
+    final double iosTitleOffset = isIOS
+        ? (safeTopInset >= 54
+            ? 6
+            : safeTopInset >= 44
+                ? 3
+                : 0)
+        : 0;
     return AppBar(
       automaticallyImplyLeading: false,
-      toolbarHeight: 72,
+      toolbarHeight: isIOS ? 58 + iosTitleOffset : 72,
       elevation: 0,
       scrolledUnderElevation: 0,
+      forceMaterialTransparency: true,
       backgroundColor: Colors.transparent,
       surfaceTintColor: Colors.transparent,
+      clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(
-        borderRadius: const BorderRadius.vertical(bottom: Radius.circular(24)),
+        borderRadius: BorderRadius.vertical(
+          bottom: Radius.circular(isIOS ? 16 : 24),
+        ),
         side: BorderSide(color: color.outlineVariant.withValues(alpha: 0.28)),
       ),
-      flexibleSpace: DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: <Color>[
-              color.surface.withValues(alpha: 0.98),
-              color.surface.withValues(alpha: 0.82),
-            ],
+      flexibleSpace: ClipRRect(
+        borderRadius: BorderRadius.vertical(
+          bottom: Radius.circular(isIOS ? 16 : 24),
+        ),
+        child: BackdropFilter(
+          filter: ui.ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: <Color>[
+                  color.surface.withValues(alpha: isIOS ? 0.62 : 0.78),
+                  color.surface.withValues(alpha: isIOS ? 0.42 : 0.58),
+                ],
+              ),
+            ),
           ),
         ),
       ),
-      titleSpacing: 12,
-      title: Row(
-        children: <Widget>[
-          _RoundTopButton(
-              icon: Icons.menu,
-              onTap: () => _scaffoldKey.currentState?.openDrawer()),
-          const SizedBox(width: 8),
-          Expanded(child: _buildHeaderControls(context)),
-          if (_index == _statisticsPage) ...<Widget>[
+      titleSpacing: isIOS ? 12 : 12,
+      title: Padding(
+        padding: EdgeInsets.only(top: iosTitleOffset),
+        child: Row(
+          children: <Widget>[
+            _RoundTopButton(
+                icon: Icons.menu,
+                onTap: () => _scaffoldKey.currentState?.openDrawer()),
             const SizedBox(width: 8),
-            _RoundTopButton(icon: Icons.refresh, onTap: _onTopRefreshPressed),
+            if (_index == _homePage || _index == _statisticsPage)
+              Flexible(
+                fit: FlexFit.loose,
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: _buildHeaderControls(context),
+                ),
+              )
+            else
+              Expanded(child: _buildHeaderControls(context)),
+            if (_showRangeTopActions()) ...<Widget>[
+              const SizedBox(width: 8),
+              _buildTopRangeDateChip(context),
+              const SizedBox(width: 8),
+              _RoundTopButton(icon: Icons.refresh, onTap: _onTopRefreshPressed),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
@@ -1124,9 +1372,22 @@ class _HomeShellState extends State<_HomeShell> {
           ),
         ),
       ),
+      floatingActionButton: _index == _photosPage
+          ? FloatingActionButton.extended(
+              onPressed: () {
+                unawaited(
+                    _photosPageKey.currentState?.pickAndUploadFromGallery());
+              },
+              icon: const Icon(Icons.add_a_photo_outlined),
+              label: Text(
+                tr(context, ko: "사진 업로드", en: "Upload", es: "Subir"),
+              ),
+            )
+          : null,
       body: SafeArea(child: _buildCurrentPage()),
       bottomNavigationBar: showBottomNav
           ? NavigationBar(
+              height: 58,
               labelBehavior: NavigationDestinationLabelBehavior.alwaysHide,
               selectedIndex: selectedBottomIndex,
               onDestinationSelected: (int i) {
