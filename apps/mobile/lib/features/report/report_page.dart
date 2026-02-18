@@ -1,10 +1,11 @@
+import "dart:math" as math;
+
 import "package:flutter/material.dart";
 
 import "../../core/i18n/app_i18n.dart";
 import "../../core/network/babyai_api.dart";
 import "../../core/theme/app_theme_controller.dart";
 import "../../core/widgets/simple_donut_chart.dart";
-import "../../core/widgets/simple_stacked_bar_chart.dart";
 import "../recording/recording_page.dart";
 import "../recording/record_entry_sheet.dart";
 
@@ -26,7 +27,9 @@ class ReportPageState extends State<ReportPage> {
   Map<String, dynamic>? _daily;
   Map<String, dynamic>? _weekly;
   List<Map<String, dynamic>> _weeklyDailyReports = <Map<String, dynamic>>[];
+  List<Map<String, dynamic>> _monthDailyReports = <Map<String, dynamic>>[];
   DateTime? _weekStartUtc;
+  DateTime? _monthStartUtc;
 
   static const Map<String, Color> _categoryColors = <String, Color>{
     "sleep": Color(0xFF8C8ED4),
@@ -36,6 +39,14 @@ class ReportPageState extends State<ReportPage> {
     "poo": Color(0xFF8A6A5A),
     "medication": Color(0xFF72B37E),
   };
+  static const List<String> _timelineCategoryOrder = <String>[
+    "sleep",
+    "breastfeed",
+    "formula",
+    "poo",
+    "pee",
+    "medication",
+  ];
 
   @override
   void initState() {
@@ -79,6 +90,8 @@ class ReportPageState extends State<ReportPage> {
 
     final DateTime now = DateTime.now().toUtc();
     final DateTime weekStart = _toWeekStart(now);
+    final DateTime monthStart = DateTime.utc(now.year, now.month, 1);
+    final int daysInMonth = DateTime.utc(now.year, now.month + 1, 0).day;
     try {
       final Future<Map<String, dynamic>> dailyFuture =
           BabyAIApi.instance.dailyReport(now);
@@ -89,17 +102,32 @@ class ReportPageState extends State<ReportPage> {
         7,
         (int index) => _loadDailySafe(weekStart.add(Duration(days: index))),
       );
+      final Future<List<Map<String, dynamic>>>? monthDailyFuture =
+          widget.range == RecordRange.month
+              ? Future.wait(
+                  List<Future<Map<String, dynamic>>>.generate(
+                    daysInMonth,
+                    (int index) =>
+                        _loadDailySafe(monthStart.add(Duration(days: index))),
+                  ),
+                )
+              : null;
 
       final Map<String, dynamic> daily = await dailyFuture;
       final Map<String, dynamic> weekly = await weeklyFuture;
       final List<Map<String, dynamic>> weeklyDaily =
           await Future.wait(dayFutures);
+      final List<Map<String, dynamic>> monthDaily = monthDailyFuture == null
+          ? _monthDailyReports
+          : await monthDailyFuture;
 
       setState(() {
         _daily = daily;
         _weekly = weekly;
         _weeklyDailyReports = weeklyDaily;
         _weekStartUtc = weekStart;
+        _monthDailyReports = monthDaily;
+        _monthStartUtc = monthDailyFuture == null ? _monthStartUtc : monthStart;
       });
     } catch (error) {
       setState(() => _error = error.toString());
@@ -202,7 +230,8 @@ class ReportPageState extends State<ReportPage> {
       case RecordRange.week:
         return _weekLabel();
       case RecordRange.month:
-        return "${now.year}-${now.month.toString().padLeft(2, "0")}";
+        final DateTime monthBase = _monthStartUtc ?? now;
+        return "${monthBase.year}-${monthBase.month.toString().padLeft(2, "0")}";
     }
   }
 
@@ -384,6 +413,283 @@ class ReportPageState extends State<ReportPage> {
     return minutes < 0 ? 0 : minutes;
   }
 
+  String? _categoryKeyForEvent(_DailyEventItem event) {
+    switch (event.type) {
+      case "SLEEP":
+        return "sleep";
+      case "BREASTFEED":
+        return "breastfeed";
+      case "FORMULA":
+        return "formula";
+      case "PEE":
+        return "pee";
+      case "POO":
+        return "poo";
+      case "MEDICATION":
+        return "medication";
+      default:
+        return null;
+    }
+  }
+
+  int _defaultMinutesForEventType(String type) {
+    switch (type) {
+      case "FORMULA":
+        return 15;
+      case "BREASTFEED":
+        return 18;
+      case "SLEEP":
+        return 30;
+      case "POO":
+        return 7;
+      case "PEE":
+        return 5;
+      case "MEDICATION":
+        return 8;
+      default:
+        return 5;
+    }
+  }
+
+  DateTime _effectiveEndTime(_DailyEventItem event) {
+    final DateTime? end = event.endTime;
+    if (end != null && end.isAfter(event.startTime)) {
+      return end;
+    }
+    final int durationFromValue = _durationForEvent(event);
+    final int minutes = durationFromValue > 0
+        ? durationFromValue
+        : _defaultMinutesForEventType(event.type);
+    return event.startTime.add(Duration(minutes: minutes));
+  }
+
+  Map<String, double> _eventBasedDailyMinutes(List<_DailyEventItem> events) {
+    final Map<String, double> totals = <String, double>{
+      for (final String key in _categoryColors.keys) key: 0,
+    };
+    for (final _DailyEventItem event in events) {
+      final String? category = _categoryKeyForEvent(event);
+      if (category == null) {
+        continue;
+      }
+      final DateTime dayStart = DateTime(
+        event.startTime.year,
+        event.startTime.month,
+        event.startTime.day,
+      );
+      final DateTime dayEnd = dayStart.add(const Duration(days: 1));
+      final DateTime start = event.startTime.isBefore(dayStart)
+          ? dayStart
+          : event.startTime;
+      final DateTime end = _effectiveEndTime(event).isAfter(dayEnd)
+          ? dayEnd
+          : _effectiveEndTime(event);
+      int minutes = end.difference(start).inMinutes;
+      if (minutes <= 0) {
+        minutes = _defaultMinutesForEventType(event.type);
+      }
+      totals[category] = (totals[category] ?? 0) + minutes.toDouble();
+    }
+    return totals;
+  }
+
+  List<Map<String, double>> _emptyHourBuckets() {
+    return List<Map<String, double>>.generate(
+      24,
+      (_) => <String, double>{
+        for (final String key in _categoryColors.keys) key: 0,
+      },
+    );
+  }
+
+  void _accumulateEventHourBuckets(
+    _DailyEventItem event,
+    List<Map<String, double>> hourBuckets, {
+    double weight = 1,
+  }) {
+    final String? category = _categoryKeyForEvent(event);
+    if (category == null) {
+      return;
+    }
+
+    final DateTime dayStart = DateTime(
+      event.startTime.year,
+      event.startTime.month,
+      event.startTime.day,
+    );
+    final DateTime dayEnd = dayStart.add(const Duration(days: 1));
+    final DateTime rawEnd = _effectiveEndTime(event);
+    final DateTime start =
+        event.startTime.isBefore(dayStart) ? dayStart : event.startTime;
+    final DateTime end = rawEnd.isAfter(dayEnd) ? dayEnd : rawEnd;
+    if (!end.isAfter(start)) {
+      return;
+    }
+
+    DateTime cursor = start;
+    while (cursor.isBefore(end)) {
+      final DateTime hourStart = DateTime(
+        cursor.year,
+        cursor.month,
+        cursor.day,
+        cursor.hour,
+      );
+      final DateTime hourEnd = hourStart.add(const Duration(hours: 1));
+      final DateTime chunkEnd = hourEnd.isBefore(end) ? hourEnd : end;
+      final double minutes = chunkEnd.difference(cursor).inSeconds / 60;
+      if (minutes > 0) {
+        final int hourIndex = hourStart.hour.clamp(0, 23);
+        hourBuckets[hourIndex][category] =
+            (hourBuckets[hourIndex][category] ?? 0) + (minutes * weight);
+      }
+      cursor = chunkEnd;
+    }
+  }
+
+  List<Map<String, double>> _hourBucketsForReport(Map<String, dynamic>? report) {
+    final List<Map<String, double>> buckets = _emptyHourBuckets();
+    final List<_DailyEventItem> events = _parseDailyEvents(report);
+    for (final _DailyEventItem event in events) {
+      _accumulateEventHourBuckets(event, buckets);
+    }
+    return buckets;
+  }
+
+  List<_TimeColumnSegment> _segmentsFromHourBuckets(
+    List<Map<String, double>> buckets, {
+    required bool averageMode,
+  }) {
+    final List<_TimeColumnSegment> segments = <_TimeColumnSegment>[];
+    for (int hour = 0; hour < buckets.length; hour++) {
+      final Map<String, double> bucket = buckets[hour];
+      String? dominant;
+      double dominantMinutes = 0;
+      for (final String key in _timelineCategoryOrder) {
+        final double minutes = bucket[key] ?? 0;
+        if (minutes > dominantMinutes) {
+          dominant = key;
+          dominantMinutes = minutes;
+        }
+      }
+      if (dominant == null || dominantMinutes <= 0) {
+        continue;
+      }
+
+      final Color baseColor =
+          _categoryColors[dominant] ?? const Color(0xFF9E9E9E);
+      final double occupancy = (dominantMinutes / 60).clamp(0.08, 1);
+      final double alpha = averageMode
+          ? (0.24 + occupancy * 0.6).clamp(0.24, 0.86)
+          : (0.36 + occupancy * 0.56).clamp(0.36, 0.92);
+      segments.add(
+        _TimeColumnSegment(
+          startHour: hour.toDouble(),
+          endHour: hour + 1,
+          color: baseColor.withValues(alpha: alpha),
+        ),
+      );
+    }
+    return segments;
+  }
+
+  List<_TimeColumnBarData> _buildWeeklyTimeBars(BuildContext context) {
+    final DateTime base = _weekStartUtc ?? _toWeekStart(DateTime.now().toUtc());
+    return List<_TimeColumnBarData>.generate(7, (int index) {
+      final Map<String, dynamic>? report =
+          index < _weeklyDailyReports.length ? _weeklyDailyReports[index] : null;
+      final List<Map<String, double>> buckets = _hourBucketsForReport(report);
+      return _TimeColumnBarData(
+        label: _dayLabel(context, base.add(Duration(days: index))),
+        segments: _segmentsFromHourBuckets(
+          buckets,
+          averageMode: false,
+        ),
+      );
+    });
+  }
+
+  List<_TimeColumnBarData> _buildMonthlyWeekAverageBars(BuildContext context) {
+    if (_monthDailyReports.isEmpty) {
+      return <_TimeColumnBarData>[];
+    }
+    final Map<int, List<Map<String, dynamic>>> grouped =
+        <int, List<Map<String, dynamic>>>{};
+    for (final Map<String, dynamic> report in _monthDailyReports) {
+      final String rawDate = (report["date"] ?? "").toString().trim();
+      final DateTime? date = DateTime.tryParse(rawDate);
+      if (date == null) {
+        continue;
+      }
+      final int weekIndex = ((date.day - 1) ~/ 7).clamp(0, 4);
+      grouped.putIfAbsent(weekIndex, () => <Map<String, dynamic>>[]).add(report);
+    }
+    final List<int> keys = grouped.keys.toList()..sort();
+    return keys.map((int weekIdx) {
+      final List<Map<String, dynamic>> reports =
+          grouped[weekIdx] ?? <Map<String, dynamic>>[];
+      final List<Map<String, double>> buckets = _emptyHourBuckets();
+      for (final Map<String, dynamic> report in reports) {
+        final List<_DailyEventItem> events = _parseDailyEvents(report);
+        for (final _DailyEventItem event in events) {
+          _accumulateEventHourBuckets(event, buckets);
+        }
+      }
+      final double divisor = math.max(1, reports.length).toDouble();
+      for (final Map<String, double> bucket in buckets) {
+        for (final String key in _categoryColors.keys) {
+          bucket[key] = (bucket[key] ?? 0) / divisor;
+        }
+      }
+      return _TimeColumnBarData(
+        label: tr(context,
+            ko: "${weekIdx + 1}주", en: "W${weekIdx + 1}", es: "S${weekIdx + 1}"),
+        segments: _segmentsFromHourBuckets(
+          buckets,
+          averageMode: true,
+        ),
+      );
+    }).toList();
+  }
+
+  List<_TimeColumnBarData> _buildRangeTimeBars(BuildContext context) {
+    switch (widget.range) {
+      case RecordRange.day:
+        return <_TimeColumnBarData>[
+          _TimeColumnBarData(
+            label: tr(context, ko: "오늘", en: "Today", es: "Hoy"),
+            segments: _segmentsFromHourBuckets(
+              _hourBucketsForReport(_daily),
+              averageMode: false,
+            ),
+          ),
+        ];
+      case RecordRange.week:
+        return _buildWeeklyTimeBars(context);
+      case RecordRange.month:
+        return _buildMonthlyWeekAverageBars(context);
+    }
+  }
+
+  String _rangeTimelineTitle(BuildContext context) {
+    switch (widget.range) {
+      case RecordRange.day:
+        return tr(context,
+            ko: "1일 활동 막대(시간대별 24시간)",
+            en: "Daily timeline bars (24h)",
+            es: "Barras diarias (24h)");
+      case RecordRange.week:
+        return tr(context,
+            ko: "1주 활동 막대(시간대별 24시간)",
+            en: "Weekly timeline bars (24h)",
+            es: "Barras semanales (24h)");
+      case RecordRange.month:
+        return tr(context,
+            ko: "월 주차별 평균 활동 막대(시간대별 24시간)",
+            en: "Monthly week-average bars (24h)",
+            es: "Barras mensuales promedio por semana (24h)");
+    }
+  }
+
   String _eventSubtitle(BuildContext context, _DailyEventItem event) {
     switch (event.type) {
       case "FORMULA":
@@ -538,8 +844,16 @@ class ReportPageState extends State<ReportPage> {
 
   @override
   Widget build(BuildContext context) {
+    final List<_DailyEventItem> dayEvents = _parseDailyEvents(_daily);
+    final Map<String, double> eventBasedMinutes = _eventBasedDailyMinutes(
+      dayEvents,
+    );
+    final bool hasEventBasedMinutes = eventBasedMinutes.values
+            .fold<double>(0, (double a, double b) => a + b) >
+        0;
     final _DayMetrics dailyMetrics = _parseDaily(_daily);
-    final Map<String, double> dailyMinutes = _toEstimatedMinutes(dailyMetrics);
+    final Map<String, double> dailyMinutes =
+        hasEventBasedMinutes ? eventBasedMinutes : _toEstimatedMinutes(dailyMetrics);
     final double dailyTotal =
         dailyMinutes.values.fold<double>(0, (double a, double b) => a + b);
 
@@ -578,35 +892,7 @@ class ReportPageState extends State<ReportPage> {
       ),
     ];
 
-    final DateTime base = _weekStartUtc ?? _toWeekStart(DateTime.now().toUtc());
-    final List<StackedBarData> weeklyBars =
-        List<StackedBarData>.generate(7, (int index) {
-      final DateTime day = base.add(Duration(days: index));
-      final _DayMetrics metrics = _parseDaily(index < _weeklyDailyReports.length
-          ? _weeklyDailyReports[index]
-          : null);
-      final Map<String, double> minutes = _toEstimatedMinutes(metrics);
-      return StackedBarData(
-        label: _dayLabel(context, day),
-        segments: <StackedBarSegment>[
-          StackedBarSegment(
-              value: minutes["sleep"] ?? 0, color: _categoryColors["sleep"]!),
-          StackedBarSegment(
-              value: minutes["breastfeed"] ?? 0,
-              color: _categoryColors["breastfeed"]!),
-          StackedBarSegment(
-              value: minutes["formula"] ?? 0,
-              color: _categoryColors["formula"]!),
-          StackedBarSegment(
-              value: minutes["pee"] ?? 0, color: _categoryColors["pee"]!),
-          StackedBarSegment(
-              value: minutes["poo"] ?? 0, color: _categoryColors["poo"]!),
-          StackedBarSegment(
-              value: minutes["medication"] ?? 0,
-              color: _categoryColors["medication"]!),
-        ],
-      );
-    });
+    final List<_TimeColumnBarData> rangeTimeBars = _buildRangeTimeBars(context);
 
     final Map<dynamic, dynamic> trend =
         (_weekly?["trend"] as Map<dynamic, dynamic>?) ?? <dynamic, dynamic>{};
@@ -614,7 +900,6 @@ class ReportPageState extends State<ReportPage> {
         ((_weekly?["suggestions"] as List<dynamic>?) ?? <dynamic>[])
             .map((dynamic item) => item.toString())
             .toList();
-    final List<_DailyEventItem> dayEvents = _parseDailyEvents(_daily);
     const List<String> typeOrder = <String>[
       "FORMULA",
       "BREASTFEED",
@@ -747,9 +1032,9 @@ class ReportPageState extends State<ReportPage> {
                 children: <Widget>[
                   Text(
                     tr(context,
-                        ko: "1일 활동 비중(추정 시간)",
-                        en: "Daily activity share (estimated minutes)",
-                        es: "Participacion diaria (min estimados)"),
+                        ko: "1일 활동 비중(기록 기반)",
+                        en: "Daily activity share (record-based)",
+                        es: "Participacion diaria (segun registros)"),
                     style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                   const SizedBox(height: 8),
@@ -797,67 +1082,73 @@ class ReportPageState extends State<ReportPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
                   Text(
-                    tr(context,
-                        ko: "1주 활동 막대(일별 추정)",
-                        en: "Weekly stacked bars (estimated by day)",
-                        es: "Barras semanales (estimado por dia)"),
+                    _rangeTimelineTitle(context),
                     style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                   const SizedBox(height: 8),
                   SizedBox(
-                      height: 230,
-                      child: SimpleStackedBarChart(bars: weeklyBars)),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(
-                      tr(context,
-                          ko: "주간 추세",
-                          en: "Weekly trend",
-                          es: "Tendencia semanal"),
-                      style: const TextStyle(fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 8),
-                  Text("Formula total: ${trend["feeding_total_ml"] ?? "n/a"}"),
-                  Text("Sleep total: ${trend["sleep_total_min"] ?? "n/a"}"),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(
-                      tr(context,
-                          ko: "제안", en: "Suggestions", es: "Sugerencias"),
-                      style: const TextStyle(fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 8),
-                  if (suggestions.isEmpty)
-                    Text(tr(context,
-                        ko: "제안 데이터가 없습니다.",
-                        en: "No suggestions available.",
-                        es: "No hay sugerencias.")),
-                  ...suggestions.map(
-                    (String item) => Padding(
-                      padding: const EdgeInsets.only(bottom: 6),
-                      child: Text("- $item"),
+                    height: 260,
+                    child: _VerticalTimeBarChart(
+                      bars: rangeTimeBars,
+                      emptyText: tr(context,
+                          ko: "표시할 시간대 기록이 없습니다.",
+                          en: "No timeline records to show.",
+                          es: "No hay datos para la linea de tiempo."),
                     ),
                   ),
                 ],
               ),
             ),
           ),
+          if (widget.range == RecordRange.week) ...<Widget>[
+            const SizedBox(height: 12),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                        tr(context,
+                            ko: "주간 추세",
+                            en: "Weekly trend",
+                            es: "Tendencia semanal"),
+                        style: const TextStyle(fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 8),
+                    Text("Formula total: ${trend["feeding_total_ml"] ?? "n/a"}"),
+                    Text("Sleep total: ${trend["sleep_total_min"] ?? "n/a"}"),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                        tr(context,
+                            ko: "제안", en: "Suggestions", es: "Sugerencias"),
+                        style: const TextStyle(fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 8),
+                    if (suggestions.isEmpty)
+                      Text(tr(context,
+                          ko: "제안 데이터가 없습니다.",
+                          en: "No suggestions available.",
+                          es: "No hay sugerencias.")),
+                    ...suggestions.map(
+                      (String item) => Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Text("- $item"),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -913,6 +1204,185 @@ class _LegendChip extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+class _TimeColumnSegment {
+  const _TimeColumnSegment({
+    required this.startHour,
+    required this.endHour,
+    required this.color,
+  });
+
+  final double startHour;
+  final double endHour;
+  final Color color;
+}
+
+class _TimeColumnBarData {
+  const _TimeColumnBarData({
+    required this.label,
+    required this.segments,
+  });
+
+  final String label;
+  final List<_TimeColumnSegment> segments;
+}
+
+class _VerticalTimeBarChart extends StatelessWidget {
+  const _VerticalTimeBarChart({
+    required this.bars,
+    required this.emptyText,
+  });
+
+  final List<_TimeColumnBarData> bars;
+  final String emptyText;
+
+  @override
+  Widget build(BuildContext context) {
+    final bool hasData = bars.any((_TimeColumnBarData item) => item.segments.isNotEmpty);
+    if (!hasData) {
+      return Center(
+        child: Text(
+          emptyText,
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      );
+    }
+    final ColorScheme color = Theme.of(context).colorScheme;
+    return Column(
+      children: <Widget>[
+        Expanded(
+          child: CustomPaint(
+            painter: _VerticalTimeBarPainter(
+              bars: bars,
+              gridColor: color.outlineVariant.withValues(alpha: 0.35),
+              labelColor: color.onSurfaceVariant,
+            ),
+            child: const SizedBox.expand(),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: bars
+              .map(
+                (_TimeColumnBarData bar) => Expanded(
+                  child: Text(
+                    bar.label,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: color.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              )
+              .toList(),
+        ),
+      ],
+    );
+  }
+}
+
+class _VerticalTimeBarPainter extends CustomPainter {
+  _VerticalTimeBarPainter({
+    required this.bars,
+    required this.gridColor,
+    required this.labelColor,
+  });
+
+  final List<_TimeColumnBarData> bars;
+  final Color gridColor;
+  final Color labelColor;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (bars.isEmpty) {
+      return;
+    }
+    const double leftAxisWidth = 28;
+    const double topPadding = 6;
+    const double bottomPadding = 6;
+    final Rect chartRect = Rect.fromLTWH(
+      leftAxisWidth,
+      topPadding,
+      math.max(0, size.width - leftAxisWidth),
+      math.max(0, size.height - topPadding - bottomPadding),
+    );
+    if (chartRect.width <= 0 || chartRect.height <= 0) {
+      return;
+    }
+
+    final Paint gridPaint = Paint()
+      ..color = gridColor
+      ..strokeWidth = 1;
+
+    for (int hour = 0; hour <= 24; hour += 6) {
+      final double y = chartRect.top + (hour / 24) * chartRect.height;
+      canvas.drawLine(
+        Offset(chartRect.left, y),
+        Offset(chartRect.right, y),
+        gridPaint,
+      );
+      final TextPainter tp = TextPainter(
+        text: TextSpan(
+          text: hour.toString().padLeft(2, "0"),
+          style: TextStyle(
+            color: labelColor,
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout(minWidth: 0, maxWidth: leftAxisWidth - 6);
+      tp.paint(canvas, Offset(leftAxisWidth - tp.width - 4, y - tp.height / 2));
+    }
+
+    final double slotWidth = chartRect.width / bars.length;
+    final double barWidth = math.max(10, math.min(24, slotWidth * 0.58));
+    final Paint barBg = Paint()..color = gridColor.withValues(alpha: 0.2);
+
+    for (int i = 0; i < bars.length; i++) {
+      final _TimeColumnBarData bar = bars[i];
+      final double x =
+          chartRect.left + (slotWidth * i) + ((slotWidth - barWidth) / 2);
+
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(x, chartRect.top, barWidth, chartRect.height),
+          const Radius.circular(5),
+        ),
+        barBg,
+      );
+
+      for (final _TimeColumnSegment segment in bar.segments) {
+        final double startHour = segment.startHour.clamp(0, 24);
+        final double endHour = segment.endHour.clamp(0, 24);
+        if (endHour <= startHour) {
+          continue;
+        }
+        final double y1 = chartRect.top + (startHour / 24) * chartRect.height;
+        final double y2 = chartRect.top + (endHour / 24) * chartRect.height;
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromLTWH(x, y1, barWidth, math.max(1, y2 - y1)),
+            const Radius.circular(3),
+          ),
+          Paint()..color = segment.color,
+        );
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _VerticalTimeBarPainter oldDelegate) {
+    return oldDelegate.bars != bars ||
+        oldDelegate.gridColor != gridColor ||
+        oldDelegate.labelColor != labelColor;
   }
 }
 
