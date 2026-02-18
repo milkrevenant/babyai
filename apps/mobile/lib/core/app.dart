@@ -445,6 +445,33 @@ class _HomeShellState extends State<_HomeShell> {
     final String queryLower = normalizedQuery?.toLowerCase() ?? "";
     final Map<String, dynamic> prefill =
         Map<String, dynamic>.from(payload.asPrefillMap());
+    final bool asksStartAction = _containsAny(queryLower, <String>[
+      "시작",
+      "start",
+      "begin",
+      "재우기",
+      "잠들",
+    ]);
+    final bool asksEndAction = _containsAny(queryLower, <String>[
+      "종료",
+      "완료",
+      "끝",
+      "종료해",
+      "마침",
+      "end",
+      "stop",
+      "complete",
+      "finished",
+      "wake",
+      "woke",
+      "기상",
+      "깼",
+    ]);
+    if (asksStartAction && !asksEndAction) {
+      prefill["entry_action"] = "start";
+    } else if (asksEndAction) {
+      prefill["entry_action"] = "end";
+    }
 
     if (normalizedFeature == "chat") {
       return _AssistantRecordAction(
@@ -549,7 +576,14 @@ class _HomeShellState extends State<_HomeShell> {
 
     bool autoSubmit =
         normalizedFeature.isNotEmpty || _hasRecordIntent(normalizedQuery);
-    if (tile == HomeTileType.formula && !prefill.containsKey("amount_ml")) {
+    final String entryAction =
+        (prefill["entry_action"] ?? "").toString().trim().toLowerCase();
+    final bool isStartCommand = entryAction == "start";
+    final bool isEndCommand = entryAction == "end" || entryAction == "complete";
+
+    if (tile == HomeTileType.formula &&
+        !prefill.containsKey("amount_ml") &&
+        !isStartCommand) {
       autoSubmit = false;
     }
     if (tile == HomeTileType.diaper && !prefill.containsKey("diaper_type")) {
@@ -557,7 +591,22 @@ class _HomeShellState extends State<_HomeShell> {
     }
     if (tile == HomeTileType.sleep &&
         !prefill.containsKey("sleep_action") &&
-        !prefill.containsKey("duration_min")) {
+        !prefill.containsKey("duration_min") &&
+        !isStartCommand &&
+        !isEndCommand) {
+      autoSubmit = false;
+    }
+    if (tile == HomeTileType.breastfeed &&
+        !prefill.containsKey("duration_min") &&
+        !isStartCommand &&
+        !isEndCommand) {
+      autoSubmit = false;
+    }
+    if (tile == HomeTileType.weaning &&
+        !prefill.containsKey("memo") &&
+        !prefill.containsKey("grams") &&
+        !isStartCommand &&
+        !isEndCommand) {
       autoSubmit = false;
     }
     if (tile == HomeTileType.medication) {
@@ -567,10 +616,12 @@ class _HomeShellState extends State<_HomeShell> {
               "")
           .toString()
           .trim();
-      if (medicationName.isEmpty) {
+      if (medicationName.isEmpty && !isStartCommand) {
         autoSubmit = false;
       } else {
-        prefill["medication_name"] = medicationName;
+        if (medicationName.isNotEmpty) {
+          prefill["medication_name"] = medicationName;
+        }
       }
     }
 
@@ -1005,10 +1056,12 @@ class _HomeShellState extends State<_HomeShell> {
       context: anchorContext,
       position: position,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      constraints: const BoxConstraints(minWidth: 72, maxWidth: 116),
       items: candidates
           .map(
             (RecordRange value) => PopupMenuItem<RecordRange>(
               value: value,
+              height: 34,
               child: Text(_recordRangeLabel(anchorContext, value)),
             ),
           )
@@ -1032,7 +1085,7 @@ class _HomeShellState extends State<_HomeShell> {
             customBorder: const StadiumBorder(),
             onTap: () => _openRecordRangeMenu(anchorContext),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: <Widget>[
@@ -1040,8 +1093,8 @@ class _HomeShellState extends State<_HomeShell> {
                     _recordRangeLabel(context, _recordRange),
                     style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
-                  const SizedBox(width: 6),
-                  const Icon(Icons.arrow_drop_down, size: 18),
+                  const SizedBox(width: 3),
+                  const Icon(Icons.arrow_drop_down, size: 16),
                 ],
               ),
             ),
@@ -1467,6 +1520,7 @@ class _HeaderChoice extends StatelessWidget {
           ? color.primaryContainer.withValues(alpha: 0.92)
           : color.surfaceContainerHighest.withValues(alpha: 0.45),
       borderRadius: BorderRadius.circular(999),
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
         borderRadius: BorderRadius.circular(999),
         onTap: onTap,

@@ -449,6 +449,107 @@ func TestQuickLandingSnapshotReturnsStructuredDashboardData(t *testing.T) {
 	}
 }
 
+func TestQuickLandingSnapshotIncludesExpandedOpenEventFields(t *testing.T) {
+	resetDatabase(t)
+	fixture := seedOwnerFixture(t)
+	base := time.Now().UTC().Add(-3 * time.Hour).Truncate(time.Second)
+
+	startCases := []struct {
+		eventType string
+		offset    time.Duration
+		value     map[string]any
+		metadata  map[string]any
+	}{
+		{eventType: "FORMULA", offset: 0, value: map[string]any{"memo": "formula start"}},
+		{eventType: "BREASTFEED", offset: 10 * time.Minute, value: map[string]any{"memo": "breastfeed start"}},
+		{eventType: "SLEEP", offset: 20 * time.Minute, value: map[string]any{"memo": "sleep start"}},
+		{eventType: "POO", offset: 30 * time.Minute, value: map[string]any{"memo": "diaper start"}},
+		{
+			eventType: "MEMO",
+			offset:    40 * time.Minute,
+			value: map[string]any{
+				"memo":         "banana puree",
+				"category":     "WEANING",
+				"weaning_type": "meal",
+			},
+			metadata: map[string]any{
+				"entry_kind": "WEANING",
+			},
+		},
+		{
+			eventType: "MEDICATION",
+			offset:    50 * time.Minute,
+			value: map[string]any{
+				"name": "vitamin-d",
+				"memo": "medication start",
+			},
+		},
+	}
+
+	for _, item := range startCases {
+		payload := map[string]any{
+			"baby_id":    fixture.BabyID,
+			"type":       item.eventType,
+			"start_time": base.Add(item.offset).Format(time.RFC3339),
+			"value":      item.value,
+		}
+		if item.metadata != nil {
+			payload["metadata"] = item.metadata
+		}
+
+		rec := performRequest(
+			t,
+			newTestRouter(t),
+			http.MethodPost,
+			"/api/v1/events/start",
+			signToken(t, fixture.UserID, nil),
+			payload,
+			nil,
+		)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("start %s expected 200, got %d body=%s", item.eventType, rec.Code, rec.Body.String())
+		}
+	}
+
+	rec := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodGet,
+		"/api/v1/quick/landing-snapshot?baby_id="+fixture.BabyID+"&tz_offset=+00:00",
+		signToken(t, fixture.UserID, nil),
+		nil,
+		nil,
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	body := decodeJSONMap(t, rec)
+	assertNotNilField := func(name string) {
+		t.Helper()
+		if body[name] == nil {
+			t.Fatalf("expected %s to be present", name)
+		}
+	}
+
+	assertNotNilField("open_formula_event_id")
+	assertNotNilField("open_formula_start_time")
+	assertNotNilField("open_breastfeed_event_id")
+	assertNotNilField("open_breastfeed_start_time")
+	assertNotNilField("open_sleep_event_id")
+	assertNotNilField("open_sleep_start_time")
+	assertNotNilField("open_diaper_event_id")
+	assertNotNilField("open_diaper_start_time")
+	assertNotNilField("open_weaning_event_id")
+	assertNotNilField("open_weaning_start_time")
+	assertNotNilField("open_medication_event_id")
+	assertNotNilField("open_medication_start_time")
+
+	if diaperType, ok := body["open_diaper_type"].(string); !ok || diaperType != "POO" {
+		t.Fatalf("expected open_diaper_type=POO, got %v", body["open_diaper_type"])
+	}
+}
+
 func TestQuickLandingSnapshotRangeWeekReturnsAveragesAndGraph(t *testing.T) {
 	resetDatabase(t)
 	fixture := seedOwnerFixture(t)

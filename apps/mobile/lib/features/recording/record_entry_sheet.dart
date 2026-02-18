@@ -11,6 +11,8 @@ class RecordEntryInput {
     required this.value,
     this.endTime,
     this.metadata,
+    this.lifecycleAction = RecordLifecycleAction.createClosed,
+    this.targetEventId,
   });
 
   final String type;
@@ -18,7 +20,11 @@ class RecordEntryInput {
   final DateTime? endTime;
   final Map<String, dynamic> value;
   final Map<String, dynamic>? metadata;
+  final RecordLifecycleAction lifecycleAction;
+  final String? targetEventId;
 }
+
+enum RecordLifecycleAction { createClosed, startOnly, completeOpen }
 
 Future<RecordEntryInput?> showRecordEntrySheet({
   required BuildContext context,
@@ -64,7 +70,76 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
   String _diaperType = "PEE";
   String _weaningType = "meal";
   _TimeField _activeTimeField = _TimeField.start;
+  bool _startOnlyMode = false;
+  String? _openEventId;
   String? _error;
+
+  String _tileOpenEventKey() {
+    switch (widget.tile) {
+      case HomeTileType.formula:
+        return "open_formula_event_id";
+      case HomeTileType.breastfeed:
+        return "open_breastfeed_event_id";
+      case HomeTileType.weaning:
+        return "open_weaning_event_id";
+      case HomeTileType.diaper:
+        return "open_diaper_event_id";
+      case HomeTileType.sleep:
+        return "open_sleep_event_id";
+      case HomeTileType.medication:
+        return "open_medication_event_id";
+      case HomeTileType.memo:
+        return "open_memo_event_id";
+    }
+  }
+
+  String _tileOpenStartKey() {
+    switch (widget.tile) {
+      case HomeTileType.formula:
+        return "open_formula_start_time";
+      case HomeTileType.breastfeed:
+        return "open_breastfeed_start_time";
+      case HomeTileType.weaning:
+        return "open_weaning_start_time";
+      case HomeTileType.diaper:
+        return "open_diaper_start_time";
+      case HomeTileType.sleep:
+        return "open_sleep_start_time";
+      case HomeTileType.medication:
+        return "open_medication_start_time";
+      case HomeTileType.memo:
+        return "open_memo_start_time";
+    }
+  }
+
+  String _tileOpenValueKey() {
+    switch (widget.tile) {
+      case HomeTileType.formula:
+        return "open_formula_value";
+      case HomeTileType.breastfeed:
+        return "open_breastfeed_value";
+      case HomeTileType.weaning:
+        return "open_weaning_value";
+      case HomeTileType.diaper:
+        return "open_diaper_value";
+      case HomeTileType.sleep:
+        return "open_sleep_value";
+      case HomeTileType.medication:
+        return "open_medication_value";
+      case HomeTileType.memo:
+        return "open_memo_value";
+    }
+  }
+
+  RecordLifecycleAction _resolveLifecycleAction() {
+    if (_hasOpenEvent) {
+      return RecordLifecycleAction.completeOpen;
+    }
+    if (_isStartableTile && _startOnlyMode) {
+      return RecordLifecycleAction.startOnly;
+    }
+    return RecordLifecycleAction.createClosed;
+  }
 
   @override
   void initState() {
@@ -88,34 +163,64 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
     final Object? weaningType = prefill["weaning_type"];
     final Object? sleepAction = prefill["sleep_action"];
 
+    final String openEventId =
+        (prefill["open_event_id"] ?? prefill[_tileOpenEventKey()] ?? "")
+            .toString()
+            .trim();
+    if (openEventId.isNotEmpty) {
+      _openEventId = openEventId;
+      _startOnlyMode = false;
+    }
+
     final DateTime? prefilledStart =
         _parseDateTimeFromRaw(prefill["start_time"]) ??
-            _parseDateTimeFromRaw(prefill["sleep_start_time"]);
+            _parseDateTimeFromRaw(prefill["sleep_start_time"]) ??
+            _parseDateTimeFromRaw(prefill["open_start_time"]) ??
+            _parseDateTimeFromRaw(prefill[_tileOpenStartKey()]) ??
+            _parseDateTimeFromRaw(prefill["open_formula_start_time"]) ??
+            _parseDateTimeFromRaw(prefill["open_sleep_start_time"]);
     final DateTime? prefilledEnd = _parseDateTimeFromRaw(prefill["end_time"]) ??
         _parseDateTimeFromRaw(prefill["sleep_end_time"]);
+    final Map<String, dynamic> tileOpenValue =
+        _asStringDynamicMap(prefill[_tileOpenValueKey()]);
+    final Map<String, dynamic> openValue = tileOpenValue.isNotEmpty
+        ? tileOpenValue
+        : _asStringDynamicMap(prefill["open_value"]);
 
     if (prefilledStart != null) {
       _startTime = prefilledStart;
     }
     if (prefilledEnd != null) {
       _endTime = prefilledEnd;
+    } else if (_hasOpenEvent) {
+      _endTime = DateTime.now();
     }
 
-    if (amountMl is int && amountMl > 0) {
-      _amountController.text = amountMl.toString();
-    } else if (amountMl is String && amountMl.trim().isNotEmpty) {
-      _amountController.text = amountMl.trim();
+    final Object? mergedAmount =
+        amountMl ?? openValue["ml"] ?? openValue["amount_ml"];
+    if (mergedAmount is int && mergedAmount > 0) {
+      _amountController.text = mergedAmount.toString();
+    } else if (mergedAmount is double && mergedAmount > 0) {
+      _amountController.text = mergedAmount.round().toString();
+    } else if (mergedAmount is String && mergedAmount.trim().isNotEmpty) {
+      _amountController.text = mergedAmount.trim();
     }
 
-    if (durationMin is int && durationMin > 0) {
-      _durationController.text = durationMin.toString();
-      if (prefilledEnd == null) {
-        _endTime = _startTime.add(Duration(minutes: durationMin));
+    final Object? mergedDuration = durationMin ??
+        openValue["duration_min"] ??
+        openValue["duration_minutes"];
+    if (mergedDuration is int && mergedDuration > 0) {
+      _durationController.text = mergedDuration.toString();
+      if (prefilledEnd == null && !_hasOpenEvent) {
+        _endTime = _startTime.add(Duration(minutes: mergedDuration));
       }
-    } else if (durationMin is String && durationMin.trim().isNotEmpty) {
-      _durationController.text = durationMin.trim();
-      final int? parsed = int.tryParse(durationMin.trim());
-      if (parsed != null && parsed > 0 && prefilledEnd == null) {
+    } else if (mergedDuration is String && mergedDuration.trim().isNotEmpty) {
+      _durationController.text = mergedDuration.trim();
+      final int? parsed = int.tryParse(mergedDuration.trim());
+      if (parsed != null &&
+          parsed > 0 &&
+          prefilledEnd == null &&
+          !_hasOpenEvent) {
         _endTime = _startTime.add(Duration(minutes: parsed));
       }
     }
@@ -126,8 +231,9 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
       _gramsController.text = grams.trim();
     }
 
-    if (memo is String && memo.trim().isNotEmpty) {
-      _memoController.text = memo.trim();
+    final Object? mergedMemo = memo ?? openValue["memo"] ?? openValue["note"];
+    if (mergedMemo is String && mergedMemo.trim().isNotEmpty) {
+      _memoController.text = mergedMemo.trim();
     } else if (query is String && query.trim().isNotEmpty) {
       _memoController.text = query.trim();
     }
@@ -136,6 +242,36 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
         query.trim().isNotEmpty &&
         _nameController.text.isEmpty) {
       _nameController.text = query.trim();
+    }
+
+    final Object? medicationName = prefill["medication_name"] ??
+        openValue["name"] ??
+        openValue["medication_type"];
+    if (medicationName is String &&
+        medicationName.trim().isNotEmpty &&
+        _nameController.text.isEmpty) {
+      _nameController.text = medicationName.trim();
+    }
+    final Object? medicationDose = prefill["dose"] ?? openValue["dose"];
+    if (medicationDose is int && medicationDose > 0) {
+      _doseController.text = medicationDose.toString();
+    } else if (medicationDose is String && medicationDose.trim().isNotEmpty) {
+      _doseController.text = medicationDose.trim();
+    }
+
+    final Object? mergedDiaperType =
+        diaperType ?? prefill["open_diaper_type"] ?? openValue["diaper_type"];
+    if (mergedDiaperType is String && mergedDiaperType.trim().isNotEmpty) {
+      final String normalized = mergedDiaperType.trim().toUpperCase();
+      if (normalized == "PEE" || normalized == "POO") {
+        _diaperType = normalized;
+      }
+    } else if (widget.tile == HomeTileType.diaper && _hasOpenEvent) {
+      final String normalized =
+          (prefill["type"] ?? "").toString().trim().toUpperCase();
+      if (normalized == "PEE" || normalized == "POO") {
+        _diaperType = normalized;
+      }
     }
 
     if (diaperType is String && diaperType.trim().isNotEmpty) {
@@ -151,6 +287,13 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
           .contains(normalized)) {
         _weaningType = normalized;
       }
+    } else {
+      final String normalized =
+          (openValue["weaning_type"] ?? "").toString().trim().toLowerCase();
+      if (const <String>{"meal", "snack", "fruit", "soup"}
+          .contains(normalized)) {
+        _weaningType = normalized;
+      }
     }
 
     if (sleepAction is String && sleepAction.trim().isNotEmpty) {
@@ -158,7 +301,7 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
       if (action == "end" && prefilledEnd == null) {
         _endTime = DateTime.now();
       }
-      if (action == "start" && prefilledEnd == null) {
+      if (action == "start" && prefilledEnd == null && !_hasOpenEvent) {
         _endTime = _startTime.add(const Duration(minutes: 30));
       }
     }
@@ -166,6 +309,91 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
     if (!_endTime.isAfter(_startTime)) {
       _endTime = _startTime.add(const Duration(minutes: 30));
     }
+  }
+
+  bool get _isStartableTile {
+    switch (widget.tile) {
+      case HomeTileType.formula:
+      case HomeTileType.breastfeed:
+      case HomeTileType.weaning:
+      case HomeTileType.diaper:
+      case HomeTileType.sleep:
+      case HomeTileType.medication:
+        return true;
+      case HomeTileType.memo:
+        return false;
+    }
+  }
+
+  bool get _hasOpenEvent => _openEventId != null && _openEventId!.isNotEmpty;
+
+  bool get _shouldCollectEndTime {
+    if (!_isStartableTile) {
+      return false;
+    }
+    return _hasOpenEvent || !_startOnlyMode;
+  }
+
+  Widget _lifecycleModeSelector() {
+    if (!_isStartableTile || _hasOpenEvent) {
+      return const SizedBox.shrink();
+    }
+    return Wrap(
+      spacing: 8,
+      children: <Widget>[
+        ChoiceChip(
+          label: Text(
+            tr(context, ko: "시작만 저장", en: "Start only", es: "Solo inicio"),
+          ),
+          selected: _startOnlyMode,
+          onSelected: (_) => setState(() => _startOnlyMode = true),
+        ),
+        ChoiceChip(
+          label: Text(
+            tr(context, ko: "시작+종료 저장", en: "Start + end", es: "Inicio + fin"),
+          ),
+          selected: !_startOnlyMode,
+          onSelected: (_) => setState(() => _startOnlyMode = false),
+        ),
+      ],
+    );
+  }
+
+  Widget _openEventBanner() {
+    if (!_hasOpenEvent) {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Material(
+        color: Theme.of(context)
+            .colorScheme
+            .primaryContainer
+            .withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            children: <Widget>[
+              const Icon(Icons.timelapse_rounded, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  tr(
+                    context,
+                    ko: "진행 중 기록이 있어 완료 입력으로 저장됩니다.",
+                    en: "An in-progress record was found. Save will complete it.",
+                    es: "Se encontro un registro en progreso. Guardar lo completa.",
+                  ),
+                  style: const TextStyle(
+                      fontSize: 12.5, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -220,6 +448,21 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
     } catch (_) {
       return null;
     }
+  }
+
+  Map<String, dynamic> _asStringDynamicMap(Object? raw) {
+    if (raw is Map<String, dynamic>) {
+      return raw;
+    }
+    if (raw is Map) {
+      return raw.map(
+        (dynamic key, dynamic value) => MapEntry<String, dynamic>(
+          key.toString(),
+          value,
+        ),
+      );
+    }
+    return const <String, dynamic>{};
   }
 
   int _sleepDurationMinutes() {
@@ -377,18 +620,7 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
       case HomeTileType.formula:
         final int? amount = _parsePositiveInt(_amountController);
         final String memo = _memoController.text.trim();
-        if (amount == null || amount <= 0) {
-          setState(() {
-            _error = tr(
-              context,
-              ko: "분유량(ml)을 입력해 주세요.",
-              en: "Enter formula amount (ml).",
-              es: "Ingrese cantidad de formula (ml).",
-            );
-          });
-          return;
-        }
-        if (!_endTime.isAfter(start)) {
+        if (_shouldCollectEndTime && !_endTime.isAfter(start)) {
           setState(() {
             _error = tr(
               context,
@@ -399,42 +631,74 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
           });
           return;
         }
+        final Map<String, dynamic> value = <String, dynamic>{
+          if (amount != null && amount > 0) "ml": amount,
+          if (_shouldCollectEndTime) "duration_min": _sleepDurationMinutes(),
+          if (memo.isNotEmpty) "memo": memo,
+        };
+        final RecordLifecycleAction action = _resolveLifecycleAction();
         Navigator.of(context).pop(
           RecordEntryInput(
             type: "FORMULA",
             startTime: start,
-            endTime: _endTime,
-            value: <String, dynamic>{
-              "ml": amount,
-              "duration_min": _sleepDurationMinutes(),
-              if (memo.isNotEmpty) "memo": memo,
-            },
+            endTime: _shouldCollectEndTime ? _endTime : null,
+            value: value,
+            lifecycleAction: action,
+            targetEventId: _hasOpenEvent ? _openEventId : null,
           ),
         );
         return;
       case HomeTileType.breastfeed:
-        final int duration = _parsePositiveInt(_durationController) ?? 0;
         final String memo = _memoController.text.trim();
+        if (_shouldCollectEndTime && !_endTime.isAfter(start)) {
+          setState(() {
+            _error = tr(
+              context,
+              ko: "종료 시각은 시작 시각보다 뒤여야 합니다.",
+              en: "End time must be after start time.",
+              es: "La hora de fin debe ser posterior al inicio.",
+            );
+          });
+          return;
+        }
+        final int duration = _shouldCollectEndTime
+            ? _sleepDurationMinutes()
+            : (_parsePositiveInt(_durationController) ?? 0);
+        final RecordLifecycleAction action = _resolveLifecycleAction();
         Navigator.of(context).pop(
           RecordEntryInput(
             type: "BREASTFEED",
             startTime: start,
-            endTime:
-                duration > 0 ? start.add(Duration(minutes: duration)) : null,
+            endTime: _shouldCollectEndTime ? _endTime : null,
             value: <String, dynamic>{
-              "duration_min": duration,
+              if (duration > 0) "duration_min": duration,
               if (memo.isNotEmpty) "memo": memo,
             },
+            lifecycleAction: action,
+            targetEventId: _hasOpenEvent ? _openEventId : null,
           ),
         );
         return;
       case HomeTileType.weaning:
         final int grams = _parsePositiveInt(_gramsController) ?? 0;
         final String memo = _memoController.text.trim();
+        if (_shouldCollectEndTime && !_endTime.isAfter(start)) {
+          setState(() {
+            _error = tr(
+              context,
+              ko: "종료 시각은 시작 시각보다 뒤여야 합니다.",
+              en: "End time must be after start time.",
+              es: "La hora de fin debe ser posterior al inicio.",
+            );
+          });
+          return;
+        }
+        final RecordLifecycleAction action = _resolveLifecycleAction();
         Navigator.of(context).pop(
           RecordEntryInput(
             type: "MEMO",
             startTime: start,
+            endTime: _shouldCollectEndTime ? _endTime : null,
             value: <String, dynamic>{
               "memo": memo.isEmpty
                   ? "이유식(${_weaningTypeLabel(_weaningType)})"
@@ -442,30 +706,52 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
               if (grams > 0) "grams": grams,
               "category": "WEANING",
               "weaning_type": _weaningType,
+              if (_shouldCollectEndTime)
+                "duration_min": _sleepDurationMinutes(),
             },
             metadata: <String, dynamic>{
               "entry_kind": "WEANING",
               "weaning_type": _weaningType,
             },
+            lifecycleAction: action,
+            targetEventId: _hasOpenEvent ? _openEventId : null,
           ),
         );
         return;
       case HomeTileType.diaper:
         final String memo = _memoController.text.trim();
+        if (_shouldCollectEndTime && !_endTime.isAfter(start)) {
+          setState(() {
+            _error = tr(
+              context,
+              ko: "종료 시각은 시작 시각보다 뒤여야 합니다.",
+              en: "End time must be after start time.",
+              es: "La hora de fin debe ser posterior al inicio.",
+            );
+          });
+          return;
+        }
+        final RecordLifecycleAction action = _resolveLifecycleAction();
         Navigator.of(context).pop(
           RecordEntryInput(
             type: _diaperType,
             startTime: start,
+            endTime: _shouldCollectEndTime ? _endTime : null,
             value: <String, dynamic>{
               "count": 1,
+              "diaper_type": _diaperType,
               if (memo.isNotEmpty) "memo": memo,
+              if (_shouldCollectEndTime)
+                "duration_min": _sleepDurationMinutes(),
             },
+            lifecycleAction: action,
+            targetEventId: _hasOpenEvent ? _openEventId : null,
           ),
         );
         return;
       case HomeTileType.sleep:
         final String memo = _memoController.text.trim();
-        if (!_endTime.isAfter(start)) {
+        if (_shouldCollectEndTime && !_endTime.isAfter(start)) {
           setState(() {
             _error = tr(
               context,
@@ -476,23 +762,41 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
           });
           return;
         }
-        final int duration = _sleepDurationMinutes();
+        final int duration =
+            _shouldCollectEndTime ? _sleepDurationMinutes() : 0;
+        final RecordLifecycleAction action = _resolveLifecycleAction();
         Navigator.of(context).pop(
           RecordEntryInput(
             type: "SLEEP",
             startTime: start,
-            endTime: _endTime,
+            endTime: _shouldCollectEndTime ? _endTime : null,
             value: <String, dynamic>{
               "duration_min": duration,
+              "sleep_action": _shouldCollectEndTime ? "END" : "START",
               if (memo.isNotEmpty) "memo": memo,
             },
+            lifecycleAction: action,
+            targetEventId: _hasOpenEvent ? _openEventId : null,
           ),
         );
         return;
       case HomeTileType.medication:
         final String memo = _memoController.text.trim();
         final String medicationType = _nameController.text.trim();
-        if (medicationType.isEmpty) {
+        if (_shouldCollectEndTime && !_endTime.isAfter(start)) {
+          setState(() {
+            _error = tr(
+              context,
+              ko: "종료 시각은 시작 시각보다 뒤여야 합니다.",
+              en: "End time must be after start time.",
+              es: "La hora de fin debe ser posterior al inicio.",
+            );
+          });
+          return;
+        }
+        final RecordLifecycleAction action = _resolveLifecycleAction();
+        if (medicationType.isEmpty &&
+            action != RecordLifecycleAction.startOnly) {
           setState(() {
             _error = tr(
               context,
@@ -508,12 +812,17 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
           RecordEntryInput(
             type: "MEDICATION",
             startTime: start,
+            endTime: _shouldCollectEndTime ? _endTime : null,
             value: <String, dynamic>{
-              "name": medicationType,
-              "medication_type": medicationType,
+              if (medicationType.isNotEmpty) "name": medicationType,
+              if (medicationType.isNotEmpty) "medication_type": medicationType,
               if (dose != null && dose > 0) "dose": dose,
               if (memo.isNotEmpty) "memo": memo,
+              if (_shouldCollectEndTime)
+                "duration_min": _sleepDurationMinutes(),
             },
+            lifecycleAction: action,
+            targetEventId: _hasOpenEvent ? _openEventId : null,
           ),
         );
         return;
@@ -559,7 +868,10 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
       case HomeTileType.formula:
         return Column(
           children: <Widget>[
-            _inlineTimeEditor(includeEnd: true),
+            _openEventBanner(),
+            _lifecycleModeSelector(),
+            if (_isStartableTile && !_hasOpenEvent) const SizedBox(height: 8),
+            _inlineTimeEditor(includeEnd: _shouldCollectEndTime),
             const SizedBox(height: 8),
             TextField(
               controller: _amountController,
@@ -592,7 +904,33 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
       case HomeTileType.breastfeed:
         return Column(
           children: <Widget>[
-            _inlineTimeEditor(includeEnd: false),
+            _openEventBanner(),
+            _lifecycleModeSelector(),
+            if (_isStartableTile && !_hasOpenEvent) const SizedBox(height: 8),
+            _inlineTimeEditor(includeEnd: _shouldCollectEndTime),
+            const SizedBox(height: 8),
+            InputDecorator(
+              decoration: InputDecoration(
+                labelText: tr(
+                  context,
+                  ko: "수유시간",
+                  en: "Feeding duration",
+                  es: "Duracion de lactancia",
+                ),
+                border: const OutlineInputBorder(),
+              ),
+              child: Text(
+                _shouldCollectEndTime
+                    ? _sleepDurationLabel()
+                    : tr(
+                        context,
+                        ko: "시작만 저장 모드",
+                        en: "Start-only mode",
+                        es: "Modo solo inicio",
+                      ),
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
             const SizedBox(height: 8),
             TextField(
               controller: _durationController,
@@ -600,9 +938,9 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
               decoration: InputDecoration(
                 labelText: tr(
                   context,
-                  ko: "수유 시간 (분)",
-                  en: "Duration (min)",
-                  es: "Duracion (min)",
+                  ko: "수유 시간(분, 선택)",
+                  en: "Duration (min, optional)",
+                  es: "Duracion (min, opcional)",
                 ),
                 border: const OutlineInputBorder(),
               ),
@@ -625,7 +963,10 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
       case HomeTileType.weaning:
         return Column(
           children: <Widget>[
-            _inlineTimeEditor(includeEnd: false),
+            _openEventBanner(),
+            _lifecycleModeSelector(),
+            if (_isStartableTile && !_hasOpenEvent) const SizedBox(height: 8),
+            _inlineTimeEditor(includeEnd: _shouldCollectEndTime),
             const SizedBox(height: 8),
             DropdownButtonFormField<String>(
               initialValue: _weaningType,
@@ -686,7 +1027,10 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
       case HomeTileType.diaper:
         return Column(
           children: <Widget>[
-            _inlineTimeEditor(includeEnd: false),
+            _openEventBanner(),
+            _lifecycleModeSelector(),
+            if (_isStartableTile && !_hasOpenEvent) const SizedBox(height: 8),
+            _inlineTimeEditor(includeEnd: _shouldCollectEndTime),
             const SizedBox(height: 8),
             DropdownButtonFormField<String>(
               initialValue: _diaperType,
@@ -736,7 +1080,10 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
       case HomeTileType.sleep:
         return Column(
           children: <Widget>[
-            _inlineTimeEditor(includeEnd: true),
+            _openEventBanner(),
+            _lifecycleModeSelector(),
+            if (_isStartableTile && !_hasOpenEvent) const SizedBox(height: 8),
+            _inlineTimeEditor(includeEnd: _shouldCollectEndTime),
             const SizedBox(height: 8),
             InputDecorator(
               decoration: InputDecoration(
@@ -749,7 +1096,14 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
                 border: const OutlineInputBorder(),
               ),
               child: Text(
-                _sleepDurationLabel(),
+                _shouldCollectEndTime
+                    ? _sleepDurationLabel()
+                    : tr(
+                        context,
+                        ko: "시작만 저장 모드",
+                        en: "Start-only mode",
+                        es: "Modo solo inicio",
+                      ),
                 style: const TextStyle(fontWeight: FontWeight.w700),
               ),
             ),
@@ -771,7 +1125,10 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
       case HomeTileType.medication:
         return Column(
           children: <Widget>[
-            _inlineTimeEditor(includeEnd: false),
+            _openEventBanner(),
+            _lifecycleModeSelector(),
+            if (_isStartableTile && !_hasOpenEvent) const SizedBox(height: 8),
+            _inlineTimeEditor(includeEnd: _shouldCollectEndTime),
             const SizedBox(height: 8),
             TextField(
               controller: _nameController,
@@ -882,9 +1239,35 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
                 Expanded(
                   child: FilledButton.icon(
                     onPressed: _submit,
-                    icon: const Icon(Icons.check_circle_outline),
-                    label:
-                        Text(tr(context, ko: "저장", en: "Save", es: "Guardar")),
+                    icon: Icon(
+                      _hasOpenEvent
+                          ? Icons.task_alt_rounded
+                          : (_isStartableTile && _startOnlyMode
+                              ? Icons.play_circle_outline_rounded
+                              : Icons.check_circle_outline),
+                    ),
+                    label: Text(
+                      _hasOpenEvent
+                          ? tr(
+                              context,
+                              ko: "완료 저장",
+                              en: "Complete",
+                              es: "Completar",
+                            )
+                          : (_isStartableTile && _startOnlyMode)
+                              ? tr(
+                                  context,
+                                  ko: "시작 저장",
+                                  en: "Save start",
+                                  es: "Guardar inicio",
+                                )
+                              : tr(
+                                  context,
+                                  ko: "저장",
+                                  en: "Save",
+                                  es: "Guardar",
+                                ),
+                    ),
                   ),
                 ),
               ],

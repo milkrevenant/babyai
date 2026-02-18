@@ -195,6 +195,62 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
     }
   }
 
+  Widget _boundedControl(
+    Widget child, {
+    double maxWidth = 540,
+  }) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxWidth),
+        child: child,
+      ),
+    );
+  }
+
+  InputDecoration _dropdownDecoration(String label) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    final BorderRadius borderRadius = BorderRadius.circular(14);
+    return InputDecoration(
+      labelText: label,
+      filled: true,
+      fillColor: color.surfaceContainerHighest.withValues(alpha: 0.24),
+      border: OutlineInputBorder(borderRadius: borderRadius),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: borderRadius,
+        borderSide: BorderSide(color: color.outlineVariant),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: borderRadius,
+        borderSide: BorderSide(color: color.primary, width: 1.4),
+      ),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+    );
+  }
+
+  Widget _profileDropdown<T>({
+    required T initialValue,
+    required String label,
+    required List<DropdownMenuItem<T>> items,
+    required ValueChanged<T?> onChanged,
+    double maxWidth = 540,
+    bool isExpanded = true,
+  }) {
+    return _boundedControl(
+      DropdownButtonFormField<T>(
+        initialValue: initialValue,
+        isExpanded: isExpanded,
+        menuMaxHeight: 320,
+        borderRadius: BorderRadius.circular(14),
+        icon: const Icon(Icons.expand_more_rounded, size: 20),
+        decoration: _dropdownDecoration(label),
+        items: items,
+        onChanged: onChanged,
+      ),
+      maxWidth: maxWidth,
+    );
+  }
+
   bool _consentValue(_ConsentType type) {
     switch (type) {
       case _ConsentType.terms:
@@ -300,9 +356,9 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
 
   String _tokenRequiredMessage() {
     return tr(context,
-        ko: "로그인 토큰이 필요합니다. Google JWT를 입력하거나 --dart-define=API_BEARER_TOKEN으로 실행해 주세요.",
-        en: "Login token is required. Enter Google JWT or run with --dart-define=API_BEARER_TOKEN.",
-        es: "Se requiere token JWT o --dart-define=API_BEARER_TOKEN.");
+        ko: "로그인 토큰이 필요합니다. Google JWT를 입력하거나 로컬 백엔드 /dev/local-token 설정을 확인해 주세요.",
+        en: "Login token is required. Enter Google JWT or check local backend /dev/local-token setup.",
+        es: "Se requiere token JWT o revisar /dev/local-token en backend local.");
   }
 
   bool _validateForCurrentStep() {
@@ -336,13 +392,20 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
 
     try {
       final String typedToken = _tokenController.text.trim();
-      final bool hasBearerToken = typedToken.isNotEmpty ||
-          BabyAIApi.currentBearerToken.trim().isNotEmpty;
-      if (widget.initialOnboarding && !hasBearerToken) {
-        throw ApiFailure(_tokenRequiredMessage());
-      }
       if (typedToken.isNotEmpty) {
         BabyAIApi.setBearerToken(typedToken);
+      }
+      if (widget.initialOnboarding &&
+          BabyAIApi.currentBearerToken.trim().isEmpty) {
+        try {
+          await BabyAIApi.instance.issueLocalDevToken();
+        } catch (_) {
+          // Keep explicit token flow as fallback when local endpoint is unavailable.
+        }
+      }
+      if (widget.initialOnboarding &&
+          BabyAIApi.currentBearerToken.trim().isEmpty) {
+        throw ApiFailure(_tokenRequiredMessage());
       }
 
       final double? weight =
@@ -541,20 +604,11 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
                   maxLines: 3,
                   decoration: InputDecoration(
                     labelText: tr(context,
-                        ko: "Google JWT 토큰 (선택)",
-                        en: "Google JWT token (optional)",
-                        es: "JWT Google (opcional)"),
+                        ko: "Google JWT 토큰 (선택, 로컬 자동 발급 지원)",
+                        en: "Google JWT token (optional, local auto token supported)",
+                        es: "JWT Google (opcional, token local automatico)"),
                     border: const OutlineInputBorder(),
                   ),
-                  validator: (String? value) {
-                    if (BabyAIApi.currentBearerToken.trim().isNotEmpty) {
-                      return null;
-                    }
-                    if ((value ?? "").trim().isEmpty) {
-                      return _tokenRequiredMessage();
-                    }
-                    return null;
-                  },
                 ),
                 const SizedBox(height: 10),
               ],
@@ -597,11 +651,11 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
                 },
               ),
               const SizedBox(height: 10),
-              DropdownButtonFormField<String>(
+              _profileDropdown<String>(
                 initialValue: _sex,
-                decoration: InputDecoration(
-                    labelText: tr(context, ko: "성별", en: "Sex", es: "Sexo"),
-                    border: const OutlineInputBorder()),
+                label: tr(context, ko: "성별", en: "Sex", es: "Sexo"),
+                maxWidth: 168,
+                isExpanded: false,
                 items: <DropdownMenuItem<String>>[
                   DropdownMenuItem(
                       value: "unknown", child: Text(_sexLabel("unknown"))),
@@ -627,14 +681,12 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
               ),
             ],
             if (!initial || _step == 1) ...<Widget>[
-              DropdownButtonFormField<ChildCareProfile>(
+              _profileDropdown<ChildCareProfile>(
                 initialValue: _careProfile,
-                decoration: InputDecoration(
-                    labelText: tr(context,
-                        ko: "아이 유형 설문",
-                        en: "Child type survey",
-                        es: "Encuesta de tipo"),
-                    border: const OutlineInputBorder()),
+                label: tr(context,
+                    ko: "아이 유형 설문",
+                    en: "Child type survey",
+                    es: "Encuesta de tipo"),
                 items: ChildCareProfile.values
                     .map((ChildCareProfile item) =>
                         DropdownMenuItem<ChildCareProfile>(
@@ -651,12 +703,10 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
                 },
               ),
               const SizedBox(height: 10),
-              DropdownButtonFormField<String>(
+              _profileDropdown<String>(
                 initialValue: _feedingMethod,
-                decoration: InputDecoration(
-                    labelText: tr(context,
-                        ko: "수유 방식", en: "Feeding method", es: "Metodo"),
-                    border: const OutlineInputBorder()),
+                label: tr(context,
+                    ko: "수유 방식", en: "Feeding method", es: "Metodo"),
                 items: <DropdownMenuItem<String>>[
                   DropdownMenuItem(
                       value: "mixed", child: Text(_feedingLabel("mixed"))),
@@ -670,12 +720,9 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
                     setState(() => _feedingMethod = value ?? "mixed"),
               ),
               const SizedBox(height: 10),
-              DropdownButtonFormField<String>(
+              _profileDropdown<String>(
                 initialValue: _formulaType,
-                decoration: InputDecoration(
-                    labelText: tr(context,
-                        ko: "분유 타입", en: "Formula type", es: "Tipo"),
-                    border: const OutlineInputBorder()),
+                label: tr(context, ko: "분유 타입", en: "Formula type", es: "Tipo"),
                 items: <String>[
                   "standard",
                   "hydrolyzed",

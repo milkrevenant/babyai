@@ -135,6 +135,139 @@ paths:
                   clip_id: { type: string }
                   saved_event_count: { type: integer }
 
+  /api/v1/events/manual:
+    post:
+      tags: [events]
+      summary: Create a completed manual event in one request
+      operationId: createManualEvent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ManualEventCreateRequest'
+      responses:
+        '200':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: CREATED }
+                  event_id: { type: string }
+                  type: { type: string }
+
+  /api/v1/events/start:
+    post:
+      tags: [events]
+      summary: Start an in-progress event (OPEN state)
+      operationId: startManualEvent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ManualEventStartRequest'
+      responses:
+        '200':
+          description: Started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: STARTED }
+                  event_id: { type: string }
+                  type: { type: string }
+                  start_time: { type: string, format: date-time }
+                  event_state: { type: string, example: OPEN }
+
+  /api/v1/events/{event_id}/complete:
+    patch:
+      tags: [events]
+      summary: Complete an OPEN event
+      operationId: completeManualEvent
+      parameters:
+        - in: path
+          name: event_id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ManualEventCompleteRequest'
+      responses:
+        '200':
+          description: Completed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: COMPLETED }
+                  event_id: { type: string }
+                  type: { type: string }
+                  start_time: { type: string, format: date-time }
+                  end_time: { type: string, format: date-time }
+                  duration_min: { type: integer }
+                  event_state: { type: string, example: CLOSED }
+
+  /api/v1/events/{event_id}/cancel:
+    patch:
+      tags: [events]
+      summary: Cancel an OPEN event
+      operationId: cancelManualEvent
+      parameters:
+        - in: path
+          name: event_id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ManualEventCancelRequest'
+      responses:
+        '200':
+          description: Canceled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: CANCELED }
+                  event_id: { type: string }
+                  type: { type: string }
+                  event_state: { type: string, example: CANCELED }
+
+  /api/v1/events/open:
+    get:
+      tags: [events]
+      summary: List OPEN events for a baby
+      operationId: listOpenEvents
+      parameters:
+        - in: query
+          name: baby_id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: type
+          required: false
+          schema:
+            type: string
+            enum: [FORMULA, BREASTFEED, SLEEP, PEE, POO, GROWTH, MEMO, SYMPTOM, MEDICATION]
+      responses:
+        '200':
+          description: Open events
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenEventsResponse'
+
   /api/v1/settings/me:
     get:
       tags: [settings]
@@ -378,13 +511,23 @@ paths:
   /api/v1/quick/landing-snapshot:
     get:
       tags: [ai]
-      summary: Get landing dashboard snapshot for today's records
+      summary: Get landing dashboard snapshot for day/week/month records
       operationId: quickLandingSnapshot
       parameters:
         - in: query
           name: baby_id
           required: true
           schema: { type: string }
+        - in: query
+          name: range
+          required: false
+          schema:
+            type: string
+            enum: [day, week, month]
+        - in: query
+          name: tz_offset
+          required: false
+          schema: { type: string, example: '+09:00' }
       responses:
         '200':
           description: Landing dashboard snapshot
@@ -711,6 +854,83 @@ components:
           type: array
           items: { $ref: '#/components/schemas/EventItem' }
 
+    ManualEventCreateRequest:
+      type: object
+      required: [baby_id, type, start_time]
+      properties:
+        baby_id: { type: string }
+        type:
+          type: string
+          enum: [FORMULA, BREASTFEED, SLEEP, PEE, POO, GROWTH, MEMO, SYMPTOM, MEDICATION]
+        start_time: { type: string, format: date-time }
+        end_time: { type: string, format: date-time, nullable: true }
+        value:
+          type: object
+          additionalProperties: true
+        metadata:
+          type: object
+          additionalProperties: true
+
+    ManualEventStartRequest:
+      type: object
+      required: [baby_id, type, start_time]
+      properties:
+        baby_id: { type: string }
+        type:
+          type: string
+          enum: [FORMULA, BREASTFEED, SLEEP, PEE, POO, MEDICATION, MEMO]
+        start_time: { type: string, format: date-time }
+        value:
+          type: object
+          additionalProperties: true
+        metadata:
+          type: object
+          additionalProperties: true
+
+    ManualEventCompleteRequest:
+      type: object
+      properties:
+        end_time: { type: string, format: date-time, nullable: true }
+        value:
+          type: object
+          additionalProperties: true
+        metadata:
+          type: object
+          additionalProperties: true
+
+    ManualEventCancelRequest:
+      type: object
+      properties:
+        reason: { type: string }
+
+    OpenEventItem:
+      type: object
+      properties:
+        event_id: { type: string }
+        type: { type: string }
+        status: { type: string, example: OPEN }
+        start_time: { type: string, format: date-time }
+        value:
+          type: object
+          additionalProperties: true
+        metadata:
+          type: object
+          additionalProperties: true
+        created_at: { type: string, format: date-time }
+        can_complete: { type: boolean }
+        can_cancel: { type: boolean }
+
+    OpenEventsResponse:
+      type: object
+      properties:
+        baby_id: { type: string }
+        open_events:
+          type: array
+          items: { $ref: '#/components/schemas/OpenEventItem' }
+        open_count: { type: integer }
+        event_state: { type: string, example: OPEN }
+        reference_text: { type: string }
+
     AiQueryRequest:
       type: object
       required: [baby_id, question]
@@ -769,11 +989,19 @@ components:
       type: object
       properties:
         date: { type: string, format: date }
+        range: { type: string, enum: [day, week, month] }
+        range_label: { type: string }
+        range_start_date: { type: string, format: date }
+        range_end_date: { type: string, format: date }
+        range_day_count: { type: integer }
+        tz_offset: { type: string }
         formula_count: { type: integer }
         formula_times:
           type: array
           items: { type: string, format: date-time }
         formula_total_ml: { type: integer }
+        avg_formula_ml_per_day: { type: number, format: float }
+        avg_feedings_per_day: { type: number, format: float }
         formula_amount_by_time_band_ml:
           type: object
           properties:
@@ -789,10 +1017,18 @@ components:
         last_breastfeed_time: { type: string, format: date-time, nullable: true }
         recent_sleep_time: { type: string, format: date-time, nullable: true }
         recent_sleep_duration_min: { type: integer, nullable: true }
+        sleep_total_min: { type: integer }
+        sleep_day_total_min: { type: integer }
+        sleep_night_total_min: { type: integer }
+        avg_sleep_minutes_per_day: { type: number, format: float }
+        avg_nap_minutes_per_day: { type: number, format: float }
+        avg_night_sleep_minutes_per_day: { type: number, format: float }
         last_sleep_end_time: { type: string, format: date-time, nullable: true }
         minutes_since_last_sleep: { type: integer, nullable: true }
         diaper_pee_count: { type: integer }
         diaper_poo_count: { type: integer }
+        avg_diaper_pee_per_day: { type: number, format: float }
+        avg_diaper_poo_per_day: { type: number, format: float }
         last_diaper_time: { type: string, format: date-time, nullable: true }
         last_pee_time: { type: string, format: date-time, nullable: true }
         last_poo_time: { type: string, format: date-time, nullable: true }
@@ -816,6 +1052,56 @@ components:
         recommended_next_feeding_in_min: { type: integer, nullable: true }
         recommendation_note: { type: string }
         recommendation_reference_text: { type: string }
+        feeding_graph_mode: { type: string }
+        feeding_graph_labels:
+          type: array
+          items: { type: string }
+        feeding_graph_points:
+          type: array
+          items: { type: number, format: float }
+        open_formula_event_id: { type: string, nullable: true }
+        open_formula_start_time: { type: string, format: date-time, nullable: true }
+        open_formula_value:
+          type: object
+          additionalProperties: true
+          nullable: true
+        open_formula_memo: { type: string, nullable: true }
+        open_breastfeed_event_id: { type: string, nullable: true }
+        open_breastfeed_start_time: { type: string, format: date-time, nullable: true }
+        open_breastfeed_value:
+          type: object
+          additionalProperties: true
+          nullable: true
+        open_breastfeed_memo: { type: string, nullable: true }
+        open_sleep_event_id: { type: string, nullable: true }
+        open_sleep_start_time: { type: string, format: date-time, nullable: true }
+        open_sleep_value:
+          type: object
+          additionalProperties: true
+          nullable: true
+        open_sleep_memo: { type: string, nullable: true }
+        open_diaper_event_id: { type: string, nullable: true }
+        open_diaper_start_time: { type: string, format: date-time, nullable: true }
+        open_diaper_type: { type: string, nullable: true, enum: [PEE, POO] }
+        open_diaper_value:
+          type: object
+          additionalProperties: true
+          nullable: true
+        open_diaper_memo: { type: string, nullable: true }
+        open_weaning_event_id: { type: string, nullable: true }
+        open_weaning_start_time: { type: string, format: date-time, nullable: true }
+        open_weaning_value:
+          type: object
+          additionalProperties: true
+          nullable: true
+        open_weaning_memo: { type: string, nullable: true }
+        open_medication_event_id: { type: string, nullable: true }
+        open_medication_start_time: { type: string, format: date-time, nullable: true }
+        open_medication_value:
+          type: object
+          additionalProperties: true
+          nullable: true
+        open_medication_memo: { type: string, nullable: true }
         reference_text: { type: string }
 
     BabyProfileUpdateRequest:

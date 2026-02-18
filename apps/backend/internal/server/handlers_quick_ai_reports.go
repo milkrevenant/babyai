@@ -179,7 +179,7 @@ func (a *App) quickLastFeeding(c *gin.Context) {
 		c.Request.Context(),
 		`SELECT type, "startTime", "endTime", "valueJson", "metadataJson"
 		 FROM "Event"
-		 WHERE "babyId" = $1 AND type IN ('FORMULA', 'BREASTFEED')
+		 WHERE "babyId" = $1 AND status = 'CLOSED' AND type IN ('FORMULA', 'BREASTFEED')
 		 ORDER BY "startTime" DESC
 		 LIMIT 1`,
 		baby.ID,
@@ -248,7 +248,7 @@ func (a *App) quickRecentSleep(c *gin.Context) {
 		c.Request.Context(),
 		`SELECT "startTime", "endTime", "valueJson", "metadataJson"
 		 FROM "Event"
-		 WHERE "babyId" = $1 AND type = 'SLEEP'
+		 WHERE "babyId" = $1 AND status = 'CLOSED' AND type = 'SLEEP'
 		 ORDER BY "startTime" DESC
 		 LIMIT 1`,
 		baby.ID,
@@ -314,7 +314,7 @@ func (a *App) quickLastDiaper(c *gin.Context) {
 		c.Request.Context(),
 		`SELECT type, "startTime", "valueJson", "metadataJson"
 		 FROM "Event"
-		 WHERE "babyId" = $1 AND type IN ('PEE', 'POO')
+		 WHERE "babyId" = $1 AND status = 'CLOSED' AND type IN ('PEE', 'POO')
 		 ORDER BY "startTime" DESC
 		 LIMIT 1`,
 		baby.ID,
@@ -381,7 +381,7 @@ func (a *App) quickLastMedication(c *gin.Context) {
 		c.Request.Context(),
 		`SELECT "startTime", "endTime", "valueJson", "metadataJson"
 		 FROM "Event"
-		 WHERE "babyId" = $1 AND type = 'MEDICATION'
+		 WHERE "babyId" = $1 AND status = 'CLOSED' AND type = 'MEDICATION'
 		 ORDER BY "startTime" DESC
 		 LIMIT 1`,
 		baby.ID,
@@ -438,7 +438,7 @@ func (a *App) quickLastPooTime(c *gin.Context) {
 	err = a.db.QueryRow(
 		c.Request.Context(),
 		`SELECT "startTime" FROM "Event"
-		 WHERE "babyId" = $1 AND type = 'POO'
+		 WHERE "babyId" = $1 AND status = 'CLOSED' AND type = 'POO'
 		 ORDER BY "startTime" DESC LIMIT 1`,
 		baby.ID,
 	).Scan(&lastPoo)
@@ -485,7 +485,7 @@ func (a *App) quickNextFeedingETA(c *gin.Context) {
 	rows, err := a.db.Query(
 		c.Request.Context(),
 		`SELECT "startTime" FROM "Event"
-		 WHERE "babyId" = $1 AND type IN ('FORMULA', 'BREASTFEED')
+		 WHERE "babyId" = $1 AND status = 'CLOSED' AND type IN ('FORMULA', 'BREASTFEED')
 		 ORDER BY "startTime" DESC LIMIT 10`,
 		baby.ID,
 	)
@@ -552,7 +552,7 @@ func (a *App) quickTodaySummary(c *gin.Context) {
 		c.Request.Context(),
 		`SELECT type, "startTime", "endTime", "valueJson"
 		 FROM "Event"
-		 WHERE "babyId" = $1 AND "startTime" >= $2 AND "startTime" < $3`,
+		 WHERE "babyId" = $1 AND status = 'CLOSED' AND "startTime" >= $2 AND "startTime" < $3`,
 		baby.ID,
 		start,
 		end,
@@ -635,6 +635,7 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 		`SELECT type, "startTime", "endTime", "valueJson", "metadataJson"
 		 FROM "Event"
 		 WHERE "babyId" = $1
+		   AND status = 'CLOSED'
 		   AND "startTime" >= $2
 		   AND "startTime" < $3
 		   AND type IN ('FORMULA', 'BREASTFEED', 'SLEEP', 'PEE', 'POO', 'MEDICATION', 'MEMO')
@@ -799,6 +800,140 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 		}
 	}
 
+	var openFormulaEventID *string
+	var openFormulaStartTime *time.Time
+	var openFormulaValue map[string]any
+	var openFormulaMemo *string
+	var openBreastfeedEventID *string
+	var openBreastfeedStartTime *time.Time
+	var openBreastfeedValue map[string]any
+	var openBreastfeedMemo *string
+	var openSleepEventID *string
+	var openSleepStartTime *time.Time
+	var openSleepValue map[string]any
+	var openSleepMemo *string
+	var openDiaperEventID *string
+	var openDiaperStartTime *time.Time
+	var openDiaperValue map[string]any
+	var openDiaperMemo *string
+	var openDiaperType *string
+	var openWeaningEventID *string
+	var openWeaningStartTime *time.Time
+	var openWeaningValue map[string]any
+	var openWeaningMemo *string
+	var openMedicationEventID *string
+	var openMedicationStartTime *time.Time
+	var openMedicationValue map[string]any
+	var openMedicationMemo *string
+
+	openRows, err := a.db.Query(
+		c.Request.Context(),
+		`SELECT id, type, "startTime", "valueJson", "metadataJson"
+		 FROM "Event"
+		 WHERE "babyId" = $1
+		   AND status = 'OPEN'
+		   AND type IN ('FORMULA', 'BREASTFEED', 'SLEEP', 'PEE', 'POO', 'MEDICATION', 'MEMO')
+		 ORDER BY "startTime" DESC`,
+		baby.ID,
+	)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to load open events")
+		return
+	}
+	defer openRows.Close()
+	for openRows.Next() {
+		var eventID string
+		var eventType string
+		var startTime time.Time
+		var valueRaw []byte
+		var metadataRaw []byte
+		if err := openRows.Scan(&eventID, &eventType, &startTime, &valueRaw, &metadataRaw); err != nil {
+			writeError(c, http.StatusInternalServerError, "Failed to parse open events")
+			return
+		}
+		value := parseJSONStringMap(valueRaw)
+		metadata := parseJSONStringMap(metadataRaw)
+		switch eventType {
+		case "FORMULA":
+			if openFormulaEventID == nil {
+				eventIDCopy := eventID
+				startCopy := startTime.UTC()
+				openFormulaEventID = &eventIDCopy
+				openFormulaStartTime = &startCopy
+				openFormulaValue = value
+				memoText := extractMemoText(value)
+				if memoText != "" {
+					openFormulaMemo = &memoText
+				}
+			}
+		case "BREASTFEED":
+			if openBreastfeedEventID == nil {
+				eventIDCopy := eventID
+				startCopy := startTime.UTC()
+				openBreastfeedEventID = &eventIDCopy
+				openBreastfeedStartTime = &startCopy
+				openBreastfeedValue = value
+				memoText := extractMemoText(value)
+				if memoText != "" {
+					openBreastfeedMemo = &memoText
+				}
+			}
+		case "SLEEP":
+			if openSleepEventID == nil {
+				eventIDCopy := eventID
+				startCopy := startTime.UTC()
+				openSleepEventID = &eventIDCopy
+				openSleepStartTime = &startCopy
+				openSleepValue = value
+				memoText := extractMemoText(value)
+				if memoText != "" {
+					openSleepMemo = &memoText
+				}
+			}
+		case "PEE", "POO":
+			if openDiaperEventID == nil {
+				eventIDCopy := eventID
+				startCopy := startTime.UTC()
+				typeCopy := eventType
+				openDiaperEventID = &eventIDCopy
+				openDiaperStartTime = &startCopy
+				openDiaperType = &typeCopy
+				openDiaperValue = value
+				memoText := extractMemoText(value)
+				if memoText != "" {
+					openDiaperMemo = &memoText
+				}
+			}
+		case "MEDICATION":
+			if openMedicationEventID == nil {
+				eventIDCopy := eventID
+				startCopy := startTime.UTC()
+				openMedicationEventID = &eventIDCopy
+				openMedicationStartTime = &startCopy
+				openMedicationValue = value
+				memoText := extractMemoText(value)
+				if memoText != "" {
+					openMedicationMemo = &memoText
+				}
+			}
+		case "MEMO":
+			if !isWeaningMemo(value, metadata) {
+				continue
+			}
+			if openWeaningEventID == nil {
+				eventIDCopy := eventID
+				startCopy := startTime.UTC()
+				openWeaningEventID = &eventIDCopy
+				openWeaningStartTime = &startCopy
+				openWeaningValue = value
+				memoText := extractMemoText(value)
+				if memoText != "" {
+					openWeaningMemo = &memoText
+				}
+			}
+		}
+	}
+
 	if recentSleepDurationMin == nil && lastSleepEndTime != nil && recentSleepTime != nil {
 		duration := int(lastSleepEndTime.UTC().Sub(recentSleepTime.UTC()).Minutes())
 		if duration < 0 {
@@ -941,6 +1076,31 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 		"feeding_graph_mode":              graphMode,
 		"feeding_graph_labels":            graphLabels,
 		"feeding_graph_points":            graphPoints,
+		"open_formula_event_id":           openFormulaEventID,
+		"open_formula_start_time":         formatNullableTimeRFC3339(openFormulaStartTime),
+		"open_formula_value":              openFormulaValue,
+		"open_formula_memo":               openFormulaMemo,
+		"open_breastfeed_event_id":        openBreastfeedEventID,
+		"open_breastfeed_start_time":      formatNullableTimeRFC3339(openBreastfeedStartTime),
+		"open_breastfeed_value":           openBreastfeedValue,
+		"open_breastfeed_memo":            openBreastfeedMemo,
+		"open_sleep_event_id":             openSleepEventID,
+		"open_sleep_start_time":           formatNullableTimeRFC3339(openSleepStartTime),
+		"open_sleep_value":                openSleepValue,
+		"open_sleep_memo":                 openSleepMemo,
+		"open_diaper_event_id":            openDiaperEventID,
+		"open_diaper_start_time":          formatNullableTimeRFC3339(openDiaperStartTime),
+		"open_diaper_type":                openDiaperType,
+		"open_diaper_value":               openDiaperValue,
+		"open_diaper_memo":                openDiaperMemo,
+		"open_weaning_event_id":           openWeaningEventID,
+		"open_weaning_start_time":         formatNullableTimeRFC3339(openWeaningStartTime),
+		"open_weaning_value":              openWeaningValue,
+		"open_weaning_memo":               openWeaningMemo,
+		"open_medication_event_id":        openMedicationEventID,
+		"open_medication_start_time":      formatNullableTimeRFC3339(openMedicationStartTime),
+		"open_medication_value":           openMedicationValue,
+		"open_medication_memo":            openMedicationMemo,
 		"reference_text":                  "Derived from selected range confirmed events.",
 	})
 }
@@ -1102,7 +1262,7 @@ func (a *App) aiQuery(c *gin.Context) {
 			c.Request.Context(),
 			`SELECT type, "startTime", "endTime", "valueJson"
 			 FROM "Event"
-			 WHERE "babyId" = $1 AND "startTime" >= $2 AND "startTime" < $3`,
+			 WHERE "babyId" = $1 AND status = 'CLOSED' AND "startTime" >= $2 AND "startTime" < $3`,
 			baby.ID,
 			start,
 			end,
@@ -1158,7 +1318,7 @@ func (a *App) aiQuery(c *gin.Context) {
 			c.Request.Context(),
 			`SELECT type, "startTime", "valueJson"
 			 FROM "Event"
-			 WHERE "babyId" = $1 AND type IN ('FORMULA', 'BREASTFEED')
+			 WHERE "babyId" = $1 AND status = 'CLOSED' AND type IN ('FORMULA', 'BREASTFEED')
 			 ORDER BY "startTime" DESC LIMIT 1`,
 			baby.ID,
 		).Scan(&eventType, &startedAt, &valueRaw)
@@ -1198,7 +1358,7 @@ func (a *App) aiQuery(c *gin.Context) {
 			c.Request.Context(),
 			`SELECT "startTime", "endTime", "valueJson"
 			 FROM "Event"
-			 WHERE "babyId" = $1 AND type = 'SLEEP'
+			 WHERE "babyId" = $1 AND status = 'CLOSED' AND type = 'SLEEP'
 			 ORDER BY "startTime" DESC LIMIT 1`,
 			baby.ID,
 		).Scan(&startedAt, &endedAt, &valueRaw)
@@ -1237,7 +1397,7 @@ func (a *App) aiQuery(c *gin.Context) {
 			c.Request.Context(),
 			`SELECT type, "startTime"
 			 FROM "Event"
-			 WHERE "babyId" = $1 AND type IN ('PEE', 'POO')
+			 WHERE "babyId" = $1 AND status = 'CLOSED' AND type IN ('PEE', 'POO')
 			 ORDER BY "startTime" DESC LIMIT 1`,
 			baby.ID,
 		).Scan(&eventType, &startedAt)
@@ -1271,7 +1431,7 @@ func (a *App) aiQuery(c *gin.Context) {
 			c.Request.Context(),
 			`SELECT "startTime", "endTime", "valueJson"
 			 FROM "Event"
-			 WHERE "babyId" = $1 AND type = 'MEDICATION'
+			 WHERE "babyId" = $1 AND status = 'CLOSED' AND type = 'MEDICATION'
 			 ORDER BY "startTime" DESC LIMIT 1`,
 			baby.ID,
 		).Scan(&startedAt, &endedAt, &valueRaw)
@@ -1308,7 +1468,7 @@ func (a *App) aiQuery(c *gin.Context) {
 		err := a.db.QueryRow(
 			c.Request.Context(),
 			`SELECT "startTime" FROM "Event"
-			 WHERE "babyId" = $1 AND type = 'POO'
+			 WHERE "babyId" = $1 AND status = 'CLOSED' AND type = 'POO'
 			 ORDER BY "startTime" DESC LIMIT 1`,
 			baby.ID,
 		).Scan(&last)
@@ -1338,7 +1498,7 @@ func (a *App) aiQuery(c *gin.Context) {
 		rows, err := a.db.Query(
 			c.Request.Context(),
 			`SELECT "startTime" FROM "Event"
-			 WHERE "babyId" = $1 AND type IN ('FORMULA', 'BREASTFEED')
+			 WHERE "babyId" = $1 AND status = 'CLOSED' AND type IN ('FORMULA', 'BREASTFEED')
 			 ORDER BY "startTime" DESC LIMIT 10`,
 			baby.ID,
 		)
@@ -1448,7 +1608,7 @@ func (a *App) getDailyReport(c *gin.Context) {
 		c.Request.Context(),
 		`SELECT type, "startTime", "endTime", "valueJson"
 		 FROM "Event"
-		 WHERE "babyId" = $1 AND "startTime" >= $2 AND "startTime" < $3`,
+		 WHERE "babyId" = $1 AND status = 'CLOSED' AND "startTime" >= $2 AND "startTime" < $3`,
 		baby.ID,
 		start,
 		end,
@@ -1580,7 +1740,7 @@ func (a *App) computeWeeklyMetrics(c *gin.Context, babyID string, start, end tim
 		c.Request.Context(),
 		`SELECT type, "startTime", "endTime", "valueJson"
 		 FROM "Event"
-		 WHERE "babyId" = $1 AND "startTime" >= $2 AND "startTime" < $3`,
+		 WHERE "babyId" = $1 AND status = 'CLOSED' AND "startTime" >= $2 AND "startTime" < $3`,
 		babyID,
 		start,
 		end,

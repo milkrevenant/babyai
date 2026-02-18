@@ -137,6 +137,19 @@ class RecordingPageState extends State<RecordingPage> {
         .toList();
   }
 
+  Map<String, dynamic> _asStringDynamicMap(dynamic value) {
+    if (value is Map<String, dynamic>) {
+      return value;
+    }
+    if (value is Map) {
+      return value.map(
+        (dynamic key, dynamic mapValue) =>
+            MapEntry<String, dynamic>(key.toString(), mapValue),
+      );
+    }
+    return <String, dynamic>{};
+  }
+
   Map<String, int> _asBandMap(dynamic value) {
     if (value is! Map<dynamic, dynamic>) {
       return <String, int>{
@@ -259,6 +272,89 @@ class RecordingPageState extends State<RecordingPage> {
     }
   }
 
+  Map<String, dynamic>? _openPrefillForTile(
+    HomeTileType tile,
+    Map<String, dynamic> snapshot,
+  ) {
+    Map<String, dynamic>? build({
+      required String eventIdKey,
+      required String startTimeKey,
+      required String valueKey,
+      String? memoKey,
+      Map<String, dynamic> extras = const <String, dynamic>{},
+    }) {
+      final String? eventId = _asString(snapshot[eventIdKey]);
+      if (eventId == null) {
+        return null;
+      }
+      final Map<String, dynamic> value =
+          _asStringDynamicMap(snapshot[valueKey]);
+      return <String, dynamic>{
+        "open_event_id": eventId,
+        eventIdKey: eventId,
+        startTimeKey: _asString(snapshot[startTimeKey]),
+        valueKey: value,
+        if (memoKey != null && _asString(snapshot[memoKey]) != null)
+          "memo": _asString(snapshot[memoKey]),
+        if (memoKey != null) memoKey: _asString(snapshot[memoKey]),
+        ...extras,
+      };
+    }
+
+    switch (tile) {
+      case HomeTileType.formula:
+        return build(
+          eventIdKey: "open_formula_event_id",
+          startTimeKey: "open_formula_start_time",
+          valueKey: "open_formula_value",
+          memoKey: "open_formula_memo",
+        );
+      case HomeTileType.breastfeed:
+        return build(
+          eventIdKey: "open_breastfeed_event_id",
+          startTimeKey: "open_breastfeed_start_time",
+          valueKey: "open_breastfeed_value",
+          memoKey: "open_breastfeed_memo",
+        );
+      case HomeTileType.weaning:
+        return build(
+          eventIdKey: "open_weaning_event_id",
+          startTimeKey: "open_weaning_start_time",
+          valueKey: "open_weaning_value",
+          memoKey: "open_weaning_memo",
+        );
+      case HomeTileType.diaper:
+        return build(
+          eventIdKey: "open_diaper_event_id",
+          startTimeKey: "open_diaper_start_time",
+          valueKey: "open_diaper_value",
+          memoKey: "open_diaper_memo",
+          extras: <String, dynamic>{
+            if (_asString(snapshot["open_diaper_type"]) != null)
+              "diaper_type": _asString(snapshot["open_diaper_type"]),
+            if (_asString(snapshot["open_diaper_type"]) != null)
+              "open_diaper_type": _asString(snapshot["open_diaper_type"]),
+          },
+        );
+      case HomeTileType.sleep:
+        return build(
+          eventIdKey: "open_sleep_event_id",
+          startTimeKey: "open_sleep_start_time",
+          valueKey: "open_sleep_value",
+          memoKey: "open_sleep_memo",
+        );
+      case HomeTileType.medication:
+        return build(
+          eventIdKey: "open_medication_event_id",
+          startTimeKey: "open_medication_start_time",
+          valueKey: "open_medication_value",
+          memoKey: "open_medication_memo",
+        );
+      case HomeTileType.memo:
+        return null;
+    }
+  }
+
   RecordEntryInput? _buildAutoEntryFromPrefill(
     HomeTileType tile,
     Map<String, dynamic> prefill,
@@ -268,6 +364,46 @@ class RecordingPageState extends State<RecordingPage> {
 
     switch (tile) {
       case HomeTileType.formula:
+        final String action =
+            (_stringFromPrefill(prefill, "entry_action") ?? "").toLowerCase();
+        final String? openFormulaEventId =
+            _stringFromPrefill(prefill, "open_event_id") ??
+                _stringFromPrefill(prefill, "open_formula_event_id");
+        if (openFormulaEventId != null && openFormulaEventId.isNotEmpty) {
+          final DateTime openStart = _parseIsoDateTime(
+                  _stringFromPrefill(prefill, "open_start_time") ??
+                      _stringFromPrefill(prefill, "open_formula_start_time")) ??
+              now;
+          final int amount = _intFromPrefill(prefill, "amount_ml") ??
+              _extractAmountMlFromText(query) ??
+              0;
+          return RecordEntryInput(
+            type: "FORMULA",
+            startTime: openStart,
+            endTime: now,
+            value: <String, dynamic>{
+              if (amount > 0) "ml": amount,
+              "duration_min":
+                  now.difference(openStart).inMinutes.clamp(0, 24 * 60),
+            },
+            lifecycleAction: RecordLifecycleAction.completeOpen,
+            targetEventId: openFormulaEventId,
+          );
+        }
+        if (action == "end" || action == "complete") {
+          return null;
+        }
+        if (action == "start") {
+          return RecordEntryInput(
+            type: "FORMULA",
+            startTime: now,
+            value: <String, dynamic>{
+              if (_intFromPrefill(prefill, "amount_ml") != null)
+                "ml": _intFromPrefill(prefill, "amount_ml"),
+            },
+            lifecycleAction: RecordLifecycleAction.startOnly,
+          );
+        }
         final int amount = _intFromPrefill(prefill, "amount_ml") ??
             _extractAmountMlFromText(query) ??
             0;
@@ -280,6 +416,44 @@ class RecordingPageState extends State<RecordingPage> {
           value: <String, dynamic>{"ml": amount},
         );
       case HomeTileType.breastfeed:
+        final String action =
+            (_stringFromPrefill(prefill, "entry_action") ?? "").toLowerCase();
+        final String? openBreastfeedEventId =
+            _stringFromPrefill(prefill, "open_event_id") ??
+                _stringFromPrefill(prefill, "open_breastfeed_event_id");
+        if (openBreastfeedEventId != null && openBreastfeedEventId.isNotEmpty) {
+          final DateTime openStart = _parseIsoDateTime(_stringFromPrefill(
+                      prefill, "open_start_time") ??
+                  _stringFromPrefill(prefill, "open_breastfeed_start_time")) ??
+              now;
+          final int duration = now.difference(openStart).inMinutes;
+          return RecordEntryInput(
+            type: "BREASTFEED",
+            startTime: openStart,
+            endTime: now,
+            value: <String, dynamic>{
+              "duration_min": duration < 0 ? 0 : duration,
+              if (_stringFromPrefill(prefill, "memo") != null)
+                "memo": _stringFromPrefill(prefill, "memo"),
+            },
+            lifecycleAction: RecordLifecycleAction.completeOpen,
+            targetEventId: openBreastfeedEventId,
+          );
+        }
+        if (action == "end" || action == "complete") {
+          return null;
+        }
+        if (action == "start") {
+          return RecordEntryInput(
+            type: "BREASTFEED",
+            startTime: now,
+            value: <String, dynamic>{
+              if (_stringFromPrefill(prefill, "memo") != null)
+                "memo": _stringFromPrefill(prefill, "memo"),
+            },
+            lifecycleAction: RecordLifecycleAction.startOnly,
+          );
+        }
         final int duration = _intFromPrefill(prefill, "duration_min") ??
             _extractDurationMinFromText(query) ??
             0;
@@ -290,10 +464,88 @@ class RecordingPageState extends State<RecordingPage> {
           value: <String, dynamic>{"duration_min": duration},
         );
       case HomeTileType.weaning:
-        return null;
+        final String action =
+            (_stringFromPrefill(prefill, "entry_action") ?? "").toLowerCase();
+        final String? openWeaningEventId =
+            _stringFromPrefill(prefill, "open_event_id") ??
+                _stringFromPrefill(prefill, "open_weaning_event_id");
+        final String memo = _stringFromPrefill(prefill, "memo") ?? query.trim();
+        final String weaningType =
+            (_stringFromPrefill(prefill, "weaning_type") ?? "meal")
+                .toLowerCase();
+        final int? grams = _intFromPrefill(prefill, "grams");
+        if (openWeaningEventId != null && openWeaningEventId.isNotEmpty) {
+          final DateTime openStart = _parseIsoDateTime(
+                  _stringFromPrefill(prefill, "open_start_time") ??
+                      _stringFromPrefill(prefill, "open_weaning_start_time")) ??
+              now;
+          return RecordEntryInput(
+            type: "MEMO",
+            startTime: openStart,
+            endTime: now,
+            value: <String, dynamic>{
+              "memo": memo.isEmpty ? "이유식" : memo,
+              "category": "WEANING",
+              "weaning_type": weaningType,
+              if (grams != null && grams > 0) "grams": grams,
+              "duration_min":
+                  now.difference(openStart).inMinutes.clamp(0, 24 * 60),
+            },
+            metadata: <String, dynamic>{
+              "entry_kind": "WEANING",
+              "weaning_type": weaningType,
+            },
+            lifecycleAction: RecordLifecycleAction.completeOpen,
+            targetEventId: openWeaningEventId,
+          );
+        }
+        if (action == "end" || action == "complete") {
+          return null;
+        }
+        if (action == "start") {
+          return RecordEntryInput(
+            type: "MEMO",
+            startTime: now,
+            value: <String, dynamic>{
+              if (memo.isNotEmpty) "memo": memo,
+              "category": "WEANING",
+              "weaning_type": weaningType,
+              if (grams != null && grams > 0) "grams": grams,
+            },
+            metadata: <String, dynamic>{
+              "entry_kind": "WEANING",
+              "weaning_type": weaningType,
+            },
+            lifecycleAction: RecordLifecycleAction.startOnly,
+          );
+        }
+        if (memo.isEmpty && grams == null) {
+          return null;
+        }
+        return RecordEntryInput(
+          type: "MEMO",
+          startTime: now,
+          value: <String, dynamic>{
+            "memo": memo.isEmpty ? "이유식" : memo,
+            "category": "WEANING",
+            "weaning_type": weaningType,
+            if (grams != null && grams > 0) "grams": grams,
+          },
+          metadata: <String, dynamic>{
+            "entry_kind": "WEANING",
+            "weaning_type": weaningType,
+          },
+        );
       case HomeTileType.diaper:
-        String diaperType =
-            (_stringFromPrefill(prefill, "diaper_type") ?? "").toUpperCase();
+        final String action =
+            (_stringFromPrefill(prefill, "entry_action") ?? "").toLowerCase();
+        final String? openDiaperEventId =
+            _stringFromPrefill(prefill, "open_event_id") ??
+                _stringFromPrefill(prefill, "open_diaper_event_id");
+        String diaperType = (_stringFromPrefill(prefill, "diaper_type") ??
+                _stringFromPrefill(prefill, "open_diaper_type") ??
+                "")
+            .toUpperCase();
         if (diaperType != "PEE" && diaperType != "POO") {
           final String lowered = query.toLowerCase();
           if (lowered.contains("대변") ||
@@ -311,15 +563,60 @@ class RecordingPageState extends State<RecordingPage> {
             return null;
           }
         }
+        if (openDiaperEventId != null && openDiaperEventId.isNotEmpty) {
+          final DateTime openStart = _parseIsoDateTime(
+                  _stringFromPrefill(prefill, "open_start_time") ??
+                      _stringFromPrefill(prefill, "open_diaper_start_time")) ??
+              now;
+          return RecordEntryInput(
+            type: diaperType,
+            startTime: openStart,
+            endTime: now,
+            value: <String, dynamic>{
+              "count": 1,
+              "diaper_type": diaperType,
+              "duration_min":
+                  now.difference(openStart).inMinutes.clamp(0, 24 * 60),
+            },
+            lifecycleAction: RecordLifecycleAction.completeOpen,
+            targetEventId: openDiaperEventId,
+          );
+        }
+        if (action == "end" || action == "complete") {
+          return null;
+        }
+        if (action == "start") {
+          return RecordEntryInput(
+            type: diaperType,
+            startTime: now,
+            value: <String, dynamic>{
+              "count": 1,
+              "diaper_type": diaperType,
+            },
+            lifecycleAction: RecordLifecycleAction.startOnly,
+          );
+        }
         return RecordEntryInput(
           type: diaperType,
           startTime: now,
-          value: const <String, dynamic>{"count": 1},
+          value: <String, dynamic>{
+            "count": 1,
+            "diaper_type": diaperType,
+          },
         );
       case HomeTileType.sleep:
+        final String? openSleepEventId = _stringFromPrefill(
+              prefill,
+              "open_event_id",
+            ) ??
+            _stringFromPrefill(prefill, "open_sleep_event_id");
         final String action =
             (_stringFromPrefill(prefill, "sleep_action") ?? "").toLowerCase();
-        if (action == "start") {
+        final String genericAction =
+            (_stringFromPrefill(prefill, "entry_action") ?? "").toLowerCase();
+        final String resolvedAction =
+            action.isNotEmpty ? action : genericAction;
+        if (resolvedAction == "start") {
           return RecordEntryInput(
             type: "SLEEP",
             startTime: now,
@@ -327,11 +624,13 @@ class RecordingPageState extends State<RecordingPage> {
               "duration_min": 0,
               "sleep_action": "START",
             },
+            lifecycleAction: RecordLifecycleAction.startOnly,
           );
         }
-        if (action == "end") {
+        if (resolvedAction == "end" || resolvedAction == "complete") {
           final DateTime? storedStart = _parseIsoDateTime(
-                  _stringFromPrefill(prefill, "sleep_start_time")) ??
+                  _stringFromPrefill(prefill, "sleep_start_time") ??
+                      _stringFromPrefill(prefill, "open_sleep_start_time")) ??
               AppSessionStore.pendingSleepStart?.toLocal();
           final DateTime start = storedStart == null || storedStart.isAfter(now)
               ? now
@@ -345,6 +644,11 @@ class RecordingPageState extends State<RecordingPage> {
               "duration_min": duration < 0 ? 0 : duration,
               "sleep_action": "END",
             },
+            lifecycleAction:
+                openSleepEventId != null && openSleepEventId.isNotEmpty
+                    ? RecordLifecycleAction.completeOpen
+                    : RecordLifecycleAction.createClosed,
+            targetEventId: openSleepEventId,
           );
         }
         final int duration = _intFromPrefill(prefill, "duration_min") ??
@@ -357,13 +661,52 @@ class RecordingPageState extends State<RecordingPage> {
           value: <String, dynamic>{"duration_min": duration},
         );
       case HomeTileType.medication:
+        final String action =
+            (_stringFromPrefill(prefill, "entry_action") ?? "").toLowerCase();
+        final String? openMedicationEventId =
+            _stringFromPrefill(prefill, "open_event_id") ??
+                _stringFromPrefill(prefill, "open_medication_event_id");
         final String? name = _stringFromPrefill(prefill, "medication_name") ??
+            _stringFromPrefill(prefill, "name") ??
             _stringFromPrefill(prefill, "memo") ??
             _stringFromPrefill(prefill, "query");
+        final int? dose = _intFromPrefill(prefill, "dose");
+        if (openMedicationEventId != null && openMedicationEventId.isNotEmpty) {
+          final DateTime openStart = _parseIsoDateTime(_stringFromPrefill(
+                      prefill, "open_start_time") ??
+                  _stringFromPrefill(prefill, "open_medication_start_time")) ??
+              now;
+          return RecordEntryInput(
+            type: "MEDICATION",
+            startTime: openStart,
+            endTime: now,
+            value: <String, dynamic>{
+              if (name != null && name.isNotEmpty) "name": name,
+              if (dose != null && dose > 0) "dose": dose,
+              "duration_min":
+                  now.difference(openStart).inMinutes.clamp(0, 24 * 60),
+            },
+            lifecycleAction: RecordLifecycleAction.completeOpen,
+            targetEventId: openMedicationEventId,
+          );
+        }
+        if (action == "end" || action == "complete") {
+          return null;
+        }
+        if (action == "start") {
+          return RecordEntryInput(
+            type: "MEDICATION",
+            startTime: now,
+            value: <String, dynamic>{
+              if (name != null && name.isNotEmpty) "name": name,
+              if (dose != null && dose > 0) "dose": dose,
+            },
+            lifecycleAction: RecordLifecycleAction.startOnly,
+          );
+        }
         if (name == null || name.isEmpty) {
           return null;
         }
-        final int? dose = _intFromPrefill(prefill, "dose");
         return RecordEntryInput(
           type: "MEDICATION",
           startTime: now,
@@ -387,13 +730,19 @@ class RecordingPageState extends State<RecordingPage> {
   }
 
   Future<void> _persistSleepMarker(RecordEntryInput input) async {
-    if (input.type != "SLEEP") {
-      return;
+    if (input.type == "SLEEP") {
+      if (input.lifecycleAction == RecordLifecycleAction.startOnly) {
+        await AppSessionStore.setPendingSleepStart(input.startTime.toUtc());
+      } else {
+        await AppSessionStore.setPendingSleepStart(null);
+      }
     }
-    if (input.endTime == null) {
-      await AppSessionStore.setPendingSleepStart(input.startTime.toUtc());
-    } else {
-      await AppSessionStore.setPendingSleepStart(null);
+    if (input.type == "FORMULA") {
+      if (input.lifecycleAction == RecordLifecycleAction.startOnly) {
+        await AppSessionStore.setPendingFormulaStart(input.startTime.toUtc());
+      } else {
+        await AppSessionStore.setPendingFormulaStart(null);
+      }
     }
   }
 
@@ -403,13 +752,37 @@ class RecordingPageState extends State<RecordingPage> {
   }) async {
     setState(() => _entrySaving = true);
     try {
-      await BabyAIApi.instance.createManualEvent(
-        type: input.type,
-        startTime: input.startTime,
-        endTime: input.endTime,
-        value: input.value,
-        metadata: input.metadata,
-      );
+      switch (input.lifecycleAction) {
+        case RecordLifecycleAction.startOnly:
+          await BabyAIApi.instance.startManualEvent(
+            type: input.type,
+            startTime: input.startTime,
+            value: input.value,
+            metadata: input.metadata,
+          );
+          break;
+        case RecordLifecycleAction.completeOpen:
+          final String targetEventId = (input.targetEventId ?? "").trim();
+          if (targetEventId.isEmpty) {
+            throw ApiFailure("Missing in-progress event id to complete.");
+          }
+          await BabyAIApi.instance.completeManualEvent(
+            eventId: targetEventId,
+            endTime: input.endTime,
+            value: input.value,
+            metadata: input.metadata,
+          );
+          break;
+        case RecordLifecycleAction.createClosed:
+          await BabyAIApi.instance.createManualEvent(
+            type: input.type,
+            startTime: input.startTime,
+            endTime: input.endTime,
+            value: input.value,
+            metadata: input.metadata,
+          );
+          break;
+      }
       await _persistSleepMarker(input);
       await _loadLandingSnapshot();
       if (!mounted) {
@@ -462,11 +835,13 @@ class RecordingPageState extends State<RecordingPage> {
     Map<String, dynamic>? prefill,
     bool autoSubmit = false,
   }) async {
-    final Map<String, dynamic> normalizedPrefill =
-        prefill ?? <String, dynamic>{};
+    final Map<String, dynamic> mergedPrefill = <String, dynamic>{
+      ...?_openPrefillForTile(tile, _snapshot ?? const <String, dynamic>{}),
+      ...?prefill,
+    };
     if (autoSubmit) {
       final RecordEntryInput? autoInput =
-          _buildAutoEntryFromPrefill(tile, normalizedPrefill);
+          _buildAutoEntryFromPrefill(tile, mergedPrefill);
       if (autoInput != null) {
         await _saveEntryInput(
           autoInput,
@@ -480,7 +855,7 @@ class RecordingPageState extends State<RecordingPage> {
         return;
       }
     }
-    await _openQuickEntry(tile, prefill: prefill);
+    await _openQuickEntry(tile, prefill: mergedPrefill);
   }
 
   Widget _tileMetaLine(String label, String value) {
@@ -530,7 +905,7 @@ class RecordingPageState extends State<RecordingPage> {
             children: <Widget>[
               Row(
                 children: <Widget>[
-                  Icon(icon, size: 28),
+                  Icon(icon, size: 30),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
@@ -542,16 +917,16 @@ class RecordingPageState extends State<RecordingPage> {
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
+                  const SizedBox(width: 8),
+                  Text(
+                    headline,
+                    style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w800,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ],
-              ),
-              const SizedBox(height: 8),
-              Text(
-                headline,
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w800,
-                ),
-                overflow: TextOverflow.ellipsis,
               ),
               if (meta.isNotEmpty) ...<Widget>[
                 const SizedBox(height: 6),
@@ -632,6 +1007,41 @@ class RecordingPageState extends State<RecordingPage> {
     final String lastWeaning =
         _formatTime(_asString(snapshot["last_weaning_time"]));
 
+    final String? openFormulaEventId =
+        _asString(snapshot["open_formula_event_id"]);
+    final String? openFormulaStart =
+        _asString(snapshot["open_formula_start_time"]);
+    final String? openBreastfeedEventId =
+        _asString(snapshot["open_breastfeed_event_id"]);
+    final String? openBreastfeedStart =
+        _asString(snapshot["open_breastfeed_start_time"]);
+    final String? openSleepEventId = _asString(snapshot["open_sleep_event_id"]);
+    final String? openSleepStart = _asString(snapshot["open_sleep_start_time"]);
+    final String? openDiaperEventId =
+        _asString(snapshot["open_diaper_event_id"]);
+    final String? openDiaperStart =
+        _asString(snapshot["open_diaper_start_time"]);
+    final String? openDiaperType = _asString(snapshot["open_diaper_type"]);
+    final String? openWeaningEventId =
+        _asString(snapshot["open_weaning_event_id"]);
+    final String? openWeaningStart =
+        _asString(snapshot["open_weaning_start_time"]);
+    final String? openMedicationEventId =
+        _asString(snapshot["open_medication_event_id"]);
+    final String? openMedicationStart =
+        _asString(snapshot["open_medication_start_time"]);
+
+    final Map<String, dynamic>? formulaOpenPrefill =
+        _openPrefillForTile(HomeTileType.formula, snapshot);
+    final Map<String, dynamic>? sleepOpenPrefill =
+        _openPrefillForTile(HomeTileType.sleep, snapshot);
+    final Map<String, dynamic>? diaperOpenPrefill =
+        _openPrefillForTile(HomeTileType.diaper, snapshot);
+    final Map<String, dynamic>? weaningOpenPrefill =
+        _openPrefillForTile(HomeTileType.weaning, snapshot);
+    final Map<String, dynamic>? medicationOpenPrefill =
+        _openPrefillForTile(HomeTileType.medication, snapshot);
+
     final String specialMemo = _asString(snapshot["special_memo"]) ??
         tr(
           context,
@@ -698,7 +1108,7 @@ class RecordingPageState extends State<RecordingPage> {
     return RefreshIndicator(
       onRefresh: _loadLandingSnapshot,
       child: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
         children: <Widget>[
           if (_snapshotLoading || _entrySaving) const LinearProgressIndicator(),
           if (_snapshotError != null) ...<Widget>[
@@ -711,7 +1121,6 @@ class RecordingPageState extends State<RecordingPage> {
               ),
             ),
           ],
-          const SizedBox(height: 8),
           Card(
             child: ListTile(
               leading: const Icon(Icons.sticky_note_2_outlined),
@@ -776,10 +1185,33 @@ class RecordingPageState extends State<RecordingPage> {
                             es: "Ultima formula/lactancia"),
                         "$lastFormula / $lastBreastfeed",
                       ),
+                      if (openFormulaEventId != null)
+                        _tileMetaLine(
+                          tr(
+                            context,
+                            ko: "진행중 시작",
+                            en: "In-progress start",
+                            es: "Inicio en progreso",
+                          ),
+                          _formatTime(openFormulaStart),
+                        ),
+                      if (openBreastfeedEventId != null)
+                        _tileMetaLine(
+                          tr(
+                            context,
+                            ko: "모유 진행중 시작",
+                            en: "Breastfeed in-progress",
+                            es: "Lactancia en progreso",
+                          ),
+                          _formatTime(openBreastfeedStart),
+                        ),
                     ],
                     onTap: _entrySaving
                         ? null
-                        : () => _openQuickEntry(HomeTileType.formula),
+                        : () => _openQuickEntry(
+                              HomeTileType.formula,
+                              prefill: formulaOpenPrefill,
+                            ),
                   ),
                 if (settings?.isHomeTileEnabled(HomeTileType.sleep) ?? true)
                   _metricTile(
@@ -832,10 +1264,23 @@ class RecordingPageState extends State<RecordingPage> {
                             ? recentSleep
                             : _formatDuration(avgNightPerDayMin.round()),
                       ),
+                      if (openSleepEventId != null)
+                        _tileMetaLine(
+                          tr(
+                            context,
+                            ko: "진행중 시작",
+                            en: "In-progress start",
+                            es: "Inicio en progreso",
+                          ),
+                          _formatTime(openSleepStart),
+                        ),
                     ],
                     onTap: _entrySaving
                         ? null
-                        : () => _openQuickEntry(HomeTileType.sleep),
+                        : () => _openQuickEntry(
+                              HomeTileType.sleep,
+                              prefill: sleepOpenPrefill,
+                            ),
                   ),
                 if (settings?.isHomeTileEnabled(HomeTileType.diaper) ?? true)
                   _metricTile(
@@ -890,10 +1335,23 @@ class RecordingPageState extends State<RecordingPage> {
                                 ? "$diaperPeeCount"
                                 : lastPee,
                       ),
+                      if (openDiaperEventId != null)
+                        _tileMetaLine(
+                          tr(
+                            context,
+                            ko: "진행중 시작",
+                            en: "In-progress start",
+                            es: "Inicio en progreso",
+                          ),
+                          "${openDiaperType ?? "-"} ${_formatTime(openDiaperStart)}",
+                        ),
                     ],
                     onTap: _entrySaving
                         ? null
-                        : () => _openQuickEntry(HomeTileType.diaper),
+                        : () => _openQuickEntry(
+                              HomeTileType.diaper,
+                              prefill: diaperOpenPrefill,
+                            ),
                   ),
                 if (settings?.isHomeTileEnabled(HomeTileType.weaning) ?? true)
                   _metricTile(
@@ -910,10 +1368,23 @@ class RecordingPageState extends State<RecordingPage> {
                         tr(context, ko: "오늘 횟수", en: "Count", es: "Conteo"),
                         "$weaningCount",
                       ),
+                      if (openWeaningEventId != null)
+                        _tileMetaLine(
+                          tr(
+                            context,
+                            ko: "진행중 시작",
+                            en: "In-progress start",
+                            es: "Inicio en progreso",
+                          ),
+                          _formatTime(openWeaningStart),
+                        ),
                     ],
                     onTap: _entrySaving
                         ? null
-                        : () => _openQuickEntry(HomeTileType.weaning),
+                        : () => _openQuickEntry(
+                              HomeTileType.weaning,
+                              prefill: weaningOpenPrefill,
+                            ),
                   ),
                 if (settings?.isHomeTileEnabled(HomeTileType.medication) ??
                     true)
@@ -932,10 +1403,23 @@ class RecordingPageState extends State<RecordingPage> {
                         tr(context, ko: "오늘 횟수", en: "Count", es: "Conteo"),
                         "$medicationCount",
                       ),
+                      if (openMedicationEventId != null)
+                        _tileMetaLine(
+                          tr(
+                            context,
+                            ko: "진행중 시작",
+                            en: "In-progress start",
+                            es: "Inicio en progreso",
+                          ),
+                          _formatTime(openMedicationStart),
+                        ),
                     ],
                     onTap: _entrySaving
                         ? null
-                        : () => _openQuickEntry(HomeTileType.medication),
+                        : () => _openQuickEntry(
+                              HomeTileType.medication,
+                              prefill: medicationOpenPrefill,
+                            ),
                   ),
               ];
 
