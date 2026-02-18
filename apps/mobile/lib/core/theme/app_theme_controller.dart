@@ -100,6 +100,14 @@ class AppThemeController extends ChangeNotifier {
     HomeTileType.memo: false,
   };
 
+  static const List<HomeTileType> _defaultHomeTileOrder = <HomeTileType>[
+    HomeTileType.formula,
+    HomeTileType.sleep,
+    HomeTileType.diaper,
+    HomeTileType.weaning,
+    HomeTileType.medication,
+  ];
+
   AppThemeMode _mode = AppThemeMode.system;
   AppMainFont _mainFont = AppMainFont.notoSans;
   AppHighlightFont _highlightFont = AppHighlightFont.ibmPlexSans;
@@ -107,6 +115,9 @@ class AppThemeController extends ChangeNotifier {
   AppLanguage _language = AppLanguage.ko;
   ChildCareProfile _childCareProfile = ChildCareProfile.formula;
   int _homeTileColumns = 2;
+  bool _showSpecialMemo = true;
+  List<HomeTileType> _homeTileOrder =
+      List<HomeTileType>.from(_defaultHomeTileOrder);
 
   final Map<AppBottomMenu, bool> _bottomMenuEnabled =
       Map<AppBottomMenu, bool>.from(_defaultBottomMenuEnabled);
@@ -120,6 +131,9 @@ class AppThemeController extends ChangeNotifier {
   AppLanguage get language => _language;
   ChildCareProfile get childCareProfile => _childCareProfile;
   int get homeTileColumns => _homeTileColumns;
+  bool get showSpecialMemo => _showSpecialMemo;
+  List<HomeTileType> get homeTileOrder =>
+      List<HomeTileType>.unmodifiable(_homeTileOrder);
 
   Map<AppBottomMenu, bool> get bottomMenuEnabled =>
       Map<AppBottomMenu, bool>.unmodifiable(_bottomMenuEnabled);
@@ -206,9 +220,11 @@ class AppThemeController extends ChangeNotifier {
         ChildCareProfile.formula,
       );
       _homeTileColumns = _parseHomeTileColumns(settings["home_tile_columns"]);
+      _showSpecialMemo = _asBool(settings["show_special_memo"]) ?? true;
 
       _applyBottomMenuFromPayload(settings["bottom_menu_enabled"]);
       _applyHomeTilesFromPayload(settings["home_tiles"]);
+      _applyHomeTileOrderFromPayload(settings["home_tile_order"]);
     } catch (_) {
       // Keep defaults when server settings are unavailable.
     } finally {
@@ -314,10 +330,39 @@ class AppThemeController extends ChangeNotifier {
   }
 
   Future<void> setHomeTileColumns(int columns) async {
-    if (columns < 2 || columns > 3 || _homeTileColumns == columns) {
+    if (columns < 1 || columns > 3 || _homeTileColumns == columns) {
       return;
     }
     _homeTileColumns = columns;
+    notifyListeners();
+    await _syncSettings();
+  }
+
+  Future<void> setShowSpecialMemo(bool enabled) async {
+    if (_showSpecialMemo == enabled) {
+      return;
+    }
+    _showSpecialMemo = enabled;
+    notifyListeners();
+    await _syncSettings();
+  }
+
+  Future<void> reorderHomeTile(int oldIndex, int newIndex) async {
+    if (oldIndex < 0 ||
+        oldIndex >= _homeTileOrder.length ||
+        newIndex < 0 ||
+        newIndex > _homeTileOrder.length) {
+      return;
+    }
+    int targetIndex = newIndex;
+    if (targetIndex > oldIndex) {
+      targetIndex -= 1;
+    }
+    if (targetIndex == oldIndex) {
+      return;
+    }
+    final HomeTileType moved = _homeTileOrder.removeAt(oldIndex);
+    _homeTileOrder.insert(targetIndex, moved);
     notifyListeners();
     await _syncSettings();
   }
@@ -396,19 +441,61 @@ class AppThemeController extends ChangeNotifier {
 
   int _parseHomeTileColumns(Object? value) {
     if (value is int) {
-      return (value >= 2 && value <= 3) ? value : 2;
+      return (value >= 1 && value <= 3) ? value : 2;
     }
     if (value is double) {
       final int rounded = value.round();
-      return (rounded >= 2 && rounded <= 3) ? rounded : 2;
+      return (rounded >= 1 && rounded <= 3) ? rounded : 2;
     }
     if (value is String) {
       final int? parsed = int.tryParse(value.trim());
-      if (parsed != null && parsed >= 2 && parsed <= 3) {
+      if (parsed != null && parsed >= 1 && parsed <= 3) {
         return parsed;
       }
     }
     return 2;
+  }
+
+  void _applyHomeTileOrderFromPayload(Object? raw) {
+    final List<HomeTileType> resolved =
+        List<HomeTileType>.from(_defaultHomeTileOrder);
+    if (raw is List<dynamic>) {
+      final List<HomeTileType> parsed = <HomeTileType>[];
+      for (final dynamic item in raw) {
+        final String key = item.toString().trim().toLowerCase();
+        final HomeTileType? tile = _tileFromOrderKey(key);
+        if (tile != null && !parsed.contains(tile)) {
+          parsed.add(tile);
+        }
+      }
+      if (parsed.isNotEmpty) {
+        for (final HomeTileType tile in _defaultHomeTileOrder) {
+          if (!parsed.contains(tile)) {
+            parsed.add(tile);
+          }
+        }
+        _homeTileOrder = parsed;
+        return;
+      }
+    }
+    _homeTileOrder = resolved;
+  }
+
+  HomeTileType? _tileFromOrderKey(String key) {
+    switch (key) {
+      case "formula":
+        return HomeTileType.formula;
+      case "sleep":
+        return HomeTileType.sleep;
+      case "diaper":
+        return HomeTileType.diaper;
+      case "weaning":
+        return HomeTileType.weaning;
+      case "medication":
+        return HomeTileType.medication;
+      default:
+        return null;
+    }
   }
 
   Map<String, bool> _serializeBottomMenu() {
@@ -425,6 +512,37 @@ class AppThemeController extends ChangeNotifier {
     };
   }
 
+  List<String> _serializeHomeTileOrder() {
+    final List<String> serialized = <String>[];
+    for (final HomeTileType tile in _homeTileOrder) {
+      final HomeTileType? normalized = _tileFromOrderKey(
+        tile.name.toLowerCase(),
+      );
+      switch (normalized) {
+        case HomeTileType.formula:
+          serialized.add("formula");
+          break;
+        case HomeTileType.sleep:
+          serialized.add("sleep");
+          break;
+        case HomeTileType.diaper:
+          serialized.add("diaper");
+          break;
+        case HomeTileType.weaning:
+          serialized.add("weaning");
+          break;
+        case HomeTileType.medication:
+          serialized.add("medication");
+          break;
+        case HomeTileType.breastfeed:
+        case HomeTileType.memo:
+        case null:
+          break;
+      }
+    }
+    return serialized;
+  }
+
   Future<void> _syncSettings() async {
     try {
       await BabyAIApi.instance.updateMySettings(
@@ -437,6 +555,8 @@ class AppThemeController extends ChangeNotifier {
         childCareProfile: _childCareProfile.name,
         homeTiles: _serializeHomeTiles(),
         homeTileColumns: _homeTileColumns,
+        homeTileOrder: _serializeHomeTileOrder(),
+        showSpecialMemo: _showSpecialMemo,
       );
     } catch (_) {
       // Keep local state if sync fails.

@@ -1,4 +1,4 @@
-﻿# BabyAI x Gemini 연동 및 `app.dart` 리팩토링 계획
+# BabyAI x Gemini 연동 및 `app.dart` 리팩토링 계획
 
 ## 1. 목표
 - Gemini/Assistant 음성 명령으로 BabyAI 기록이 실제 DB까지 반영되도록 안정화

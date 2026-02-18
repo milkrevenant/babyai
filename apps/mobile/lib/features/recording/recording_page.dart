@@ -864,6 +864,7 @@ class RecordingPageState extends State<RecordingPage> {
       child: Row(
         children: <Widget>[
           Expanded(
+            flex: 6,
             child: Text(
               label,
               style: TextStyle(
@@ -874,10 +875,16 @@ class RecordingPageState extends State<RecordingPage> {
             ),
           ),
           const SizedBox(width: 6),
-          Text(
-            value,
-            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5),
-            overflow: TextOverflow.ellipsis,
+          Flexible(
+            flex: 4,
+            child: Text(
+              value,
+              style:
+                  const TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.end,
+            ),
           ),
         ],
       ),
@@ -958,6 +965,7 @@ class RecordingPageState extends State<RecordingPage> {
   @override
   Widget build(BuildContext context) {
     final Map<String, dynamic> snapshot = _snapshot ?? <String, dynamic>{};
+    final AppThemeController? settings = AppSettingsScope.maybeOf(context);
     final Map<String, int> formulaBands =
         _asBandMap(snapshot["formula_amount_by_time_band_ml"]);
 
@@ -1033,6 +1041,8 @@ class RecordingPageState extends State<RecordingPage> {
 
     final Map<String, dynamic>? formulaOpenPrefill =
         _openPrefillForTile(HomeTileType.formula, snapshot);
+    final Map<String, dynamic>? breastfeedOpenPrefill =
+        _openPrefillForTile(HomeTileType.breastfeed, snapshot);
     final Map<String, dynamic>? sleepOpenPrefill =
         _openPrefillForTile(HomeTileType.sleep, snapshot);
     final Map<String, dynamic>? diaperOpenPrefill =
@@ -1049,6 +1059,42 @@ class RecordingPageState extends State<RecordingPage> {
           en: "No special memo in this range.",
           es: "No hay nota especial en este rango.",
         );
+    final bool showSpecialMemo = settings?.showSpecialMemo ?? true;
+
+    Map<String, dynamic>? latestFeedingOpenPrefill;
+    HomeTileType latestFeedingTile = HomeTileType.formula;
+    DateTime? latestFeedingOpenStart;
+    if (openFormulaEventId != null && openFormulaStart != null) {
+      latestFeedingOpenPrefill = formulaOpenPrefill;
+      latestFeedingTile = HomeTileType.formula;
+      latestFeedingOpenStart = _parseIsoDateTime(openFormulaStart);
+    }
+    if (openBreastfeedEventId != null && openBreastfeedStart != null) {
+      final DateTime? breastStart = _parseIsoDateTime(openBreastfeedStart);
+      if (latestFeedingOpenStart == null ||
+          (breastStart != null &&
+              breastStart.isAfter(latestFeedingOpenStart))) {
+        latestFeedingOpenPrefill = breastfeedOpenPrefill;
+        latestFeedingTile = HomeTileType.breastfeed;
+        latestFeedingOpenStart = breastStart;
+      }
+    }
+    final DateTime? latestClosedFeeding = <DateTime?>[
+      _parseIsoDateTime(_asString(snapshot["last_formula_time"])),
+      _parseIsoDateTime(_asString(snapshot["last_breastfeed_time"])),
+    ].whereType<DateTime>().fold<DateTime?>(
+          null,
+          (DateTime? current, DateTime item) =>
+              current == null || item.isAfter(current) ? item : current,
+        );
+    final String latestFeedingInputTime = latestFeedingOpenStart != null
+        ? _formatTime(latestFeedingOpenStart.toIso8601String())
+        : (latestClosedFeeding != null
+            ? _formatTime(latestClosedFeeding.toIso8601String())
+            : "-");
+    final String latestSleepInputTime = openSleepStart != null
+        ? _formatTime(openSleepStart)
+        : (recentSleep != "-" ? recentSleep : "-");
 
     final List<String> graphLabels =
         _asStringList(snapshot["feeding_graph_labels"]);
@@ -1121,307 +1167,512 @@ class RecordingPageState extends State<RecordingPage> {
               ),
             ),
           ],
-          Card(
-            child: ListTile(
-              leading: const Icon(Icons.sticky_note_2_outlined),
-              title: Text(
-                tr(
-                  context,
-                  ko: "특별 메모",
-                  en: "Special memo",
-                  es: "Nota especial",
+          if (showSpecialMemo) ...<Widget>[
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.sticky_note_2_outlined),
+                title: Text(
+                  tr(
+                    context,
+                    ko: "특별 메모",
+                    en: "Special memo",
+                    es: "Nota especial",
+                  ),
                 ),
+                subtitle: Text(specialMemo),
               ),
-              subtitle: Text(specialMemo),
             ),
-          ),
-          const SizedBox(height: 10),
+            const SizedBox(height: 10),
+          ],
           Builder(
             builder: (BuildContext context) {
               final AppThemeController? settings =
                   AppSettingsScope.maybeOf(context);
               final int tileColumns =
-                  (settings?.homeTileColumns ?? 2).clamp(2, 3);
-
-              final List<Widget> tiles = <Widget>[
-                if (settings?.isHomeTileEnabled(HomeTileType.formula) ?? true)
-                  _metricTile(
-                    title: tr(
-                      context,
-                      ko: "분유",
-                      en: "Formula",
-                      es: "Formula",
-                    ),
-                    headline: formulaHeadline,
-                    icon: Icons.local_drink_outlined,
-                    meta: <Widget>[
-                      _tileMetaLine(
-                        isDay
-                            ? tr(context, ko: "총 수유량", en: "Total", es: "Total")
-                            : tr(context,
-                                ko: "1일 평균 수유량",
-                                en: "Avg/day amount",
-                                es: "Promedio diario"),
-                        isDay
-                            ? "$formulaTotal ml"
-                            : "${decimalLabel(avgFormulaPerDay)} ml",
-                      ),
-                      _tileMetaLine(
-                        isDay
-                            ? tr(context,
-                                ko: "수유 횟수", en: "Feedings", es: "Tomas")
-                            : tr(context,
-                                ko: "1일 평균 수유 횟수",
-                                en: "Avg/day feedings",
-                                es: "Promedio de tomas"),
-                        isDay
-                            ? "$feedingsCount"
-                            : decimalLabel(avgFeedingsPerDay),
-                      ),
-                      _tileMetaLine(
-                        tr(context,
-                            ko: "마지막 분유/모유",
-                            en: "Last formula/breast",
-                            es: "Ultima formula/lactancia"),
-                        "$lastFormula / $lastBreastfeed",
-                      ),
-                      if (openFormulaEventId != null)
-                        _tileMetaLine(
-                          tr(
-                            context,
-                            ko: "진행중 시작",
-                            en: "In-progress start",
-                            es: "Inicio en progreso",
-                          ),
-                          _formatTime(openFormulaStart),
-                        ),
-                      if (openBreastfeedEventId != null)
-                        _tileMetaLine(
-                          tr(
-                            context,
-                            ko: "모유 진행중 시작",
-                            en: "Breastfeed in-progress",
-                            es: "Lactancia en progreso",
-                          ),
-                          _formatTime(openBreastfeedStart),
-                        ),
-                    ],
-                    onTap: _entrySaving
-                        ? null
-                        : () => _openQuickEntry(
-                              HomeTileType.formula,
-                              prefill: formulaOpenPrefill,
-                            ),
-                  ),
-                if (settings?.isHomeTileEnabled(HomeTileType.sleep) ?? true)
-                  _metricTile(
-                    title: tr(
-                      context,
-                      ko: "수면",
-                      en: "Sleep",
-                      es: "Sueno",
-                    ),
-                    headline: sleepHeadline,
-                    icon: Icons.bedtime_outlined,
-                    meta: <Widget>[
-                      _tileMetaLine(
-                        isDay
-                            ? tr(context,
-                                ko: "최근 잠 지속", en: "Duration", es: "Duracion")
-                            : tr(context,
-                                ko: "1일 평균 수면 시간",
-                                en: "Avg/day sleep",
-                                es: "Sueno diario"),
-                        isDay
-                            ? recentSleepDuration
-                            : _formatDuration(avgSleepPerDayMin.round()),
-                      ),
-                      _tileMetaLine(
-                        isDay
-                            ? tr(context,
-                                ko: "마지막 잠 종료",
-                                en: "Last sleep end",
-                                es: "Fin del sueno")
-                            : tr(context,
-                                ko: "1일 평균 낮잠 지속",
-                                en: "Avg/day nap",
-                                es: "Siesta diaria"),
-                        isDay
-                            ? lastSleepEnd
-                            : _formatDuration(avgNapPerDayMin.round()),
-                      ),
-                      _tileMetaLine(
-                        isDay
-                            ? tr(context,
-                                ko: "최근 잠 시작",
-                                en: "Recent sleep start",
-                                es: "Inicio reciente")
-                            : tr(context,
-                                ko: "1일 평균 밤잠 지속",
-                                en: "Avg/day night sleep",
-                                es: "Sueno nocturno diario"),
-                        isDay
-                            ? recentSleep
-                            : _formatDuration(avgNightPerDayMin.round()),
-                      ),
-                      if (openSleepEventId != null)
-                        _tileMetaLine(
-                          tr(
-                            context,
-                            ko: "진행중 시작",
-                            en: "In-progress start",
-                            es: "Inicio en progreso",
-                          ),
-                          _formatTime(openSleepStart),
-                        ),
-                    ],
-                    onTap: _entrySaving
-                        ? null
-                        : () => _openQuickEntry(
-                              HomeTileType.sleep,
-                              prefill: sleepOpenPrefill,
-                            ),
-                  ),
-                if (settings?.isHomeTileEnabled(HomeTileType.diaper) ?? true)
-                  _metricTile(
-                    title: tr(
-                      context,
-                      ko: "기저귀",
-                      en: "Diaper",
-                      es: "Panal",
-                    ),
-                    headline: diaperHeadline,
-                    icon: Icons.baby_changing_station_outlined,
-                    meta: <Widget>[
-                      _tileMetaLine(
-                        isMonth
-                            ? tr(context,
-                                ko: "1일 평균 대변 횟수",
-                                en: "Avg/day poo",
-                                es: "Promedio heces")
-                            : isWeek
-                                ? tr(context,
-                                    ko: "주 총 대변 횟수",
-                                    en: "Weekly poo total",
-                                    es: "Total heces semana")
-                                : tr(context,
-                                    ko: "마지막 대변",
-                                    en: "Last poo",
-                                    es: "Ultimas heces"),
-                        isMonth
-                            ? decimalLabel(avgPooPerDay)
-                            : isWeek
-                                ? "$diaperPooCount"
-                                : lastPoo,
-                      ),
-                      _tileMetaLine(
-                        isMonth
-                            ? tr(context,
-                                ko: "1일 평균 소변 횟수",
-                                en: "Avg/day pee",
-                                es: "Promedio orina")
-                            : isWeek
-                                ? tr(context,
-                                    ko: "주 총 소변 횟수",
-                                    en: "Weekly pee total",
-                                    es: "Total orina semana")
-                                : tr(context,
-                                    ko: "마지막 소변",
-                                    en: "Last pee",
-                                    es: "Ultima orina"),
-                        isMonth
-                            ? decimalLabel(avgPeePerDay)
-                            : isWeek
-                                ? "$diaperPeeCount"
-                                : lastPee,
-                      ),
-                      if (openDiaperEventId != null)
-                        _tileMetaLine(
-                          tr(
-                            context,
-                            ko: "진행중 시작",
-                            en: "In-progress start",
-                            es: "Inicio en progreso",
-                          ),
-                          "${openDiaperType ?? "-"} ${_formatTime(openDiaperStart)}",
-                        ),
-                    ],
-                    onTap: _entrySaving
-                        ? null
-                        : () => _openQuickEntry(
-                              HomeTileType.diaper,
-                              prefill: diaperOpenPrefill,
-                            ),
-                  ),
-                if (settings?.isHomeTileEnabled(HomeTileType.weaning) ?? true)
-                  _metricTile(
-                    title: tr(
-                      context,
-                      ko: "이유식",
-                      en: "Weaning",
-                      es: "Destete",
-                    ),
-                    headline: lastWeaning,
-                    icon: Icons.rice_bowl_outlined,
-                    meta: <Widget>[
-                      _tileMetaLine(
-                        tr(context, ko: "오늘 횟수", en: "Count", es: "Conteo"),
-                        "$weaningCount",
-                      ),
-                      if (openWeaningEventId != null)
-                        _tileMetaLine(
-                          tr(
-                            context,
-                            ko: "진행중 시작",
-                            en: "In-progress start",
-                            es: "Inicio en progreso",
-                          ),
-                          _formatTime(openWeaningStart),
-                        ),
-                    ],
-                    onTap: _entrySaving
-                        ? null
-                        : () => _openQuickEntry(
-                              HomeTileType.weaning,
-                              prefill: weaningOpenPrefill,
-                            ),
-                  ),
-                if (settings?.isHomeTileEnabled(HomeTileType.medication) ??
-                    true)
-                  _metricTile(
-                    title: tr(
-                      context,
-                      ko: "투약",
-                      en: "Medication",
-                      es: "Medicacion",
-                    ),
-                    headline: _formatTime(
-                        _asString(snapshot["last_medication_time"])),
-                    icon: Icons.medication_outlined,
-                    meta: <Widget>[
-                      _tileMetaLine(
-                        tr(context, ko: "오늘 횟수", en: "Count", es: "Conteo"),
-                        "$medicationCount",
-                      ),
-                      if (openMedicationEventId != null)
-                        _tileMetaLine(
-                          tr(
-                            context,
-                            ko: "진행중 시작",
-                            en: "In-progress start",
-                            es: "Inicio en progreso",
-                          ),
-                          _formatTime(openMedicationStart),
-                        ),
-                    ],
-                    onTap: _entrySaving
-                        ? null
-                        : () => _openQuickEntry(
-                              HomeTileType.medication,
-                              prefill: medicationOpenPrefill,
-                            ),
-                  ),
+                  (settings?.homeTileColumns ?? 2).clamp(1, 3);
+              const List<HomeTileType> fallbackOrder = <HomeTileType>[
+                HomeTileType.formula,
+                HomeTileType.sleep,
+                HomeTileType.diaper,
+                HomeTileType.weaning,
+                HomeTileType.medication,
               ];
+              final List<HomeTileType> orderedTiles =
+                  settings?.homeTileOrder ?? fallbackOrder;
+              final List<Widget> tiles = <Widget>[];
+
+              bool isEnabled(HomeTileType tile) =>
+                  settings?.isHomeTileEnabled(tile) ?? true;
+
+              void addTileGroup(HomeTileType tile) {
+                switch (tile) {
+                  case HomeTileType.formula:
+                    if (!isEnabled(HomeTileType.formula)) {
+                      return;
+                    }
+                    tiles.add(
+                      _metricTile(
+                        title:
+                            tr(context, ko: "분유", en: "Formula", es: "Formula"),
+                        headline: formulaHeadline,
+                        icon: Icons.local_drink_outlined,
+                        meta: <Widget>[
+                          _tileMetaLine(
+                            isDay
+                                ? tr(context,
+                                    ko: "총 수유량", en: "Total", es: "Total")
+                                : tr(
+                                    context,
+                                    ko: "1일 평균 수유량",
+                                    en: "Avg/day amount",
+                                    es: "Promedio diario",
+                                  ),
+                            isDay
+                                ? "$formulaTotal ml"
+                                : "${decimalLabel(avgFormulaPerDay)} ml",
+                          ),
+                          _tileMetaLine(
+                            isDay
+                                ? tr(
+                                    context,
+                                    ko: "수유 횟수",
+                                    en: "Feedings",
+                                    es: "Tomas",
+                                  )
+                                : tr(
+                                    context,
+                                    ko: "1일 평균 수유 횟수",
+                                    en: "Avg/day feedings",
+                                    es: "Promedio de tomas",
+                                  ),
+                            isDay
+                                ? "$feedingsCount"
+                                : decimalLabel(avgFeedingsPerDay),
+                          ),
+                          _tileMetaLine(
+                            tr(
+                              context,
+                              ko: "마지막 분유/모유",
+                              en: "Last formula/breast",
+                              es: "Ultima formula/lactancia",
+                            ),
+                            "$lastFormula / $lastBreastfeed",
+                          ),
+                          if (openFormulaEventId != null)
+                            _tileMetaLine(
+                              tr(
+                                context,
+                                ko: "진행중 시작",
+                                en: "In-progress start",
+                                es: "Inicio en progreso",
+                              ),
+                              _formatTime(openFormulaStart),
+                            ),
+                          if (openBreastfeedEventId != null)
+                            _tileMetaLine(
+                              tr(
+                                context,
+                                ko: "모유 진행중 시작",
+                                en: "Breastfeed in-progress",
+                                es: "Lactancia en progreso",
+                              ),
+                              _formatTime(openBreastfeedStart),
+                            ),
+                        ],
+                        onTap: _entrySaving
+                            ? null
+                            : () => _openQuickEntry(
+                                  HomeTileType.formula,
+                                  prefill: formulaOpenPrefill,
+                                ),
+                      ),
+                    );
+                    tiles.add(
+                      _metricTile(
+                        title: tr(
+                          context,
+                          ko: "마지막 수유 입력",
+                          en: "Last feeding input",
+                          es: "Ultimo registro de toma",
+                        ),
+                        headline: latestFeedingInputTime,
+                        icon: Icons.history_toggle_off_outlined,
+                        meta: <Widget>[
+                          _tileMetaLine(
+                            tr(
+                              context,
+                              ko: "빠른 수정",
+                              en: "Quick edit",
+                              es: "Edicion rapida",
+                            ),
+                            latestFeedingOpenPrefill != null
+                                ? tr(
+                                    context,
+                                    ko: "진행 중 기록 열기",
+                                    en: "Open in-progress log",
+                                    es: "Abrir registro en progreso",
+                                  )
+                                : tr(
+                                    context,
+                                    ko: "종료 기록은 통계(일)에서 수정",
+                                    en: "Edit closed logs in Day stats",
+                                    es: "Editar cerrados en estadisticas diarias",
+                                  ),
+                          ),
+                        ],
+                        onTap: _entrySaving
+                            ? null
+                            : () async {
+                                if (latestFeedingOpenPrefill != null) {
+                                  await _openQuickEntry(
+                                    latestFeedingTile,
+                                    prefill: latestFeedingOpenPrefill,
+                                  );
+                                  return;
+                                }
+                                if (!context.mounted) {
+                                  return;
+                                }
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      tr(
+                                        context,
+                                        ko: "종료된 수유 기록 수정은 통계 탭의 일 화면에서 가능합니다.",
+                                        en: "Edit closed feeding logs in Statistics > Day.",
+                                        es: "Edite tomas cerradas en Estadisticas > Dia.",
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                      ),
+                    );
+                    return;
+                  case HomeTileType.sleep:
+                    if (!isEnabled(HomeTileType.sleep)) {
+                      return;
+                    }
+                    tiles.add(
+                      _metricTile(
+                        title: tr(context, ko: "수면", en: "Sleep", es: "Sueno"),
+                        headline: sleepHeadline,
+                        icon: Icons.bedtime_outlined,
+                        meta: <Widget>[
+                          _tileMetaLine(
+                            isDay
+                                ? tr(context,
+                                    ko: "최근 잠 지속",
+                                    en: "Duration",
+                                    es: "Duracion")
+                                : tr(
+                                    context,
+                                    ko: "1일 평균 수면 시간",
+                                    en: "Avg/day sleep",
+                                    es: "Sueno diario",
+                                  ),
+                            isDay
+                                ? recentSleepDuration
+                                : _formatDuration(avgSleepPerDayMin.round()),
+                          ),
+                          _tileMetaLine(
+                            isDay
+                                ? tr(
+                                    context,
+                                    ko: "마지막 잠 종료",
+                                    en: "Last sleep end",
+                                    es: "Fin del sueno",
+                                  )
+                                : tr(
+                                    context,
+                                    ko: "1일 평균 낮잠 지속",
+                                    en: "Avg/day nap",
+                                    es: "Siesta diaria",
+                                  ),
+                            isDay
+                                ? lastSleepEnd
+                                : _formatDuration(avgNapPerDayMin.round()),
+                          ),
+                          _tileMetaLine(
+                            isDay
+                                ? tr(
+                                    context,
+                                    ko: "최근 잠 시작",
+                                    en: "Recent sleep start",
+                                    es: "Inicio reciente",
+                                  )
+                                : tr(
+                                    context,
+                                    ko: "1일 평균 밤잠 지속",
+                                    en: "Avg/day night sleep",
+                                    es: "Sueno nocturno diario",
+                                  ),
+                            isDay
+                                ? recentSleep
+                                : _formatDuration(avgNightPerDayMin.round()),
+                          ),
+                          if (openSleepEventId != null)
+                            _tileMetaLine(
+                              tr(
+                                context,
+                                ko: "진행중 시작",
+                                en: "In-progress start",
+                                es: "Inicio en progreso",
+                              ),
+                              _formatTime(openSleepStart),
+                            ),
+                        ],
+                        onTap: _entrySaving
+                            ? null
+                            : () => _openQuickEntry(
+                                  HomeTileType.sleep,
+                                  prefill: sleepOpenPrefill,
+                                ),
+                      ),
+                    );
+                    tiles.add(
+                      _metricTile(
+                        title: tr(
+                          context,
+                          ko: "마지막 수면 입력",
+                          en: "Last sleep input",
+                          es: "Ultimo registro de sueno",
+                        ),
+                        headline: latestSleepInputTime,
+                        icon: Icons.timelapse_outlined,
+                        meta: <Widget>[
+                          _tileMetaLine(
+                            tr(
+                              context,
+                              ko: "빠른 수정",
+                              en: "Quick edit",
+                              es: "Edicion rapida",
+                            ),
+                            openSleepEventId != null
+                                ? tr(
+                                    context,
+                                    ko: "진행 중 기록 열기",
+                                    en: "Open in-progress log",
+                                    es: "Abrir registro en progreso",
+                                  )
+                                : tr(
+                                    context,
+                                    ko: "종료 기록은 통계(일)에서 수정",
+                                    en: "Edit closed logs in Day stats",
+                                    es: "Editar cerrados en estadisticas diarias",
+                                  ),
+                          ),
+                        ],
+                        onTap: _entrySaving
+                            ? null
+                            : () async {
+                                if (sleepOpenPrefill != null) {
+                                  await _openQuickEntry(
+                                    HomeTileType.sleep,
+                                    prefill: sleepOpenPrefill,
+                                  );
+                                  return;
+                                }
+                                if (!context.mounted) {
+                                  return;
+                                }
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      tr(
+                                        context,
+                                        ko: "종료된 수면 기록 수정은 통계 탭의 일 화면에서 가능합니다.",
+                                        en: "Edit closed sleep logs in Statistics > Day.",
+                                        es: "Edite suenos cerrados en Estadisticas > Dia.",
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                      ),
+                    );
+                    return;
+                  case HomeTileType.diaper:
+                    if (!isEnabled(HomeTileType.diaper)) {
+                      return;
+                    }
+                    tiles.add(
+                      _metricTile(
+                        title:
+                            tr(context, ko: "기저귀", en: "Diaper", es: "Panal"),
+                        headline: diaperHeadline,
+                        icon: Icons.baby_changing_station_outlined,
+                        meta: <Widget>[
+                          _tileMetaLine(
+                            isMonth
+                                ? tr(
+                                    context,
+                                    ko: "1일 평균 대변 횟수",
+                                    en: "Avg/day poo",
+                                    es: "Promedio heces",
+                                  )
+                                : isWeek
+                                    ? tr(
+                                        context,
+                                        ko: "주 총 대변 횟수",
+                                        en: "Weekly poo total",
+                                        es: "Total heces semana",
+                                      )
+                                    : tr(
+                                        context,
+                                        ko: "마지막 대변",
+                                        en: "Last poo",
+                                        es: "Ultimas heces",
+                                      ),
+                            isMonth
+                                ? decimalLabel(avgPooPerDay)
+                                : isWeek
+                                    ? "$diaperPooCount"
+                                    : lastPoo,
+                          ),
+                          _tileMetaLine(
+                            isMonth
+                                ? tr(
+                                    context,
+                                    ko: "1일 평균 소변 횟수",
+                                    en: "Avg/day pee",
+                                    es: "Promedio orina",
+                                  )
+                                : isWeek
+                                    ? tr(
+                                        context,
+                                        ko: "주 총 소변 횟수",
+                                        en: "Weekly pee total",
+                                        es: "Total orina semana",
+                                      )
+                                    : tr(
+                                        context,
+                                        ko: "마지막 소변",
+                                        en: "Last pee",
+                                        es: "Ultima orina",
+                                      ),
+                            isMonth
+                                ? decimalLabel(avgPeePerDay)
+                                : isWeek
+                                    ? "$diaperPeeCount"
+                                    : lastPee,
+                          ),
+                          if (openDiaperEventId != null)
+                            _tileMetaLine(
+                              tr(
+                                context,
+                                ko: "진행중 시작",
+                                en: "In-progress start",
+                                es: "Inicio en progreso",
+                              ),
+                              "${openDiaperType ?? "-"} ${_formatTime(openDiaperStart)}",
+                            ),
+                        ],
+                        onTap: _entrySaving
+                            ? null
+                            : () => _openQuickEntry(
+                                  HomeTileType.diaper,
+                                  prefill: diaperOpenPrefill,
+                                ),
+                      ),
+                    );
+                    return;
+                  case HomeTileType.weaning:
+                    if (!isEnabled(HomeTileType.weaning)) {
+                      return;
+                    }
+                    tiles.add(
+                      _metricTile(
+                        title: tr(context,
+                            ko: "이유식", en: "Weaning", es: "Destete"),
+                        headline: lastWeaning,
+                        icon: Icons.rice_bowl_outlined,
+                        meta: <Widget>[
+                          _tileMetaLine(
+                            tr(context, ko: "오늘 횟수", en: "Count", es: "Conteo"),
+                            "$weaningCount",
+                          ),
+                          if (openWeaningEventId != null)
+                            _tileMetaLine(
+                              tr(
+                                context,
+                                ko: "진행중 시작",
+                                en: "In-progress start",
+                                es: "Inicio en progreso",
+                              ),
+                              _formatTime(openWeaningStart),
+                            ),
+                        ],
+                        onTap: _entrySaving
+                            ? null
+                            : () => _openQuickEntry(
+                                  HomeTileType.weaning,
+                                  prefill: weaningOpenPrefill,
+                                ),
+                      ),
+                    );
+                    return;
+                  case HomeTileType.medication:
+                    if (!isEnabled(HomeTileType.medication)) {
+                      return;
+                    }
+                    tiles.add(
+                      _metricTile(
+                        title: tr(
+                          context,
+                          ko: "투약",
+                          en: "Medication",
+                          es: "Medicacion",
+                        ),
+                        headline: _formatTime(
+                            _asString(snapshot["last_medication_time"])),
+                        icon: Icons.medication_outlined,
+                        meta: <Widget>[
+                          _tileMetaLine(
+                            tr(context, ko: "오늘 횟수", en: "Count", es: "Conteo"),
+                            "$medicationCount",
+                          ),
+                          if (openMedicationEventId != null)
+                            _tileMetaLine(
+                              tr(
+                                context,
+                                ko: "진행중 시작",
+                                en: "In-progress start",
+                                es: "Inicio en progreso",
+                              ),
+                              _formatTime(openMedicationStart),
+                            ),
+                        ],
+                        onTap: _entrySaving
+                            ? null
+                            : () => _openQuickEntry(
+                                  HomeTileType.medication,
+                                  prefill: medicationOpenPrefill,
+                                ),
+                      ),
+                    );
+                    return;
+                  case HomeTileType.breastfeed:
+                  case HomeTileType.memo:
+                    return;
+                }
+              }
+
+              final Set<HomeTileType> added = <HomeTileType>{};
+              for (final HomeTileType tile in orderedTiles) {
+                if (added.contains(tile)) {
+                  continue;
+                }
+                added.add(tile);
+                addTileGroup(tile);
+              }
+              for (final HomeTileType tile in fallbackOrder) {
+                if (added.contains(tile)) {
+                  continue;
+                }
+                added.add(tile);
+                addTileGroup(tile);
+              }
 
               return GridView(
                 shrinkWrap: true,
@@ -1430,7 +1681,11 @@ class RecordingPageState extends State<RecordingPage> {
                   crossAxisCount: tileColumns,
                   crossAxisSpacing: 10,
                   mainAxisSpacing: 10,
-                  childAspectRatio: tileColumns == 3 ? 0.9 : 1.1,
+                  childAspectRatio: tileColumns == 1
+                      ? 2.05
+                      : tileColumns == 3
+                          ? 0.9
+                          : 1.1,
                 ),
                 children: tiles,
               );

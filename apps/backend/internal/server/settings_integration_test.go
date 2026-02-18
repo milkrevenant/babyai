@@ -26,6 +26,9 @@ func TestGetMySettingsReturnsSystemByDefault(t *testing.T) {
 	if body["theme_mode"] != "system" {
 		t.Fatalf("expected default theme_mode=system, got %v", body["theme_mode"])
 	}
+	if showMemo, ok := body["show_special_memo"].(bool); !ok || !showMemo {
+		t.Fatalf("expected default show_special_memo=true, got %v", body["show_special_memo"])
+	}
 }
 
 func TestUpsertMySettingsPersistsThemeMode(t *testing.T) {
@@ -141,6 +144,30 @@ func TestUpsertMySettingsPersistsHomeTileColumns(t *testing.T) {
 	}
 }
 
+func TestUpsertMySettingsAllowsOneHomeTileColumn(t *testing.T) {
+	resetDatabase(t)
+	fixture := seedOwnerFixture(t)
+
+	updateRec := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodPatch,
+		"/api/v1/settings/me",
+		signToken(t, fixture.UserID, nil),
+		map[string]any{
+			"home_tile_columns": 1,
+		},
+		nil,
+	)
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", updateRec.Code, updateRec.Body.String())
+	}
+	updateBody := decodeJSONMap(t, updateRec)
+	if columns, ok := updateBody["home_tile_columns"].(float64); !ok || int(columns) != 1 {
+		t.Fatalf("expected updated home_tile_columns=1, got %v", updateBody["home_tile_columns"])
+	}
+}
+
 func TestUpsertMySettingsRejectsInvalidHomeTileColumns(t *testing.T) {
 	resetDatabase(t)
 	fixture := seedOwnerFixture(t)
@@ -159,7 +186,83 @@ func TestUpsertMySettingsRejectsInvalidHomeTileColumns(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	if detail := responseDetail(t, rec); detail != "home_tile_columns must be 2 or 3" {
+	if detail := responseDetail(t, rec); detail != "home_tile_columns must be 1, 2, or 3" {
 		t.Fatalf("unexpected detail: %q", detail)
+	}
+}
+
+func TestUpsertMySettingsPersistsHomeTileOrder(t *testing.T) {
+	resetDatabase(t)
+	fixture := seedOwnerFixture(t)
+
+	updateRec := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodPatch,
+		"/api/v1/settings/me",
+		signToken(t, fixture.UserID, nil),
+		map[string]any{
+			"home_tile_order": []string{
+				"sleep",
+				"formula",
+				"diaper",
+				"weaning",
+				"medication",
+			},
+		},
+		nil,
+	)
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", updateRec.Code, updateRec.Body.String())
+	}
+	updateBody := decodeJSONMap(t, updateRec)
+	orderAny, ok := updateBody["home_tile_order"].([]any)
+	if !ok || len(orderAny) != 5 {
+		t.Fatalf("expected home_tile_order with 5 entries, got %v", updateBody["home_tile_order"])
+	}
+	if orderAny[0] != "sleep" || orderAny[1] != "formula" {
+		t.Fatalf("unexpected home_tile_order: %v", orderAny)
+	}
+}
+
+func TestUpsertMySettingsPersistsShowSpecialMemo(t *testing.T) {
+	resetDatabase(t)
+	fixture := seedOwnerFixture(t)
+
+	updateRec := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodPatch,
+		"/api/v1/settings/me",
+		signToken(t, fixture.UserID, nil),
+		map[string]any{
+			"show_special_memo": false,
+		},
+		nil,
+	)
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", updateRec.Code, updateRec.Body.String())
+	}
+
+	updateBody := decodeJSONMap(t, updateRec)
+	if showMemo, ok := updateBody["show_special_memo"].(bool); !ok || showMemo {
+		t.Fatalf("expected show_special_memo=false, got %v", updateBody["show_special_memo"])
+	}
+
+	getRec := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodGet,
+		"/api/v1/settings/me",
+		signToken(t, fixture.UserID, nil),
+		nil,
+		nil,
+	)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", getRec.Code, getRec.Body.String())
+	}
+	getBody := decodeJSONMap(t, getRec)
+	if showMemo, ok := getBody["show_special_memo"].(bool); !ok || showMemo {
+		t.Fatalf("expected persisted show_special_memo=false, got %v", getBody["show_special_memo"])
 	}
 }

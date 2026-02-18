@@ -75,6 +75,8 @@ type updateMySettingsRequest struct {
 	ChildCareProfile *string         `json:"child_care_profile"`
 	HomeTiles        map[string]bool `json:"home_tiles"`
 	HomeTileColumns  *int            `json:"home_tile_columns"`
+	HomeTileOrder    []string        `json:"home_tile_order"`
+	ShowSpecialMemo  *bool           `json:"show_special_memo"`
 }
 
 type manualEventCreateRequest struct {
@@ -84,6 +86,32 @@ type manualEventCreateRequest struct {
 	EndTime   *time.Time     `json:"end_time,omitempty"`
 	Value     map[string]any `json:"value"`
 	Metadata  map[string]any `json:"metadata,omitempty"`
+}
+
+type manualEventStartRequest struct {
+	BabyID    string         `json:"baby_id"`
+	Type      string         `json:"type"`
+	StartTime time.Time      `json:"start_time"`
+	Value     map[string]any `json:"value"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+}
+
+type manualEventCompleteRequest struct {
+	EndTime  *time.Time     `json:"end_time,omitempty"`
+	Value    map[string]any `json:"value,omitempty"`
+	Metadata map[string]any `json:"metadata,omitempty"`
+}
+
+type manualEventUpdateRequest struct {
+	Type      *string        `json:"type,omitempty"`
+	StartTime *time.Time     `json:"start_time,omitempty"`
+	EndTime   *time.Time     `json:"end_time,omitempty"`
+	Value     map[string]any `json:"value,omitempty"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+}
+
+type manualEventCancelRequest struct {
+	Reason string `json:"reason,omitempty"`
 }
 
 type babyProfileUpsertRequest struct {

@@ -28,6 +28,57 @@ class SettingsPage extends StatelessWidget {
     await themeController.setMode(mode);
   }
 
+  Widget _boundedControl(Widget child) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 540),
+        child: child,
+      ),
+    );
+  }
+
+  InputDecoration _dropdownDecoration(BuildContext context, String label) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    final BorderRadius borderRadius = BorderRadius.circular(14);
+    return InputDecoration(
+      labelText: label,
+      filled: true,
+      fillColor: color.surfaceContainerHighest.withValues(alpha: 0.24),
+      border: OutlineInputBorder(borderRadius: borderRadius),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: borderRadius,
+        borderSide: BorderSide(color: color.outlineVariant),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: borderRadius,
+        borderSide: BorderSide(color: color.primary, width: 1.4),
+      ),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+    );
+  }
+
+  Widget _settingsDropdown<T>({
+    required BuildContext context,
+    required T initialValue,
+    required String label,
+    required List<DropdownMenuItem<T>> items,
+    required ValueChanged<T?> onChanged,
+  }) {
+    return _boundedControl(
+      DropdownButtonFormField<T>(
+        initialValue: initialValue,
+        isExpanded: true,
+        menuMaxHeight: 320,
+        borderRadius: BorderRadius.circular(14),
+        icon: const Icon(Icons.expand_more_rounded, size: 20),
+        decoration: _dropdownDecoration(context, label),
+        items: items,
+        onChanged: onChanged,
+      ),
+    );
+  }
+
   String _mainFontLabel(BuildContext context, AppMainFont font) {
     switch (font) {
       case AppMainFont.notoSans:
@@ -308,16 +359,14 @@ Aviso de recopilacion y uso de privacidad de BabyAI
               Text(tr(context, ko: "언어", en: "Language", es: "Idioma"),
                   style: const TextStyle(fontWeight: FontWeight.w700)),
               const SizedBox(height: 8),
-              DropdownButtonFormField<AppLanguage>(
+              _settingsDropdown<AppLanguage>(
+                context: context,
                 initialValue: themeController.language,
-                decoration: InputDecoration(
-                  labelText: tr(
-                    context,
-                    ko: "앱 언어",
-                    en: "App language",
-                    es: "Idioma de la app",
-                  ),
-                  border: const OutlineInputBorder(),
+                label: tr(
+                  context,
+                  ko: "앱 언어",
+                  en: "App language",
+                  es: "Idioma de la app",
                 ),
                 items: AppLanguage.values
                     .map(
@@ -372,13 +421,11 @@ Aviso de recopilacion y uso de privacidad de BabyAI
               Text(tr(context, ko: "폰트 설정", en: "Font Settings", es: "Fuentes"),
                   style: const TextStyle(fontWeight: FontWeight.w700)),
               const SizedBox(height: 8),
-              DropdownButtonFormField<AppMainFont>(
+              _settingsDropdown<AppMainFont>(
+                context: context,
                 initialValue: themeController.mainFont,
-                decoration: InputDecoration(
-                  labelText: tr(context,
-                      ko: "메인 폰트", en: "Main font", es: "Fuente principal"),
-                  border: const OutlineInputBorder(),
-                ),
+                label: tr(context,
+                    ko: "메인 폰트", en: "Main font", es: "Fuente principal"),
                 items: AppMainFont.values
                     .map(
                       (AppMainFont item) => DropdownMenuItem<AppMainFont>(
@@ -394,15 +441,13 @@ Aviso de recopilacion y uso de privacidad de BabyAI
                 },
               ),
               const SizedBox(height: 10),
-              DropdownButtonFormField<AppHighlightFont>(
+              _settingsDropdown<AppHighlightFont>(
+                context: context,
                 initialValue: themeController.highlightFont,
-                decoration: InputDecoration(
-                  labelText: tr(context,
-                      ko: "하이라이트 폰트",
-                      en: "Highlight font",
-                      es: "Fuente destacada"),
-                  border: const OutlineInputBorder(),
-                ),
+                label: tr(context,
+                    ko: "하이라이트 폰트",
+                    en: "Highlight font",
+                    es: "Fuente destacada"),
                 items: AppHighlightFont.values
                     .map(
                       (AppHighlightFont item) =>
@@ -491,6 +536,22 @@ Aviso de recopilacion y uso de privacidad de BabyAI
                           themeController: themeController),
                     ),
                   );
+                },
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                secondary: const Icon(Icons.sticky_note_2_outlined),
+                value: themeController.showSpecialMemo,
+                title: Text(tr(context,
+                    ko: "특별 메모 표시",
+                    en: "Show special memo",
+                    es: "Mostrar nota especial")),
+                subtitle: Text(tr(context,
+                    ko: "홈 상단 특별 메모 카드 표시 여부",
+                    en: "Show or hide the special memo card on Home.",
+                    es: "Mostrar u ocultar la tarjeta de nota especial en Inicio.")),
+                onChanged: (bool value) {
+                  themeController.setShowSpecialMemo(value);
                 },
               ),
               const Divider(height: 24),

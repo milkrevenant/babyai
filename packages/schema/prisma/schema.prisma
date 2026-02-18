@@ -45,6 +45,12 @@ enum EventSource {
   IMPORT
 }
 
+enum EventStatus {
+  OPEN
+  CLOSED
+  CANCELED
+}
+
 enum VoiceClipStatus {
   PARSED
   CONFIRMED
@@ -169,14 +175,18 @@ model Event {
   endTime       DateTime?
   valueJson     Json
   metadataJson  Json?
+  status        EventStatus @default(CLOSED)
   source        EventSource
   createdBy     String
   createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @default(now()) @updatedAt
   baby          Baby        @relation(fields: [babyId], references: [id], onDelete: Cascade)
   creator       User        @relation("EventCreator", fields: [createdBy], references: [id], onDelete: Restrict)
 
   @@index([babyId, startTime(sort: Desc)])
   @@index([babyId, type, startTime(sort: Desc)])
+  @@index([babyId, status, startTime(sort: Desc)])
+  @@index([babyId, type, status, startTime(sort: Desc)])
 }
 
 model VoiceClip {
@@ -308,4 +318,3 @@ model AuditLog {
 
   @@index([householdId, createdAt(sort: Desc)])
 }
-

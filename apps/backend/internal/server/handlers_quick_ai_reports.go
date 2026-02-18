@@ -1579,6 +1579,7 @@ func (a *App) getDailyReport(c *gin.Context) {
 	}
 
 	var summaryText string
+	summaryLines := []string{}
 	err = a.db.QueryRow(
 		c.Request.Context(),
 		`SELECT "summaryText" FROM "Report"
@@ -1588,14 +1589,7 @@ func (a *App) getDailyReport(c *gin.Context) {
 		targetDate,
 	).Scan(&summaryText)
 	if err == nil {
-		lines := splitNonEmptyLines(summaryText)
-		c.JSON(http.StatusOK, gin.H{
-			"baby_id": baby.ID,
-			"date":    targetDate.Format("2006-01-02"),
-			"summary": lines,
-			"labels":  []string{"record_based"},
-		})
-		return
+		summaryLines = splitNonEmptyLines(summaryText)
 	}
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		writeError(c, http.StatusInternalServerError, "Failed to load reports")
@@ -1606,9 +1600,10 @@ func (a *App) getDailyReport(c *gin.Context) {
 	end := start.Add(24 * time.Hour)
 	rows, err := a.db.Query(
 		c.Request.Context(),
-		`SELECT type, "startTime", "endTime", "valueJson"
+		`SELECT id, type, status, "startTime", "endTime", "valueJson", "metadataJson"
 		 FROM "Event"
-		 WHERE "babyId" = $1 AND status = 'CLOSED' AND "startTime" >= $2 AND "startTime" < $3`,
+		 WHERE "babyId" = $1 AND status = 'CLOSED' AND "startTime" >= $2 AND "startTime" < $3
+		 ORDER BY "startTime" DESC`,
 		baby.ID,
 		start,
 		end,
@@ -1622,17 +1617,30 @@ func (a *App) getDailyReport(c *gin.Context) {
 	counts := map[string]int{}
 	formulaTotal := 0.0
 	sleepMinutes := 0
+	events := make([]gin.H, 0)
 	for rows.Next() {
+		var eventID string
 		var eventType string
+		var eventStatus string
 		var startedAt time.Time
 		var endedAt *time.Time
 		var valueRaw []byte
-		if err := rows.Scan(&eventType, &startedAt, &endedAt, &valueRaw); err != nil {
+		var metadataRaw []byte
+		if err := rows.Scan(
+			&eventID,
+			&eventType,
+			&eventStatus,
+			&startedAt,
+			&endedAt,
+			&valueRaw,
+			&metadataRaw,
+		); err != nil {
 			writeError(c, http.StatusInternalServerError, "Failed to parse events")
 			return
 		}
 		counts[eventType]++
 		valueMap := parseJSONStringMap(valueRaw)
+		metadataMap := parseJSONStringMap(metadataRaw)
 		if eventType == "FORMULA" {
 			formulaTotal += extractNumberFromMap(valueMap, "ml", "amount_ml", "volume_ml")
 		}
@@ -1642,18 +1650,39 @@ func (a *App) getDailyReport(c *gin.Context) {
 				sleepMinutes += duration
 			}
 		}
+		eventPayload := gin.H{
+			"event_id":    eventID,
+			"type":        eventType,
+			"status":      eventStatus,
+			"start_time":  startedAt.UTC().Format(time.RFC3339),
+			"value":       valueMap,
+			"metadata":    metadataMap,
+			"can_update":  true,
+			"event_state": eventStatus,
+		}
+		if endedAt != nil {
+			eventPayload["end_time"] = endedAt.UTC().Format(time.RFC3339)
+		} else {
+			eventPayload["end_time"] = nil
+		}
+		events = append(events, eventPayload)
+	}
+
+	if len(summaryLines) == 0 {
+		summaryLines = []string{
+			"Feeding events: " + strconv.Itoa(counts["FORMULA"]+counts["BREASTFEED"]),
+			"Formula total: " + strconv.Itoa(int(formulaTotal)) + " ml",
+			"Sleep total: " + strconv.Itoa(sleepMinutes) + " minutes",
+			"Diaper events: pee " + strconv.Itoa(counts["PEE"]) + ", poo " + strconv.Itoa(counts["POO"]),
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"baby_id": baby.ID,
 		"date":    targetDate.Format("2006-01-02"),
-		"summary": []string{
-			"Feeding events: " + strconv.Itoa(counts["FORMULA"]+counts["BREASTFEED"]),
-			"Formula total: " + strconv.Itoa(int(formulaTotal)) + " ml",
-			"Sleep total: " + strconv.Itoa(sleepMinutes) + " minutes",
-			"Diaper events: pee " + strconv.Itoa(counts["PEE"]) + ", poo " + strconv.Itoa(counts["POO"]),
-		},
-		"labels": []string{"record_based"},
+		"summary": summaryLines,
+		"labels":  []string{"record_based"},
+		"events":  events,
 	})
 }
 

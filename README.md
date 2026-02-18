@@ -48,7 +48,7 @@ Copy-Item .env.example .env
 go run ./cmd/api
 ```
 
-Default local backend port in this repo is `18000` (`APP_PORT=18000` in `.env`).
+Default local backend port in this repo is `8000` (`APP_PORT=8000` in `.env`).
 
 3. Prepare schema (new terminal)
 ```powershell
@@ -65,14 +65,14 @@ npm run prisma:push
 cd C:\Users\milkrevenant\Documents\code\babyai\apps\mobile
 flutter pub get
 flutter run -d windows --debug `
-  --dart-define=API_BASE_URL=http://127.0.0.1:18000 `
+  --dart-define=API_BASE_URL=http://127.0.0.1:8000 `
   --dart-define=API_BEARER_TOKEN=<jwt-token>
 ```
 
 Android emulator example:
 ```powershell
 flutter run -d emulator-5554 --debug `
-  --dart-define=API_BASE_URL=http://10.0.2.2:18000 `
+  --dart-define=API_BASE_URL=http://10.0.2.2:8000 `
   --dart-define=API_BEARER_TOKEN=<jwt-token>
 ```
 

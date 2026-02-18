@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -166,6 +168,319 @@ func (a *App) completePhotoUpload(c *gin.Context) {
 	})
 }
 
+func (a *App) uploadPhotoFromDevice(c *gin.Context) {
+	user, ok := authUserFromContext(c)
+	if !ok {
+		writeError(c, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	albumID, householdID, statusCode, err := a.resolveAlbumForPhotoUpload(
+		c.Request.Context(),
+		user.ID,
+		c.PostForm("album_id"),
+		c.PostForm("baby_id"),
+	)
+	if err != nil {
+		writeError(c, statusCode, err.Error())
+		return
+	}
+
+	fileHeader, err := c.FormFile("file")
+	if err != nil {
+		writeError(c, http.StatusBadRequest, "file is required")
+		return
+	}
+	if fileHeader.Size <= 0 {
+		writeError(c, http.StatusBadRequest, "empty file is not allowed")
+		return
+	}
+
+	downloadable := false
+	if strings.EqualFold(strings.TrimSpace(c.PostForm("downloadable")), "true") ||
+		strings.TrimSpace(c.PostForm("downloadable")) == "1" {
+		downloadable = true
+	}
+
+	ext := strings.ToLower(filepath.Ext(strings.TrimSpace(fileHeader.Filename)))
+	if ext == "" || len(ext) > 8 {
+		ext = ".jpg"
+	}
+	now := time.Now().UTC()
+	objectKey := fmt.Sprintf("photos/%04d/%02d/%s%s", now.Year(), int(now.Month()), uuid.NewString(), ext)
+	diskPath := filepath.Join("uploads", filepath.FromSlash(objectKey))
+	if err := os.MkdirAll(filepath.Dir(diskPath), 0o755); err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to prepare upload folder")
+		return
+	}
+	if err := c.SaveUploadedFile(fileHeader, diskPath); err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to save uploaded file")
+		return
+	}
+
+	publicPath := "/uploads/" + objectKey
+	variants := map[string]string{
+		"thumb":   publicPath,
+		"preview": publicPath,
+		"origin":  publicPath,
+	}
+
+	tx, err := a.db.Begin(c.Request.Context())
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to start transaction")
+		return
+	}
+	defer tx.Rollback(c.Request.Context())
+
+	photoID := uuid.NewString()
+	if _, err := tx.Exec(
+		c.Request.Context(),
+		`INSERT INTO "PhotoAsset" (
+			id, "albumId", "uploaderUserId", "variantsJson", visibility, downloadable, "createdAt"
+		) VALUES ($1, $2, $3, $4, 'HOUSEHOLD', $5, NOW())`,
+		photoID,
+		albumID,
+		user.ID,
+		mustMarshalJSON(variants),
+		downloadable,
+	); err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to create photo")
+		return
+	}
+
+	if err := recordAuditLog(
+		c.Request.Context(),
+		tx,
+		householdID,
+		user.ID,
+		"PHOTO_UPLOAD_COMPLETED",
+		"PhotoAsset",
+		&photoID,
+		gin.H{"album_id": albumID, "downloadable": downloadable},
+	); err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to write audit log")
+		return
+	}
+
+	if err := tx.Commit(c.Request.Context()); err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to commit transaction")
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":       "uploaded",
+		"photo_id":     photoID,
+		"album_id":     albumID,
+		"downloadable": downloadable,
+		"object_key":   objectKey,
+		"photo_url":    requestOrigin(c) + publicPath,
+		"variants":     variants,
+	})
+}
+
+func (a *App) listRecentPhotos(c *gin.Context) {
+	user, ok := authUserFromContext(c)
+	if !ok {
+		writeError(c, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	babyID := strings.TrimSpace(c.Query("baby_id"))
+	if babyID == "" {
+		writeError(c, http.StatusBadRequest, "baby_id is required")
+		return
+	}
+	baby, statusCode, err := a.getBabyWithAccess(c.Request.Context(), user.ID, babyID, readRoles)
+	if err != nil {
+		writeError(c, statusCode, err.Error())
+		return
+	}
+
+	limit := 48
+	if rawLimit := strings.TrimSpace(c.Query("limit")); rawLimit != "" {
+		parsed, err := strconv.Atoi(rawLimit)
+		if err != nil || parsed <= 0 {
+			writeError(c, http.StatusBadRequest, "limit must be a positive integer")
+			return
+		}
+		if parsed > 200 {
+			parsed = 200
+		}
+		limit = parsed
+	}
+
+	rows, err := a.db.Query(
+		c.Request.Context(),
+		`SELECT p.id, a.id, a.title, p.downloadable, p."createdAt", p."variantsJson"
+		 FROM "PhotoAsset" p
+		 JOIN "Album" a ON a.id = p."albumId"
+		 WHERE a."babyId" = $1
+		 ORDER BY p."createdAt" DESC
+		 LIMIT $2`,
+		baby.ID,
+		limit,
+	)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to load photos")
+		return
+	}
+	defer rows.Close()
+
+	origin := requestOrigin(c)
+	photos := make([]gin.H, 0, limit)
+	for rows.Next() {
+		var photoID string
+		var albumID string
+		var albumTitle string
+		var downloadable bool
+		var createdAt time.Time
+		var variantsRaw []byte
+		if err := rows.Scan(
+			&photoID,
+			&albumID,
+			&albumTitle,
+			&downloadable,
+			&createdAt,
+			&variantsRaw,
+		); err != nil {
+			writeError(c, http.StatusInternalServerError, "Failed to parse photo rows")
+			return
+		}
+
+		variants := parseJSONStringMap(variantsRaw)
+		previewURL := strings.TrimSpace(toString(variants["preview"]))
+		originURL := strings.TrimSpace(toString(variants["origin"]))
+		if previewURL == "" {
+			previewURL = originURL
+		}
+		if strings.HasPrefix(previewURL, "/") {
+			previewURL = origin + previewURL
+		}
+		if strings.HasPrefix(originURL, "/") {
+			originURL = origin + originURL
+		}
+
+		photos = append(photos, gin.H{
+			"photo_id":      photoID,
+			"album_id":      albumID,
+			"album_title":   albumTitle,
+			"downloadable":  downloadable,
+			"created_at":    createdAt.UTC().Format(time.RFC3339),
+			"preview_url":   previewURL,
+			"original_url":  originURL,
+			"variants_json": variants,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"baby_id":        baby.ID,
+		"count":          len(photos),
+		"photos":         photos,
+		"reference_text": "Latest uploaded photos for this baby.",
+	})
+}
+
+func (a *App) resolveAlbumForPhotoUpload(
+	ctx context.Context,
+	userID string,
+	rawAlbumID string,
+	rawBabyID string,
+) (string, string, int, error) {
+	albumID := strings.TrimSpace(rawAlbumID)
+	babyID := strings.TrimSpace(rawBabyID)
+	if albumID != "" {
+		var householdID string
+		err := a.db.QueryRow(
+			ctx,
+			`SELECT "householdId" FROM "Album" WHERE id = $1`,
+			albumID,
+		).Scan(&householdID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", "", http.StatusNotFound, errors.New("Album not found")
+		}
+		if err != nil {
+			return "", "", http.StatusInternalServerError, errors.New("Failed to load album")
+		}
+		if _, statusCode, err := a.assertHouseholdAccess(ctx, userID, householdID, writeRoles); err != nil {
+			return "", "", statusCode, err
+		}
+		return albumID, householdID, http.StatusOK, nil
+	}
+
+	if babyID == "" {
+		return "", "", http.StatusBadRequest, errors.New("album_id or baby_id is required")
+	}
+	baby, statusCode, err := a.getBabyWithAccess(ctx, userID, babyID, writeRoles)
+	if err != nil {
+		return "", "", statusCode, err
+	}
+
+	resolvedAlbumID, err := a.resolveOrCreateMonthlyAlbum(ctx, baby.HouseholdID, baby.ID)
+	if err != nil {
+		return "", "", http.StatusInternalServerError, err
+	}
+	return resolvedAlbumID, baby.HouseholdID, http.StatusOK, nil
+}
+
+func (a *App) resolveOrCreateMonthlyAlbum(
+	ctx context.Context,
+	householdID string,
+	babyID string,
+) (string, error) {
+	monthKey := time.Now().UTC().Format("2006-01")
+	var albumID string
+	err := a.db.QueryRow(
+		ctx,
+		`SELECT id
+		 FROM "Album"
+		 WHERE "householdId" = $1
+		   AND "babyId" = $2
+		   AND "monthKey" = $3
+		 ORDER BY "createdAt" DESC
+		 LIMIT 1`,
+		householdID,
+		babyID,
+		monthKey,
+	).Scan(&albumID)
+	if err == nil {
+		return albumID, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return "", errors.New("Failed to load album")
+	}
+
+	albumID = uuid.NewString()
+	title := fmt.Sprintf("%s photos", monthKey)
+	if _, err := a.db.Exec(
+		ctx,
+		`INSERT INTO "Album" (id, "householdId", "babyId", title, "monthKey", "createdAt")
+		 VALUES ($1, $2, $3, $4, $5, NOW())`,
+		albumID,
+		householdID,
+		babyID,
+		title,
+		monthKey,
+	); err != nil {
+		return "", errors.New("Failed to create album")
+	}
+	return albumID, nil
+}
+
+func requestOrigin(c *gin.Context) string {
+	scheme := "http"
+	if c.Request.TLS != nil {
+		scheme = "https"
+	}
+	if forwarded := strings.TrimSpace(c.GetHeader("X-Forwarded-Proto")); forwarded != "" {
+		scheme = forwarded
+	}
+	host := strings.TrimSpace(c.Request.Host)
+	if host == "" {
+		host = "localhost:8000"
+	}
+	return scheme + "://" + host
+}
+
 func (a *App) getMySubscription(c *gin.Context) {
 	user, ok := authUserFromContext(c)
 	if !ok {
@@ -314,7 +629,7 @@ func (a *App) assistantDialog(ctx context.Context, babyID, tone, intent string) 
 		err := a.db.QueryRow(
 			ctx,
 			`SELECT "startTime" FROM "Event"
-			 WHERE "babyId" = $1 AND type = 'POO'
+			 WHERE "babyId" = $1 AND status = 'CLOSED' AND type = 'POO'
 			 ORDER BY "startTime" DESC LIMIT 1`,
 			babyID,
 		).Scan(&lastPoo)
@@ -336,7 +651,7 @@ func (a *App) assistantDialog(ctx context.Context, babyID, tone, intent string) 
 		rows, err := a.db.Query(
 			ctx,
 			`SELECT "startTime" FROM "Event"
-			 WHERE "babyId" = $1 AND type IN ('FORMULA', 'BREASTFEED')
+			 WHERE "babyId" = $1 AND status = 'CLOSED' AND type IN ('FORMULA', 'BREASTFEED')
 			 ORDER BY "startTime" DESC LIMIT 10`,
 			babyID,
 		)
@@ -381,7 +696,7 @@ func (a *App) assistantDialog(ctx context.Context, babyID, tone, intent string) 
 		rows, err := a.db.Query(
 			ctx,
 			`SELECT type FROM "Event"
-			 WHERE "babyId" = $1 AND "startTime" >= $2 AND "startTime" < $3`,
+			 WHERE "babyId" = $1 AND status = 'CLOSED' AND "startTime" >= $2 AND "startTime" < $3`,
 			babyID,
 			start,
 			end,

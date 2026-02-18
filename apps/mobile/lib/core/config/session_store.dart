@@ -8,6 +8,7 @@ class AppSessionStore {
   const AppSessionStore._();
 
   static DateTime? _pendingSleepStart;
+  static DateTime? _pendingFormulaStart;
 
   static File _sessionFile() {
     final String home = Platform.environment["USERPROFILE"] ??
@@ -62,15 +63,33 @@ class AppSessionStore {
       } else {
         _pendingSleepStart = null;
       }
+
+      final String pendingFormulaRaw =
+          (parsed["pending_formula_start"] ?? "").toString().trim();
+      if (pendingFormulaRaw.isNotEmpty) {
+        try {
+          _pendingFormulaStart = DateTime.parse(pendingFormulaRaw).toUtc();
+        } catch (_) {
+          _pendingFormulaStart = null;
+        }
+      } else {
+        _pendingFormulaStart = null;
+      }
     } catch (_) {
       // Keep runtime defaults when local session cannot be loaded.
     }
   }
 
   static DateTime? get pendingSleepStart => _pendingSleepStart;
+  static DateTime? get pendingFormulaStart => _pendingFormulaStart;
 
   static Future<void> setPendingSleepStart(DateTime? value) async {
     _pendingSleepStart = value?.toUtc();
+    await persistRuntimeState();
+  }
+
+  static Future<void> setPendingFormulaStart(DateTime? value) async {
+    _pendingFormulaStart = value?.toUtc();
     await persistRuntimeState();
   }
 
@@ -83,6 +102,8 @@ class AppSessionStore {
         "token": BabyAIApi.currentBearerToken.trim(),
         if (_pendingSleepStart != null)
           "pending_sleep_start": _pendingSleepStart!.toIso8601String(),
+        if (_pendingFormulaStart != null)
+          "pending_formula_start": _pendingFormulaStart!.toIso8601String(),
       };
       final File file = _sessionFile();
       await file.writeAsString(jsonEncode(payload), flush: true);

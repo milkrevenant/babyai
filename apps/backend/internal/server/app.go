@@ -81,7 +81,10 @@ func (a *App) Router() *gin.Engine {
 		MaxAge:           12 * time.Hour,
 	}))
 
+	router.Static("/uploads", "./uploads")
 	router.GET("/health", a.health)
+	router.GET("/dev/local-token", a.issueLocalDevToken)
+	router.POST("/dev/local-token", a.issueLocalDevToken)
 
 	api := router.Group(a.cfg.APIPrefix)
 	api.Use(a.authMiddleware())
@@ -90,10 +93,19 @@ func (a *App) Router() *gin.Engine {
 	api.POST("/events/voice", a.parseVoiceEvent)
 	api.POST("/events/confirm", a.confirmEvents)
 	api.POST("/events/manual", a.createManualEvent)
+	api.POST("/events/start", a.startManualEvent)
+	api.PATCH("/events/:event_id", a.updateManualEvent)
+	api.PATCH("/events/:event_id/complete", a.completeManualEvent)
+	api.PATCH("/events/:event_id/cancel", a.cancelManualEvent)
+	api.GET("/events/open", a.listOpenEvents)
 	api.GET("/settings/me", a.getMySettings)
 	api.PATCH("/settings/me", a.upsertMySettings)
 	api.GET("/babies/profile", a.getBabyProfile)
 	api.PATCH("/babies/profile", a.upsertBabyProfile)
+	api.GET("/quick/last-feeding", a.quickLastFeeding)
+	api.GET("/quick/recent-sleep", a.quickRecentSleep)
+	api.GET("/quick/last-diaper", a.quickLastDiaper)
+	api.GET("/quick/last-medication", a.quickLastMedication)
 	api.GET("/quick/last-poo-time", a.quickLastPooTime)
 	api.GET("/quick/next-feeding-eta", a.quickNextFeedingETA)
 	api.GET("/quick/today-summary", a.quickTodaySummary)
@@ -103,6 +115,8 @@ func (a *App) Router() *gin.Engine {
 	api.GET("/reports/weekly", a.getWeeklyReport)
 	api.POST("/photos/upload-url", a.createPhotoUploadURL)
 	api.POST("/photos/complete", a.completePhotoUpload)
+	api.POST("/photos/upload", a.uploadPhotoFromDevice)
+	api.GET("/photos/recent", a.listRecentPhotos)
 	api.GET("/subscription/me", a.getMySubscription)
 	api.POST("/subscription/checkout", a.checkoutSubscription)
 	api.POST("/assistants/siri/GetLastPooTime", a.siriLastPoo)
@@ -118,6 +132,83 @@ func (a *App) health(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"status":  "ok",
 		"service": "babyai-api",
+	})
+}
+
+func (a *App) issueLocalDevToken(c *gin.Context) {
+	if !strings.EqualFold(strings.TrimSpace(a.cfg.AppEnv), "local") {
+		writeError(c, http.StatusNotFound, "Not found")
+		return
+	}
+
+	secret := strings.TrimSpace(a.cfg.JWTSecret)
+	if secret == "" {
+		writeError(c, http.StatusInternalServerError, "JWT_SECRET is not configured")
+		return
+	}
+
+	sub := strings.TrimSpace(c.Query("sub"))
+	if sub == "" {
+		sub = uuid.NewString()
+	}
+	if _, err := uuid.Parse(sub); err != nil {
+		writeError(c, http.StatusBadRequest, "sub must be UUID format")
+		return
+	}
+
+	name := strings.TrimSpace(c.DefaultQuery("name", "Local Dev User"))
+	if name == "" {
+		name = "Local Dev User"
+	}
+	provider := providerFromClaim(c.DefaultQuery("provider", "google"))
+
+	if _, err := a.db.Exec(
+		c.Request.Context(),
+		`INSERT INTO "User" (id, provider, "providerUid", phone, name, "createdAt")
+		 VALUES ($1, $2, NULL, NULL, $3, NOW())
+		 ON CONFLICT (id)
+		 DO UPDATE SET provider = EXCLUDED.provider, name = EXCLUDED.name`,
+		sub,
+		provider,
+		name,
+	); err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to prepare local user")
+		return
+	}
+
+	method := jwt.GetSigningMethod(strings.TrimSpace(a.cfg.JWTAlgorithm))
+	if method == nil {
+		writeError(c, http.StatusInternalServerError, "Unsupported JWT algorithm")
+		return
+	}
+
+	claims := jwt.MapClaims{
+		"sub":      sub,
+		"provider": provider,
+		"name":     name,
+		"iat":      time.Now().UTC().Unix(),
+		"exp":      time.Now().UTC().Add(30 * 24 * time.Hour).Unix(),
+	}
+	if audience := strings.TrimSpace(a.cfg.JWTAudience); audience != "" {
+		claims["aud"] = audience
+	}
+	if issuer := strings.TrimSpace(a.cfg.JWTIssuer); issuer != "" {
+		claims["iss"] = issuer
+	}
+
+	token := jwt.NewWithClaims(method, claims)
+	signed, err := token.SignedString([]byte(secret))
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to sign local token")
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"token":          signed,
+		"sub":            sub,
+		"name":           name,
+		"provider":       provider,
+		"reference_text": "Local development token generated from backend JWT settings.",
 	})
 }
 

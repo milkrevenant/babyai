@@ -30,13 +30,18 @@ Future<RecordEntryInput?> showRecordEntrySheet({
   required BuildContext context,
   required HomeTileType tile,
   Map<String, dynamic>? prefill,
+  bool lockClosedLifecycle = false,
 }) {
   return showModalBottomSheet<RecordEntryInput>(
     context: context,
     isScrollControlled: true,
     showDragHandle: true,
     builder: (BuildContext context) {
-      return RecordEntrySheet(tile: tile, prefill: prefill);
+      return RecordEntrySheet(
+        tile: tile,
+        prefill: prefill,
+        lockClosedLifecycle: lockClosedLifecycle,
+      );
     },
   );
 }
@@ -46,10 +51,12 @@ class RecordEntrySheet extends StatefulWidget {
     super.key,
     required this.tile,
     this.prefill,
+    this.lockClosedLifecycle = false,
   });
 
   final HomeTileType tile;
   final Map<String, dynamic>? prefill;
+  final bool lockClosedLifecycle;
 
   @override
   State<RecordEntrySheet> createState() => _RecordEntrySheetState();
@@ -132,6 +139,9 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
   }
 
   RecordLifecycleAction _resolveLifecycleAction() {
+    if (widget.lockClosedLifecycle) {
+      return RecordLifecycleAction.createClosed;
+    }
     if (_hasOpenEvent) {
       return RecordLifecycleAction.completeOpen;
     }
@@ -328,6 +338,9 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
   bool get _hasOpenEvent => _openEventId != null && _openEventId!.isNotEmpty;
 
   bool get _shouldCollectEndTime {
+    if (widget.lockClosedLifecycle) {
+      return true;
+    }
     if (!_isStartableTile) {
       return false;
     }
@@ -335,7 +348,7 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
   }
 
   Widget _lifecycleModeSelector() {
-    if (!_isStartableTile || _hasOpenEvent) {
+    if (widget.lockClosedLifecycle || !_isStartableTile || _hasOpenEvent) {
       return const SizedBox.shrink();
     }
     return Wrap(

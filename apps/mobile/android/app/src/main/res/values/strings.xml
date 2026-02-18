@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="shortcut_record_formula">Record formula</string>
     <string name="shortcut_record_breastfeed">Record breastfeed</string>
@@ -7,4 +7,8 @@
     <string name="shortcut_record_sleep">Record sleep</string>
     <string name="shortcut_record_medication">Record medication</string>
     <string name="shortcut_open_chat">Open AI chat</string>
+    <string name="shortcut_last_feeding">Last feeding</string>
+    <string name="shortcut_recent_sleep">Recent sleep</string>
+    <string name="shortcut_last_diaper">Last diaper</string>
+    <string name="shortcut_last_medication">Last medication</string>
 </resources>

@@ -415,6 +415,8 @@ class BabyAIApi {
     String? childCareProfile,
     Map<String, bool>? homeTiles,
     int? homeTileColumns,
+    List<String>? homeTileOrder,
+    bool? showSpecialMemo,
   }) async {
     try {
       final Map<String, dynamic> payload = <String, dynamic>{
@@ -433,6 +435,8 @@ class BabyAIApi {
           "child_care_profile": childCareProfile.trim(),
         if (homeTiles != null) "home_tiles": homeTiles,
         if (homeTileColumns != null) "home_tile_columns": homeTileColumns,
+        if (homeTileOrder != null) "home_tile_order": homeTileOrder,
+        if (showSpecialMemo != null) "show_special_memo": showSpecialMemo,
       };
       final Response<dynamic> response = await _dio.patch<dynamic>(
         "/api/v1/settings/me",
@@ -585,6 +589,130 @@ class BabyAIApi {
           if (endTime != null) "end_time": endTime.toUtc().toIso8601String(),
           "value": value,
           if (metadata != null) "metadata": metadata,
+        },
+        options: _authOptions(),
+      );
+      return _requireMap(response);
+    } catch (error) {
+      throw _toFailure(error);
+    }
+  }
+
+  Future<Map<String, dynamic>> startManualEvent({
+    required String type,
+    required DateTime startTime,
+    Map<String, dynamic> value = const <String, dynamic>{},
+    Map<String, dynamic>? metadata,
+  }) async {
+    try {
+      _requireBabyId();
+      final Response<dynamic> response = await _dio.post<dynamic>(
+        "/api/v1/events/start",
+        data: <String, dynamic>{
+          "baby_id": activeBabyId,
+          "type": type.trim(),
+          "start_time": startTime.toUtc().toIso8601String(),
+          "value": value,
+          if (metadata != null) "metadata": metadata,
+        },
+        options: _authOptions(),
+      );
+      return _requireMap(response);
+    } catch (error) {
+      throw _toFailure(error);
+    }
+  }
+
+  Future<Map<String, dynamic>> completeManualEvent({
+    required String eventId,
+    DateTime? endTime,
+    Map<String, dynamic>? value,
+    Map<String, dynamic>? metadata,
+  }) async {
+    try {
+      final String normalizedId = eventId.trim();
+      if (normalizedId.isEmpty) {
+        throw ApiFailure("event_id is required");
+      }
+      final Response<dynamic> response = await _dio.patch<dynamic>(
+        "/api/v1/events/${Uri.encodeComponent(normalizedId)}/complete",
+        data: <String, dynamic>{
+          if (endTime != null) "end_time": endTime.toUtc().toIso8601String(),
+          if (value != null) "value": value,
+          if (metadata != null) "metadata": metadata,
+        },
+        options: _authOptions(),
+      );
+      return _requireMap(response);
+    } catch (error) {
+      throw _toFailure(error);
+    }
+  }
+
+  Future<Map<String, dynamic>> updateManualEvent({
+    required String eventId,
+    String? type,
+    DateTime? startTime,
+    DateTime? endTime,
+    Map<String, dynamic>? value,
+    Map<String, dynamic>? metadata,
+  }) async {
+    try {
+      final String normalizedId = eventId.trim();
+      if (normalizedId.isEmpty) {
+        throw ApiFailure("event_id is required");
+      }
+      final Response<dynamic> response = await _dio.patch<dynamic>(
+        "/api/v1/events/${Uri.encodeComponent(normalizedId)}",
+        data: <String, dynamic>{
+          if (type != null && type.trim().isNotEmpty) "type": type.trim(),
+          if (startTime != null)
+            "start_time": startTime.toUtc().toIso8601String(),
+          if (endTime != null) "end_time": endTime.toUtc().toIso8601String(),
+          if (value != null) "value": value,
+          if (metadata != null) "metadata": metadata,
+        },
+        options: _authOptions(),
+      );
+      return _requireMap(response);
+    } catch (error) {
+      throw _toFailure(error);
+    }
+  }
+
+  Future<Map<String, dynamic>> cancelManualEvent({
+    required String eventId,
+    String? reason,
+  }) async {
+    try {
+      final String normalizedId = eventId.trim();
+      if (normalizedId.isEmpty) {
+        throw ApiFailure("event_id is required");
+      }
+      final Response<dynamic> response = await _dio.patch<dynamic>(
+        "/api/v1/events/${Uri.encodeComponent(normalizedId)}/cancel",
+        data: <String, dynamic>{
+          if (reason != null && reason.trim().isNotEmpty)
+            "reason": reason.trim(),
+        },
+        options: _authOptions(),
+      );
+      return _requireMap(response);
+    } catch (error) {
+      throw _toFailure(error);
+    }
+  }
+
+  Future<Map<String, dynamic>> listOpenEvents({
+    String? type,
+  }) async {
+    try {
+      _requireBabyId();
+      final Response<dynamic> response = await _dio.get<dynamic>(
+        "/api/v1/events/open",
+        queryParameters: <String, dynamic>{
+          "baby_id": activeBabyId,
+          if (type != null && type.trim().isNotEmpty) "type": type.trim(),
         },
         options: _authOptions(),
       );

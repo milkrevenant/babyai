@@ -121,6 +121,20 @@ $token = "$unsigned.$sig"
 
 Then pass `TOKEN` to mobile via `--dart-define=API_BEARER_TOKEN=...` or paste it in onboarding token input.
 
+macOS/Linux shortcut script:
+```bash
+cd /Users/stillclie_mac/Documents/code/babyai/apps/backend
+./scripts/gen_dev_jwt.sh
+# optional args: ./scripts/gen_dev_jwt.sh <sub-uuid> "Dev User" google
+```
+
+Local-only quick endpoint (enabled only when `APP_ENV=local`):
+```bash
+curl -X POST http://127.0.0.1:8000/dev/local-token
+```
+Response includes `token` and `sub`.  
+`Child Registration` in mobile onboarding also tries this endpoint automatically when token input is empty.
+
 ## Build
 ```powershell
 cd C:\Users\milkrevenant\Documents\code\babyai\apps\backend
@@ -147,10 +161,19 @@ go test ./... -count=1
 - `POST /api/v1/onboarding/parent`
 - `POST /api/v1/events/voice`
 - `POST /api/v1/events/confirm`
+- `POST /api/v1/events/manual`
+- `POST /api/v1/events/start`
+- `PATCH /api/v1/events/{event_id}/complete`
+- `PATCH /api/v1/events/{event_id}/cancel`
+- `GET /api/v1/events/open`
 - `GET /api/v1/settings/me`
 - `PATCH /api/v1/settings/me`
 - `GET /api/v1/babies/profile`
 - `PATCH /api/v1/babies/profile`
+- `GET /api/v1/quick/last-feeding`
+- `GET /api/v1/quick/recent-sleep`
+- `GET /api/v1/quick/last-diaper`
+- `GET /api/v1/quick/last-medication`
 - `GET /api/v1/quick/last-poo-time`
 - `GET /api/v1/quick/next-feeding-eta`
 - `GET /api/v1/quick/today-summary`
@@ -167,3 +190,6 @@ go test ./... -count=1
 - `POST /api/v1/assistants/siri/GetTodaySummary`
 - `POST /api/v1/assistants/siri/{intent_name}`
 - `POST /api/v1/assistants/bixby/query`
+
+Quick snapshot endpoints support optional timezone conversion:
+- query param: `tz_offset` (example: `+09:00`, `-05:00`)

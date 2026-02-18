@@ -88,6 +88,7 @@ class HomeTileSettingsPage extends StatelessWidget {
           ),
         ),
         items: const <DropdownMenuItem<int>>[
+          DropdownMenuItem<int>(value: 1, child: Text("1")),
           DropdownMenuItem<int>(value: 2, child: Text("2")),
           DropdownMenuItem<int>(value: 3, child: Text("3")),
         ],
@@ -242,9 +243,9 @@ class HomeTileSettingsPage extends StatelessWidget {
               Text(
                 tr(
                   context,
-                  ko: "기본은 2열이며, 필요 시 3열로 더 촘촘하게 배치할 수 있습니다.",
-                  en: "Default is 2 columns. Switch to 3 columns for denser tiles.",
-                  es: "Por defecto son 2 columnas. Cambie a 3 para mayor densidad.",
+                  ko: "1~3열까지 선택할 수 있으며, 값은 홈 화면에 즉시 반영됩니다.",
+                  en: "Choose 1-3 columns. Home updates immediately.",
+                  es: "Elige 1-3 columnas. Inicio se actualiza al instante.",
                 ),
                 style: TextStyle(
                     color: Theme.of(context).colorScheme.onSurfaceVariant),
@@ -260,22 +261,64 @@ class HomeTileSettingsPage extends StatelessWidget {
                 style: const TextStyle(fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 6),
-              ...<HomeTileType>[
-                HomeTileType.formula,
-                HomeTileType.sleep,
-                HomeTileType.diaper,
-                HomeTileType.weaning,
-                HomeTileType.medication,
-              ].map(
-                (HomeTileType tile) => SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  value: themeController.isHomeTileEnabled(tile),
-                  title: Text(_tileLabel(context, tile)),
-                  secondary: Icon(_tileIcon(tile)),
-                  onChanged: (bool value) {
-                    themeController.setHomeTileEnabled(tile, value);
-                  },
+              Text(
+                tr(
+                  context,
+                  ko: "드래그로 순서를 바꾸면 홈 타일 순서도 동일하게 적용됩니다.",
+                  en: "Drag to reorder. Home tiles follow the same order.",
+                  es: "Arrastra para reordenar. Inicio sigue el mismo orden.",
                 ),
+                style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant),
+              ),
+              const SizedBox(height: 8),
+              ReorderableListView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: themeController.homeTileOrder.length,
+                onReorder: (int oldIndex, int newIndex) {
+                  themeController.reorderHomeTile(oldIndex, newIndex);
+                },
+                buildDefaultDragHandles: false,
+                itemBuilder: (BuildContext context, int index) {
+                  final HomeTileType tile =
+                      themeController.homeTileOrder[index];
+                  return Container(
+                    key: ValueKey<String>("home_tile_${tile.name}"),
+                    margin: const EdgeInsets.only(bottom: 8),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .surfaceContainerHighest
+                          .withValues(alpha: 0.22),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: ListTile(
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 2),
+                      leading: Icon(_tileIcon(tile)),
+                      title: Text(_tileLabel(context, tile)),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: <Widget>[
+                          Switch(
+                            value: themeController.isHomeTileEnabled(tile),
+                            onChanged: (bool value) {
+                              themeController.setHomeTileEnabled(tile, value);
+                            },
+                          ),
+                          ReorderableDragStartListener(
+                            index: index,
+                            child: const Padding(
+                              padding: EdgeInsets.only(left: 4),
+                              child: Icon(Icons.drag_indicator_rounded),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
               ),
             ],
           );

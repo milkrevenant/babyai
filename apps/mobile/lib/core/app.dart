@@ -730,17 +730,17 @@ class _HomeShellState extends State<_HomeShell> {
       const _BottomMenuTab(
           pageIndex: _homePage, icon: Icons.home_outlined, label: "home"),
     ];
-    if (widget.themeController.isBottomMenuEnabled(AppBottomMenu.chat)) {
-      tabs.add(const _BottomMenuTab(
-          pageIndex: _chatPage,
-          icon: Icons.chat_bubble_outline,
-          label: "chat"));
-    }
     if (widget.themeController.isBottomMenuEnabled(AppBottomMenu.statistics)) {
       tabs.add(const _BottomMenuTab(
           pageIndex: _statisticsPage,
           icon: Icons.insert_chart_outlined,
           label: "statistics"));
+    }
+    if (widget.themeController.isBottomMenuEnabled(AppBottomMenu.chat)) {
+      tabs.add(const _BottomMenuTab(
+          pageIndex: _chatPage,
+          icon: Icons.chat_bubble_outline,
+          label: "chat"));
     }
     if (widget.themeController.isBottomMenuEnabled(AppBottomMenu.photos)) {
       tabs.add(const _BottomMenuTab(
@@ -1323,16 +1323,16 @@ class _HomeShellState extends State<_HomeShell> {
                       onTap: () => _selectIndex(_homePage),
                     ),
                     ListTile(
-                      leading: const Icon(Icons.chat_bubble_outline),
-                      title: Text(_labelForIndex(context, _chatPage)),
-                      selected: _index == _chatPage,
-                      onTap: () => _selectIndex(_chatPage),
-                    ),
-                    ListTile(
                       leading: const Icon(Icons.insert_chart_outlined),
                       title: Text(_labelForIndex(context, _statisticsPage)),
                       selected: _index == _statisticsPage,
                       onTap: () => _selectIndex(_statisticsPage),
+                    ),
+                    ListTile(
+                      leading: const Icon(Icons.chat_bubble_outline),
+                      title: Text(_labelForIndex(context, _chatPage)),
+                      selected: _index == _chatPage,
+                      onTap: () => _selectIndex(_chatPage),
                     ),
                     ListTile(
                       leading: const Icon(Icons.photo_library_outlined),

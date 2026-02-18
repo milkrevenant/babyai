@@ -32,7 +32,7 @@
 - `babies(id, household_id, name, birth_date, sex, created_at)`
 - `consents(id, user_id, consent_type, granted, granted_at)`
 - `subscriptions(id, household_id, plan, status, renew_at)`
-- `events(id, baby_id, type, start_time, end_time, value_json, metadata_json, source, created_by, created_at)`
+- `events(id, baby_id, type, start_time, end_time, value_json, metadata_json, status, source, created_by, created_at, updated_at)`
 - `voice_clips(id, household_id, baby_id, audio_url, transcript, parsed_events_json, confidence_json, status, created_at)`
 - `persona_profiles(id, user_id, persona_json, updated_at)`
 - `ai_tone_profiles(id, user_id, tone, verbosity_level, safety_strictness, updated_at)`
@@ -45,6 +45,8 @@
 ### 3.2 인덱스
 - `events(baby_id, start_time desc)`
 - `events(baby_id, type, start_time desc)`
+- `events(baby_id, status, start_time desc)`
+- `events(baby_id, type, status, start_time desc)`
 - `reports(household_id, baby_id, period_type, period_start)`
 - `photo_assets(album_id, created_at desc)`
 - `audit_logs(household_id, created_at desc)`
@@ -59,6 +61,11 @@
 ### 4.2 이벤트 기록/조회
 - `POST /events/voice` (audio 업로드 + STT + 파싱)
 - `POST /events/confirm` (1탭 확정)
+- `POST /events/manual` (단건 완료 입력)
+- `POST /events/start` (진행중 OPEN 입력)
+- `PATCH /events/{event_id}/complete` (OPEN -> CLOSED)
+- `PATCH /events/{event_id}/cancel` (OPEN -> CANCELED)
+- `GET /events/open?baby_id`
 - `GET /events/timeline?babyId&from&to`
 - `GET /analytics/summary?babyId&period=today|7d`
 
@@ -129,4 +136,3 @@
 - 미기록은 0으로 간주하지 않음
 - 감사로그 의무 저장
 - 의료 안내는 비진단 정책 강제
-

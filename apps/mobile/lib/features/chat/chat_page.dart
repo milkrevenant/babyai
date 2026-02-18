@@ -5,6 +5,7 @@ import "package:speech_to_text/speech_recognition_error.dart";
 import "package:speech_to_text/speech_recognition_result.dart";
 import "package:speech_to_text/speech_to_text.dart" as stt;
 
+import "../../core/assistant/assistant_query_router.dart";
 import "../../core/network/babyai_api.dart";
 
 class ChatPage extends StatefulWidget {
@@ -107,6 +108,29 @@ class ChatPageState extends State<ChatPage> {
     });
   }
 
+  Future<Map<String, dynamic>> Function()? _actionForRoute(
+    AssistantQuickRoute route,
+  ) {
+    switch (route) {
+      case AssistantQuickRoute.lastPooTime:
+        return BabyAIApi.instance.quickLastPooTime;
+      case AssistantQuickRoute.lastFeeding:
+        return BabyAIApi.instance.quickLastFeeding;
+      case AssistantQuickRoute.recentSleep:
+        return BabyAIApi.instance.quickRecentSleep;
+      case AssistantQuickRoute.nextFeedingEta:
+        return BabyAIApi.instance.quickNextFeedingEta;
+      case AssistantQuickRoute.todaySummary:
+        return BabyAIApi.instance.quickTodaySummary;
+      case AssistantQuickRoute.lastDiaper:
+        return BabyAIApi.instance.quickLastDiaper;
+      case AssistantQuickRoute.lastMedication:
+        return BabyAIApi.instance.quickLastMedication;
+      case AssistantQuickRoute.none:
+        return null;
+    }
+  }
+
   Future<void> _sendQuestionText(
     String question, {
     bool clearInput = false,
@@ -123,8 +147,11 @@ class ChatPageState extends State<ChatPage> {
       _error = null;
     });
     _scrollToBottom();
+    final AssistantQuickRoute route = AssistantQueryRouter.resolve(normalized);
+    final Future<Map<String, dynamic>> Function()? structuredAction =
+        _actionForRoute(route);
     await _appendAssistantFromAction(
-      () => BabyAIApi.instance.queryAi(normalized),
+      structuredAction ?? () => BabyAIApi.instance.queryAi(normalized),
     );
   }
 
@@ -248,6 +275,22 @@ class ChatPageState extends State<ChatPage> {
                         ),
               ),
               _QuickActionChip(
+                label: "Last feeding",
+                onTap: _loading
+                    ? null
+                    : () => _appendAssistantFromAction(
+                          BabyAIApi.instance.quickLastFeeding,
+                        ),
+              ),
+              _QuickActionChip(
+                label: "Recent sleep",
+                onTap: _loading
+                    ? null
+                    : () => _appendAssistantFromAction(
+                          BabyAIApi.instance.quickRecentSleep,
+                        ),
+              ),
+              _QuickActionChip(
                 label: "Next feeding ETA",
                 onTap: _loading
                     ? null
@@ -261,6 +304,22 @@ class ChatPageState extends State<ChatPage> {
                     ? null
                     : () => _appendAssistantFromAction(
                           BabyAIApi.instance.quickTodaySummary,
+                        ),
+              ),
+              _QuickActionChip(
+                label: "Last diaper",
+                onTap: _loading
+                    ? null
+                    : () => _appendAssistantFromAction(
+                          BabyAIApi.instance.quickLastDiaper,
+                        ),
+              ),
+              _QuickActionChip(
+                label: "Last medication",
+                onTap: _loading
+                    ? null
+                    : () => _appendAssistantFromAction(
+                          BabyAIApi.instance.quickLastMedication,
                         ),
               ),
             ],

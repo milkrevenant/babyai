@@ -2,9 +2,11 @@ import "package:flutter/material.dart";
 
 import "../../core/i18n/app_i18n.dart";
 import "../../core/network/babyai_api.dart";
+import "../../core/theme/app_theme_controller.dart";
 import "../../core/widgets/simple_donut_chart.dart";
 import "../../core/widgets/simple_stacked_bar_chart.dart";
 import "../recording/recording_page.dart";
+import "../recording/record_entry_sheet.dart";
 
 class ReportPage extends StatefulWidget {
   const ReportPage({
@@ -235,6 +237,305 @@ class ReportPageState extends State<ReportPage> {
     }
   }
 
+  DateTime? _parseDateTime(Object? raw) {
+    if (raw == null) {
+      return null;
+    }
+    final String text = raw.toString().trim();
+    if (text.isEmpty) {
+      return null;
+    }
+    try {
+      return DateTime.parse(text).toLocal();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Map<String, dynamic> _asMap(Object? raw) {
+    if (raw is Map<String, dynamic>) {
+      return raw;
+    }
+    if (raw is Map) {
+      return raw.map(
+        (dynamic key, dynamic value) =>
+            MapEntry<String, dynamic>(key.toString(), value),
+      );
+    }
+    return <String, dynamic>{};
+  }
+
+  List<_DailyEventItem> _parseDailyEvents(Map<String, dynamic>? report) {
+    final List<dynamic> raw =
+        (report?["events"] as List<dynamic>?) ?? <dynamic>[];
+    final List<_DailyEventItem> items = <_DailyEventItem>[];
+    for (final dynamic item in raw) {
+      if (item is! Map) {
+        continue;
+      }
+      final Map<String, dynamic> map = _asMap(item);
+      final String eventId = (map["event_id"] ?? "").toString().trim();
+      final String type = (map["type"] ?? "").toString().trim().toUpperCase();
+      final DateTime? start = _parseDateTime(map["start_time"]);
+      if (eventId.isEmpty || type.isEmpty || start == null) {
+        continue;
+      }
+      items.add(
+        _DailyEventItem(
+          eventId: eventId,
+          type: type,
+          startTime: start,
+          endTime: _parseDateTime(map["end_time"]),
+          value: _asMap(map["value"]),
+          metadata: _asMap(map["metadata"]),
+        ),
+      );
+    }
+    return items;
+  }
+
+  bool _isWeaningEvent(_DailyEventItem event) {
+    final List<String> candidates = <String>[
+      (event.value["category"] ?? "").toString(),
+      (event.value["entry_kind"] ?? "").toString(),
+      (event.metadata["category"] ?? "").toString(),
+      (event.metadata["entry_kind"] ?? "").toString(),
+    ];
+    return candidates.any(
+      (String item) => item.trim().toUpperCase() == "WEANING",
+    );
+  }
+
+  HomeTileType? _tileForEvent(_DailyEventItem event) {
+    switch (event.type) {
+      case "FORMULA":
+        return HomeTileType.formula;
+      case "BREASTFEED":
+        return HomeTileType.breastfeed;
+      case "SLEEP":
+        return HomeTileType.sleep;
+      case "PEE":
+      case "POO":
+        return HomeTileType.diaper;
+      case "MEDICATION":
+        return HomeTileType.medication;
+      case "MEMO":
+        if (_isWeaningEvent(event)) {
+          return HomeTileType.weaning;
+        }
+        return null;
+      default:
+        return null;
+    }
+  }
+
+  String _eventTypeLabel(BuildContext context, String type) {
+    switch (type) {
+      case "FORMULA":
+        return tr(context, ko: "분유", en: "Formula", es: "Formula");
+      case "BREASTFEED":
+        return tr(context, ko: "모유", en: "Breastfeed", es: "Lactancia");
+      case "SLEEP":
+        return tr(context, ko: "수면", en: "Sleep", es: "Sueno");
+      case "PEE":
+        return tr(context,
+            ko: "기저귀(소변)", en: "Diaper (pee)", es: "Panal (orina)");
+      case "POO":
+        return tr(context,
+            ko: "기저귀(대변)", en: "Diaper (poo)", es: "Panal (heces)");
+      case "MEDICATION":
+        return tr(context, ko: "투약", en: "Medication", es: "Medicacion");
+      case "MEMO":
+        return tr(context, ko: "메모", en: "Memo", es: "Memo");
+      default:
+        return type;
+    }
+  }
+
+  String _timeLabel(DateTime value) {
+    final String hour = value.hour.toString().padLeft(2, "0");
+    final String minute = value.minute.toString().padLeft(2, "0");
+    return "$hour:$minute";
+  }
+
+  int? _asInt(dynamic value) {
+    if (value is int) {
+      return value;
+    }
+    if (value is double) {
+      return value.round();
+    }
+    if (value is String) {
+      return int.tryParse(value.trim());
+    }
+    return null;
+  }
+
+  int _durationForEvent(_DailyEventItem event) {
+    final int? fromValue = _asInt(event.value["duration_min"]) ??
+        _asInt(event.value["duration_minutes"]);
+    if (fromValue != null && fromValue >= 0) {
+      return fromValue;
+    }
+    if (event.endTime == null) {
+      return 0;
+    }
+    final int minutes = event.endTime!.difference(event.startTime).inMinutes;
+    return minutes < 0 ? 0 : minutes;
+  }
+
+  String _eventSubtitle(BuildContext context, _DailyEventItem event) {
+    switch (event.type) {
+      case "FORMULA":
+        final int amount = _asInt(event.value["ml"]) ??
+            _asInt(event.value["amount_ml"]) ??
+            _asInt(event.value["volume_ml"]) ??
+            0;
+        return "$amount ml";
+      case "BREASTFEED":
+      case "SLEEP":
+        final int duration = _durationForEvent(event);
+        return "${duration}m";
+      case "MEDICATION":
+        final String name =
+            (event.value["name"] ?? event.value["medication_type"] ?? "")
+                .toString()
+                .trim();
+        final int? dose = _asInt(event.value["dose"]);
+        final String doseLabel = dose == null ? "" : " · $dose";
+        if (name.isEmpty) {
+          return doseLabel.isEmpty ? "-" : doseLabel.replaceFirst(" · ", "");
+        }
+        return "$name$doseLabel";
+      default:
+        final String memo = (event.value["memo"] ?? event.value["note"] ?? "")
+            .toString()
+            .trim();
+        return memo.isEmpty ? "-" : memo;
+    }
+  }
+
+  Map<String, dynamic> _prefillForDailyEvent(
+    _DailyEventItem event,
+    HomeTileType tile,
+  ) {
+    final Map<String, dynamic> prefill = <String, dynamic>{
+      "start_time": event.startTime.toIso8601String(),
+      if (event.endTime != null) "end_time": event.endTime!.toIso8601String(),
+      "memo": (event.value["memo"] ?? event.value["note"] ?? "").toString(),
+    };
+    switch (tile) {
+      case HomeTileType.formula:
+        final int amount = _asInt(event.value["ml"]) ??
+            _asInt(event.value["amount_ml"]) ??
+            _asInt(event.value["volume_ml"]) ??
+            0;
+        if (amount > 0) {
+          prefill["amount_ml"] = amount;
+        }
+        break;
+      case HomeTileType.breastfeed:
+      case HomeTileType.sleep:
+        prefill["duration_min"] = _durationForEvent(event);
+        break;
+      case HomeTileType.diaper:
+        prefill["diaper_type"] = event.type == "POO" ? "POO" : "PEE";
+        break;
+      case HomeTileType.weaning:
+        prefill["weaning_type"] =
+            (event.value["weaning_type"] ?? "meal").toString().trim();
+        final int grams = _asInt(event.value["grams"]) ?? 0;
+        if (grams > 0) {
+          prefill["grams"] = grams;
+        }
+        break;
+      case HomeTileType.medication:
+        final String name =
+            (event.value["name"] ?? event.value["medication_type"] ?? "")
+                .toString()
+                .trim();
+        if (name.isNotEmpty) {
+          prefill["medication_name"] = name;
+        }
+        final int dose = _asInt(event.value["dose"]) ?? 0;
+        if (dose > 0) {
+          prefill["dose"] = dose;
+        }
+        break;
+      case HomeTileType.memo:
+        break;
+    }
+    return prefill;
+  }
+
+  Future<void> _editDailyEvent(_DailyEventItem event) async {
+    final HomeTileType? tile = _tileForEvent(event);
+    if (tile == null || !mounted) {
+      return;
+    }
+
+    final RecordEntryInput? input = await showRecordEntrySheet(
+      context: context,
+      tile: tile,
+      prefill: _prefillForDailyEvent(event, tile),
+      lockClosedLifecycle: true,
+    );
+    if (!mounted || input == null) {
+      return;
+    }
+
+    final DateTime? resolvedEnd = input.endTime ?? event.endTime;
+    if (resolvedEnd == null || !resolvedEnd.isAfter(input.startTime)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            tr(
+              context,
+              ko: "종료 시각은 시작 시각보다 뒤여야 합니다.",
+              en: "End time must be after start time.",
+              es: "La hora de fin debe ser posterior al inicio.",
+            ),
+          ),
+        ),
+      );
+      return;
+    }
+
+    try {
+      await BabyAIApi.instance.updateManualEvent(
+        eventId: event.eventId,
+        type: input.type,
+        startTime: input.startTime,
+        endTime: resolvedEnd,
+        value: input.value,
+        metadata: input.metadata,
+      );
+      await _loadReports();
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            tr(
+              context,
+              ko: "기록을 수정했습니다.",
+              en: "Record updated.",
+              es: "Registro actualizado.",
+            ),
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.toString())),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final _DayMetrics dailyMetrics = _parseDaily(_daily);
@@ -313,6 +614,23 @@ class ReportPageState extends State<ReportPage> {
         ((_weekly?["suggestions"] as List<dynamic>?) ?? <dynamic>[])
             .map((dynamic item) => item.toString())
             .toList();
+    final List<_DailyEventItem> dayEvents = _parseDailyEvents(_daily);
+    const List<String> typeOrder = <String>[
+      "FORMULA",
+      "BREASTFEED",
+      "SLEEP",
+      "PEE",
+      "POO",
+      "MEDICATION",
+      "MEMO",
+    ];
+    final Map<String, List<_DailyEventItem>> dayEventGroups =
+        <String, List<_DailyEventItem>>{};
+    for (final _DailyEventItem item in dayEvents) {
+      dayEventGroups
+          .putIfAbsent(item.type, () => <_DailyEventItem>[])
+          .add(item);
+    }
 
     return RefreshIndicator(
       onRefresh: _loadReports,
@@ -348,6 +666,79 @@ class ReportPageState extends State<ReportPage> {
             ),
           ],
           const SizedBox(height: 12),
+          if (widget.range == RecordRange.day)
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      tr(
+                        context,
+                        ko: "일간 기록 (종류별, 탭하면 수정)",
+                        en: "Daily records (by type, tap to edit)",
+                        es: "Registros diarios (por tipo, toque para editar)",
+                      ),
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 8),
+                    if (dayEvents.isEmpty)
+                      Text(
+                        tr(
+                          context,
+                          ko: "해당 일자 기록이 없습니다.",
+                          en: "No records for this day.",
+                          es: "No hay registros para este dia.",
+                        ),
+                      ),
+                    ...typeOrder.map((String type) {
+                      final List<_DailyEventItem> items =
+                          dayEventGroups[type] ?? <_DailyEventItem>[];
+                      if (items.isEmpty) {
+                        return const SizedBox.shrink();
+                      }
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 4, bottom: 4),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: <Widget>[
+                            Padding(
+                              padding: const EdgeInsets.only(top: 6, bottom: 4),
+                              child: Text(
+                                _eventTypeLabel(context, type),
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurfaceVariant,
+                                ),
+                              ),
+                            ),
+                            ...items.map(
+                              (_DailyEventItem item) => ListTile(
+                                dense: true,
+                                contentPadding: EdgeInsets.zero,
+                                title: Text(
+                                  item.endTime == null
+                                      ? _timeLabel(item.startTime)
+                                      : "${_timeLabel(item.startTime)} - ${_timeLabel(item.endTime!)}",
+                                ),
+                                subtitle: Text(_eventSubtitle(context, item)),
+                                trailing:
+                                    const Icon(Icons.edit_outlined, size: 18),
+                                onTap: () => _editDailyEvent(item),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }),
+                  ],
+                ),
+              ),
+            ),
+          if (widget.range == RecordRange.day) const SizedBox(height: 12),
           Card(
             child: Padding(
               padding: const EdgeInsets.all(12),
@@ -471,6 +862,24 @@ class ReportPageState extends State<ReportPage> {
       ),
     );
   }
+}
+
+class _DailyEventItem {
+  const _DailyEventItem({
+    required this.eventId,
+    required this.type,
+    required this.startTime,
+    required this.endTime,
+    required this.value,
+    required this.metadata,
+  });
+
+  final String eventId;
+  final String type;
+  final DateTime startTime;
+  final DateTime? endTime;
+  final Map<String, dynamic> value;
+  final Map<String, dynamic> metadata;
 }
 
 class _LegendChip extends StatelessWidget {

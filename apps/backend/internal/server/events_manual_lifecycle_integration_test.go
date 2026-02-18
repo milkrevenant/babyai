@@ -192,6 +192,99 @@ func TestCompleteManualEventClosesOpenEvent(t *testing.T) {
 	}
 }
 
+func TestUpdateManualEventUpdatesClosedEvent(t *testing.T) {
+	resetDatabase(t)
+	fixture := seedOwnerFixture(t)
+	start := time.Now().UTC().Add(-45 * time.Minute).Truncate(time.Second)
+	end := start.Add(20 * time.Minute)
+	eventID := seedEvent(
+		t,
+		"",
+		fixture.BabyID,
+		"FORMULA",
+		start,
+		&end,
+		map[string]any{"ml": 90, "memo": "old memo"},
+		fixture.UserID,
+	)
+
+	updatedStart := start.Add(3 * time.Minute)
+	updatedEnd := end.Add(4 * time.Minute)
+	rec := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodPatch,
+		"/api/v1/events/"+eventID,
+		signToken(t, fixture.UserID, nil),
+		map[string]any{
+			"type":       "FORMULA",
+			"start_time": updatedStart.Format(time.RFC3339),
+			"end_time":   updatedEnd.Format(time.RFC3339),
+			"value": map[string]any{
+				"ml": 120,
+			},
+			"metadata": map[string]any{
+				"editor": "integration-test",
+			},
+		},
+		nil,
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	body := decodeJSONMap(t, rec)
+	if body["status"] != "UPDATED" {
+		t.Fatalf("expected UPDATED, got %v", body["status"])
+	}
+	if body["event_state"] != "CLOSED" {
+		t.Fatalf("expected CLOSED event_state, got %v", body["event_state"])
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var dbStart time.Time
+	var dbEnd *time.Time
+	var valueRaw []byte
+	var metadataRaw []byte
+	if err := testPool.QueryRow(
+		ctx,
+		`SELECT "startTime", "endTime", "valueJson", "metadataJson"
+		 FROM "Event"
+		 WHERE id = $1`,
+		eventID,
+	).Scan(&dbStart, &dbEnd, &valueRaw, &metadataRaw); err != nil {
+		t.Fatalf("query updated event: %v", err)
+	}
+	if !dbStart.UTC().Equal(updatedStart.UTC()) {
+		t.Fatalf("expected updated start %s, got %s", updatedStart.UTC(), dbStart.UTC())
+	}
+	if dbEnd == nil || !dbEnd.UTC().Equal(updatedEnd.UTC()) {
+		t.Fatalf("expected updated end %s, got %v", updatedEnd.UTC(), dbEnd)
+	}
+
+	value := map[string]any{}
+	if err := json.Unmarshal(valueRaw, &value); err != nil {
+		t.Fatalf("unmarshal value json: %v", err)
+	}
+	if got, ok := value["ml"].(float64); !ok || int(got) != 120 {
+		t.Fatalf("expected ml=120 in valueJson, got %v", value["ml"])
+	}
+	if value["memo"] != "old memo" {
+		t.Fatalf("expected existing memo to remain, got %v", value["memo"])
+	}
+
+	metadata := map[string]any{}
+	if err := json.Unmarshal(metadataRaw, &metadata); err != nil {
+		t.Fatalf("unmarshal metadata json: %v", err)
+	}
+	if metadata["editor"] != "integration-test" {
+		t.Fatalf("expected editor metadata, got %v", metadata["editor"])
+	}
+	if metadata["entry_mode"] != "manual_edit" {
+		t.Fatalf("expected entry_mode=manual_edit, got %v", metadata["entry_mode"])
+	}
+}
+
 func TestCancelManualEventMarksCanceled(t *testing.T) {
 	resetDatabase(t)
 	fixture := seedOwnerFixture(t)

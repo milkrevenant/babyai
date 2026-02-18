@@ -45,9 +45,11 @@
 - `end_time` (timestamp, nullable)
 - `value_json` (jsonb)
 - `metadata_json` (jsonb)
+- `status` (enum: OPEN|CLOSED|CANCELED)
 - `source` (enum: VOICE|TEXT|MANUAL|IMPORT)
 - `created_by` (uuid, fk->User)
 - `created_at` (timestamp)
+- `updated_at` (timestamp)
 
 ### VoiceClip
 - `id` (uuid, pk)
@@ -120,6 +122,11 @@
 ### 기록/분석
 - `POST /events/voice`
 - `POST /events/confirm`
+- `POST /events/manual`
+- `POST /events/start`
+- `PATCH /events/{event_id}/complete`
+- `PATCH /events/{event_id}/cancel`
+- `GET /events/open`
 - `GET /events/timeline`
 - `GET /analytics/summary`
 
@@ -139,4 +146,3 @@
 - `PATCH /photos/:id/downloadable`
 - `GET /subscription/me`
 - `POST /subscription/checkout`
-

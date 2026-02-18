@@ -30,6 +30,14 @@ var defaultHomeTiles = map[string]bool{
 	"memo":       false,
 }
 
+var defaultHomeTileOrder = []string{
+	"formula",
+	"sleep",
+	"diaper",
+	"weaning",
+	"medication",
+}
+
 func (a *App) getMySettings(c *gin.Context) {
 	user, ok := authUserFromContext(c)
 	if !ok {
@@ -152,11 +160,28 @@ func (a *App) upsertMySettings(c *gin.Context) {
 
 	if payload.HomeTileColumns != nil {
 		columns := *payload.HomeTileColumns
-		if columns < 2 || columns > 3 {
-			writeError(c, http.StatusBadRequest, "home_tile_columns must be 2 or 3")
+		if columns < 1 || columns > 3 {
+			writeError(c, http.StatusBadRequest, "home_tile_columns must be 1, 2, or 3")
 			return
 		}
 		appSettings["home_tile_columns"] = columns
+	}
+
+	if payload.HomeTileOrder != nil {
+		normalized, valid := normalizeHomeTileOrder(payload.HomeTileOrder)
+		if !valid {
+			writeError(
+				c,
+				http.StatusBadRequest,
+				"home_tile_order must include known tile ids only and cannot be empty",
+			)
+			return
+		}
+		appSettings["home_tile_order"] = normalized
+	}
+
+	if payload.ShowSpecialMemo != nil {
+		appSettings["show_special_memo"] = *payload.ShowSpecialMemo
 	}
 
 	persona["app_settings"] = appSettings
@@ -202,6 +227,8 @@ func buildSettingsResponse(persona map[string]any) gin.H {
 		"child_care_profile":  resolveChildCareProfile(persona),
 		"home_tiles":          resolveHomeTiles(persona),
 		"home_tile_columns":   resolveHomeTileColumns(persona),
+		"home_tile_order":     resolveHomeTileOrder(persona),
+		"show_special_memo":   resolveShowSpecialMemo(persona),
 	}
 }
 
@@ -299,12 +326,81 @@ func resolveHomeTiles(persona map[string]any) map[string]bool {
 func resolveHomeTileColumns(persona map[string]any) int {
 	if appSettings, ok := persona["app_settings"].(map[string]any); ok {
 		if raw, ok := toInt(appSettings["home_tile_columns"]); ok {
-			if raw >= 2 && raw <= 3 {
+			if raw >= 1 && raw <= 3 {
 				return raw
 			}
 		}
 	}
 	return 2
+}
+
+func normalizeHomeTileOrder(raw []string) ([]string, bool) {
+	if len(raw) == 0 {
+		return nil, false
+	}
+
+	known := map[string]struct{}{}
+	for _, key := range defaultHomeTileOrder {
+		known[key] = struct{}{}
+	}
+
+	resolved := make([]string, 0, len(defaultHomeTileOrder))
+	seen := map[string]struct{}{}
+	for _, item := range raw {
+		key := strings.ToLower(strings.TrimSpace(item))
+		if key == "" {
+			continue
+		}
+		if _, ok := known[key]; !ok {
+			return nil, false
+		}
+		if _, duplicated := seen[key]; duplicated {
+			continue
+		}
+		resolved = append(resolved, key)
+		seen[key] = struct{}{}
+	}
+	for _, key := range defaultHomeTileOrder {
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		resolved = append(resolved, key)
+	}
+	if len(resolved) == 0 {
+		return nil, false
+	}
+	return resolved, true
+}
+
+func resolveHomeTileOrder(persona map[string]any) []string {
+	if appSettings, ok := persona["app_settings"].(map[string]any); ok {
+		switch raw := appSettings["home_tile_order"].(type) {
+		case []any:
+			values := make([]string, 0, len(raw))
+			for _, item := range raw {
+				values = append(values, toString(item))
+			}
+			if normalized, valid := normalizeHomeTileOrder(values); valid {
+				return normalized
+			}
+		case []string:
+			if normalized, valid := normalizeHomeTileOrder(raw); valid {
+				return normalized
+			}
+		}
+	}
+	copied := make([]string, len(defaultHomeTileOrder))
+	copy(copied, defaultHomeTileOrder)
+	return copied
+}
+
+func resolveShowSpecialMemo(persona map[string]any) bool {
+	if appSettings, ok := persona["app_settings"].(map[string]any); ok {
+		if parsed, ok := toBool(appSettings["show_special_memo"]); ok {
+			return parsed
+		}
+	}
+	return true
 }
 
 func copyBoolMap(input map[string]bool) map[string]bool {
