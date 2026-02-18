@@ -49,6 +49,8 @@ class RecordEntrySheet extends StatefulWidget {
   State<RecordEntrySheet> createState() => _RecordEntrySheetState();
 }
 
+enum _TimeField { start, end }
+
 class _RecordEntrySheetState extends State<RecordEntrySheet> {
   final TextEditingController _amountController = TextEditingController();
   final TextEditingController _durationController = TextEditingController();
@@ -58,14 +60,16 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
   final TextEditingController _gramsController = TextEditingController();
 
   DateTime _startTime = DateTime.now();
-  late DateTime _sleepEndTime;
+  late DateTime _endTime;
   String _diaperType = "PEE";
+  String _weaningType = "meal";
+  _TimeField _activeTimeField = _TimeField.start;
   String? _error;
 
   @override
   void initState() {
     super.initState();
-    _sleepEndTime = _startTime.add(const Duration(hours: 1));
+    _endTime = _startTime.add(const Duration(hours: 1));
     _applyPrefill();
   }
 
@@ -81,6 +85,7 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
     final Object? memo = prefill["memo"];
     final Object? query = prefill["query"];
     final Object? diaperType = prefill["diaper_type"];
+    final Object? weaningType = prefill["weaning_type"];
     final Object? sleepAction = prefill["sleep_action"];
 
     final DateTime? prefilledStart =
@@ -93,7 +98,7 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
       _startTime = prefilledStart;
     }
     if (prefilledEnd != null) {
-      _sleepEndTime = prefilledEnd;
+      _endTime = prefilledEnd;
     }
 
     if (amountMl is int && amountMl > 0) {
@@ -105,13 +110,13 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
     if (durationMin is int && durationMin > 0) {
       _durationController.text = durationMin.toString();
       if (prefilledEnd == null) {
-        _sleepEndTime = _startTime.add(Duration(minutes: durationMin));
+        _endTime = _startTime.add(Duration(minutes: durationMin));
       }
     } else if (durationMin is String && durationMin.trim().isNotEmpty) {
       _durationController.text = durationMin.trim();
       final int? parsed = int.tryParse(durationMin.trim());
       if (parsed != null && parsed > 0 && prefilledEnd == null) {
-        _sleepEndTime = _startTime.add(Duration(minutes: parsed));
+        _endTime = _startTime.add(Duration(minutes: parsed));
       }
     }
 
@@ -140,18 +145,26 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
       }
     }
 
-    if (sleepAction is String && sleepAction.trim().isNotEmpty) {
-      final String action = sleepAction.trim().toLowerCase();
-      if (action == "end" && prefilledEnd == null) {
-        _sleepEndTime = DateTime.now();
-      }
-      if (action == "start" && prefilledEnd == null) {
-        _sleepEndTime = _startTime.add(const Duration(minutes: 30));
+    if (weaningType is String && weaningType.trim().isNotEmpty) {
+      final String normalized = weaningType.trim().toLowerCase();
+      if (const <String>{"meal", "snack", "fruit", "soup"}
+          .contains(normalized)) {
+        _weaningType = normalized;
       }
     }
 
-    if (!_sleepEndTime.isAfter(_startTime)) {
-      _sleepEndTime = _startTime.add(const Duration(minutes: 30));
+    if (sleepAction is String && sleepAction.trim().isNotEmpty) {
+      final String action = sleepAction.trim().toLowerCase();
+      if (action == "end" && prefilledEnd == null) {
+        _endTime = DateTime.now();
+      }
+      if (action == "start" && prefilledEnd == null) {
+        _endTime = _startTime.add(const Duration(minutes: 30));
+      }
+    }
+
+    if (!_endTime.isAfter(_startTime)) {
+      _endTime = _startTime.add(const Duration(minutes: 30));
     }
   }
 
@@ -210,7 +223,7 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
   }
 
   int _sleepDurationMinutes() {
-    final int minutes = _sleepEndTime.difference(_startTime).inMinutes;
+    final int minutes = _endTime.difference(_startTime).inMinutes;
     return minutes < 0 ? 0 : minutes;
   }
 
@@ -224,109 +237,109 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
     return "${hours}h ${mins}m";
   }
 
-  Future<DateTime?> _pickDateTimeScrollable({
-    required DateTime initialValue,
-  }) async {
-    DateTime selected = initialValue;
-    return showModalBottomSheet<DateTime>(
-      context: context,
-      showDragHandle: true,
-      builder: (BuildContext context) {
-        return SizedBox(
-          height: 320,
-          child: Column(
-            children: <Widget>[
-              Expanded(
-                child: CupertinoDatePicker(
-                  mode: CupertinoDatePickerMode.dateAndTime,
-                  use24hFormat: true,
-                  initialDateTime: initialValue,
-                  onDateTimeChanged: (DateTime value) {
-                    selected = value;
-                  },
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-                child: Row(
-                  children: <Widget>[
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: () => Navigator.of(context).pop(),
-                        child: Text(tr(context,
-                            ko: "취소", en: "Cancel", es: "Cancelar")),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: FilledButton(
-                        onPressed: () => Navigator.of(context).pop(selected),
-                        child: Text(
-                            tr(context, ko: "확인", en: "Done", es: "Listo")),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Future<void> _pickSleepStartTime() async {
-    final DateTime? picked =
-        await _pickDateTimeScrollable(initialValue: _startTime);
-    if (picked == null || !mounted) {
-      return;
-    }
+  void _onInlineDateTimeChanged(DateTime value, {required bool includeEnd}) {
+    final _TimeField target = includeEnd ? _activeTimeField : _TimeField.start;
     setState(() {
-      _startTime = picked;
-      if (!_sleepEndTime.isAfter(_startTime)) {
-        _sleepEndTime = _startTime.add(const Duration(minutes: 30));
+      if (target == _TimeField.start) {
+        _startTime = value;
+        if (includeEnd && !_endTime.isAfter(_startTime)) {
+          _endTime = _startTime.add(const Duration(minutes: 30));
+        }
+      } else {
+        _endTime = value;
+        if (!_endTime.isAfter(_startTime)) {
+          _endTime = _startTime.add(const Duration(minutes: 1));
+        }
       }
     });
   }
 
-  Future<void> _pickSleepEndTime() async {
-    final DateTime? picked =
-        await _pickDateTimeScrollable(initialValue: _sleepEndTime);
-    if (picked == null || !mounted) {
-      return;
-    }
-    setState(() {
-      _sleepEndTime = picked;
-    });
+  Widget _timeChip({
+    required String label,
+    required DateTime value,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    return Expanded(
+      child: Material(
+        color: selected
+            ? color.primaryContainer.withValues(alpha: 0.95)
+            : color.surfaceContainerHighest.withValues(alpha: 0.28),
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(label, style: const TextStyle(fontSize: 12.5)),
+                const SizedBox(height: 4),
+                Text(
+                  _timeLabel(value),
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
-  Future<void> _pickStartTime() async {
-    final DateTime now = DateTime.now();
-    final DateTime? date = await showDatePicker(
-      context: context,
-      initialDate: _startTime,
-      firstDate: DateTime(now.year - 2),
-      lastDate: DateTime(now.year + 1),
+  Widget _inlineTimeEditor({required bool includeEnd}) {
+    final _TimeField selectedField =
+        includeEnd ? _activeTimeField : _TimeField.start;
+    final DateTime initialValue =
+        selectedField == _TimeField.start ? _startTime : _endTime;
+
+    return Column(
+      children: <Widget>[
+        Row(
+          children: <Widget>[
+            _timeChip(
+              label: tr(
+                context,
+                ko: "시작 시간",
+                en: "Start time",
+                es: "Hora de inicio",
+              ),
+              value: _startTime,
+              selected: selectedField == _TimeField.start,
+              onTap: () => setState(() => _activeTimeField = _TimeField.start),
+            ),
+            if (includeEnd) ...<Widget>[
+              const SizedBox(width: 8),
+              _timeChip(
+                label: tr(
+                  context,
+                  ko: "종료 시간",
+                  en: "End time",
+                  es: "Hora de fin",
+                ),
+                value: _endTime,
+                selected: selectedField == _TimeField.end,
+                onTap: () => setState(() => _activeTimeField = _TimeField.end),
+              ),
+            ],
+          ],
+        ),
+        const SizedBox(height: 8),
+        SizedBox(
+          height: 172,
+          child: CupertinoDatePicker(
+            key: ValueKey<String>("picker_${selectedField.name}"),
+            mode: CupertinoDatePickerMode.dateAndTime,
+            use24hFormat: true,
+            initialDateTime: initialValue,
+            onDateTimeChanged: (DateTime value) =>
+                _onInlineDateTimeChanged(value, includeEnd: includeEnd),
+          ),
+        ),
+      ],
     );
-    if (date == null || !mounted) {
-      return;
-    }
-    final TimeOfDay? time = await showTimePicker(
-      context: context,
-      initialTime: TimeOfDay.fromDateTime(_startTime),
-    );
-    if (time == null) {
-      return;
-    }
-    setState(() {
-      _startTime = DateTime(
-        date.year,
-        date.month,
-        date.day,
-        time.hour,
-        time.minute,
-      );
-    });
   }
 
   int? _parsePositiveInt(TextEditingController controller) {
@@ -374,11 +387,26 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
           });
           return;
         }
+        if (!_endTime.isAfter(start)) {
+          setState(() {
+            _error = tr(
+              context,
+              ko: "종료 시각은 시작 시각보다 뒤여야 합니다.",
+              en: "End time must be after start time.",
+              es: "La hora de fin debe ser posterior al inicio.",
+            );
+          });
+          return;
+        }
         Navigator.of(context).pop(
           RecordEntryInput(
             type: "FORMULA",
             startTime: start,
-            value: <String, dynamic>{"ml": amount},
+            endTime: _endTime,
+            value: <String, dynamic>{
+              "ml": amount,
+              "duration_min": _sleepDurationMinutes(),
+            },
           ),
         );
         return;
@@ -395,29 +423,24 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
         );
         return;
       case HomeTileType.weaning:
-        final String food = _memoController.text.trim();
         final int grams = _parsePositiveInt(_gramsController) ?? 0;
-        if (food.isEmpty) {
-          setState(() {
-            _error = tr(
-              context,
-              ko: "이유식 내용을 입력해 주세요.",
-              en: "Enter weaning food details.",
-              es: "Ingrese detalle del alimento.",
-            );
-          });
-          return;
-        }
+        final String memo = _memoController.text.trim();
         Navigator.of(context).pop(
           RecordEntryInput(
             type: "MEMO",
             startTime: start,
             value: <String, dynamic>{
-              "memo": "이유식: $food",
+              "memo": memo.isEmpty
+                  ? "이유식(${_weaningTypeLabel(_weaningType)})"
+                  : memo,
               if (grams > 0) "grams": grams,
               "category": "WEANING",
+              "weaning_type": _weaningType,
             },
-            metadata: <String, dynamic>{"entry_kind": "WEANING"},
+            metadata: <String, dynamic>{
+              "entry_kind": "WEANING",
+              "weaning_type": _weaningType,
+            },
           ),
         );
         return;
@@ -431,7 +454,7 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
         );
         return;
       case HomeTileType.sleep:
-        if (!_sleepEndTime.isAfter(start)) {
+        if (!_endTime.isAfter(start)) {
           setState(() {
             _error = tr(
               context,
@@ -447,20 +470,20 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
           RecordEntryInput(
             type: "SLEEP",
             startTime: start,
-            endTime: _sleepEndTime,
+            endTime: _endTime,
             value: <String, dynamic>{"duration_min": duration},
           ),
         );
         return;
       case HomeTileType.medication:
-        final String name = _nameController.text.trim();
-        if (name.isEmpty) {
+        final String medicationType = _nameController.text.trim();
+        if (medicationType.isEmpty) {
           setState(() {
             _error = tr(
               context,
-              ko: "투약명을 입력해 주세요.",
-              en: "Enter medication name.",
-              es: "Ingrese nombre del medicamento.",
+              ko: "투약 종류를 입력해 주세요.",
+              en: "Enter medication type.",
+              es: "Ingrese tipo de medicacion.",
             );
           });
           return;
@@ -471,7 +494,8 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
             type: "MEDICATION",
             startTime: start,
             value: <String, dynamic>{
-              "name": name,
+              "name": medicationType,
+              "medication_type": medicationType,
               if (dose != null && dose > 0) "dose": dose,
             },
           ),
@@ -501,79 +525,102 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
     }
   }
 
-  Widget _sleepTimeTile({
-    required String label,
-    required DateTime value,
-    required VoidCallback onTap,
-  }) {
-    return Material(
-      color: Theme.of(context)
-          .colorScheme
-          .surfaceContainerHighest
-          .withValues(alpha: 0.28),
-      borderRadius: BorderRadius.circular(12),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          child: Row(
-            children: <Widget>[
-              Expanded(child: Text(label)),
-              Text(
-                _timeLabel(value),
-                style: const TextStyle(fontWeight: FontWeight.w700),
-              ),
-              const SizedBox(width: 6),
-              const Icon(Icons.unfold_more, size: 18),
-            ],
-          ),
-        ),
-      ),
-    );
+  String _weaningTypeLabel(String value) {
+    switch (value) {
+      case "snack":
+        return tr(context, ko: "간식", en: "Snack", es: "Snack");
+      case "fruit":
+        return tr(context, ko: "과일", en: "Fruit", es: "Fruta");
+      case "soup":
+        return tr(context, ko: "국/죽", en: "Soup", es: "Sopa");
+      default:
+        return tr(context, ko: "식사", en: "Meal", es: "Comida");
+    }
   }
 
   Widget _buildBody() {
     switch (widget.tile) {
       case HomeTileType.formula:
-        return TextField(
-          controller: _amountController,
-          keyboardType: TextInputType.number,
-          decoration: InputDecoration(
-            labelText: tr(
-              context,
-              ko: "분유량 (ml)",
-              en: "Amount (ml)",
-              es: "Cantidad (ml)",
+        return Column(
+          children: <Widget>[
+            _inlineTimeEditor(includeEnd: true),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _amountController,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                labelText: tr(
+                  context,
+                  ko: "분유량 (ml)",
+                  en: "Amount (ml)",
+                  es: "Cantidad (ml)",
+                ),
+                border: const OutlineInputBorder(),
+              ),
             ),
-            border: const OutlineInputBorder(),
-          ),
+          ],
         );
       case HomeTileType.breastfeed:
-        return TextField(
-          controller: _durationController,
-          keyboardType: TextInputType.number,
-          decoration: InputDecoration(
-            labelText: tr(
-              context,
-              ko: "수유 시간 (분)",
-              en: "Duration (min)",
-              es: "Duracion (min)",
+        return Column(
+          children: <Widget>[
+            _inlineTimeEditor(includeEnd: false),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _durationController,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                labelText: tr(
+                  context,
+                  ko: "수유 시간 (분)",
+                  en: "Duration (min)",
+                  es: "Duracion (min)",
+                ),
+                border: const OutlineInputBorder(),
+              ),
             ),
-            border: const OutlineInputBorder(),
-          ),
+          ],
         );
       case HomeTileType.weaning:
         return Column(
           children: <Widget>[
+            _inlineTimeEditor(includeEnd: false),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<String>(
+              initialValue: _weaningType,
+              isExpanded: true,
+              borderRadius: BorderRadius.circular(14),
+              icon: const Icon(Icons.expand_more_rounded, size: 20),
+              decoration: _dropdownDecoration(
+                tr(
+                  context,
+                  ko: "이유식 종류",
+                  en: "Weaning type",
+                  es: "Tipo de destete",
+                ),
+              ),
+              items: const <String>["meal", "snack", "fruit", "soup"]
+                  .map(
+                    (String value) => DropdownMenuItem<String>(
+                      value: value,
+                      child: Text(_weaningTypeLabel(value)),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (String? value) {
+                if (value != null && value.isNotEmpty) {
+                  setState(() => _weaningType = value);
+                }
+              },
+            ),
+            const SizedBox(height: 8),
             TextField(
               controller: _memoController,
               decoration: InputDecoration(
                 labelText: tr(
                   context,
-                  ko: "이유식 메뉴",
-                  en: "Food name",
-                  es: "Nombre del alimento",
+                  ko: "이유식 메모 (선택)",
+                  en: "Weaning memo (optional)",
+                  es: "Memo de destete (opcional)",
                 ),
                 border: const OutlineInputBorder(),
               ),
@@ -595,60 +642,46 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
           ],
         );
       case HomeTileType.diaper:
-        return DropdownButtonFormField<String>(
-          initialValue: _diaperType,
-          isExpanded: true,
-          menuMaxHeight: 280,
-          borderRadius: BorderRadius.circular(14),
-          icon: const Icon(Icons.expand_more_rounded, size: 20),
-          decoration: _dropdownDecoration(
-            tr(
-              context,
-              ko: "기록 유형",
-              en: "Type",
-              es: "Tipo",
-            ),
-          ),
-          items: <DropdownMenuItem<String>>[
-            DropdownMenuItem<String>(
-              value: "PEE",
-              child: Text(tr(context, ko: "소변", en: "Pee", es: "Orina")),
-            ),
-            DropdownMenuItem<String>(
-              value: "POO",
-              child: Text(tr(context, ko: "대변", en: "Poo", es: "Heces")),
+        return Column(
+          children: <Widget>[
+            _inlineTimeEditor(includeEnd: false),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<String>(
+              initialValue: _diaperType,
+              isExpanded: true,
+              menuMaxHeight: 280,
+              borderRadius: BorderRadius.circular(14),
+              icon: const Icon(Icons.expand_more_rounded, size: 20),
+              decoration: _dropdownDecoration(
+                tr(
+                  context,
+                  ko: "기저귀 종류",
+                  en: "Diaper type",
+                  es: "Tipo de panal",
+                ),
+              ),
+              items: <DropdownMenuItem<String>>[
+                DropdownMenuItem<String>(
+                  value: "PEE",
+                  child: Text(tr(context, ko: "소변", en: "Pee", es: "Orina")),
+                ),
+                DropdownMenuItem<String>(
+                  value: "POO",
+                  child: Text(tr(context, ko: "대변", en: "Poo", es: "Heces")),
+                ),
+              ],
+              onChanged: (String? value) {
+                if (value != null) {
+                  setState(() => _diaperType = value);
+                }
+              },
             ),
           ],
-          onChanged: (String? value) {
-            if (value != null) {
-              setState(() => _diaperType = value);
-            }
-          },
         );
       case HomeTileType.sleep:
         return Column(
           children: <Widget>[
-            _sleepTimeTile(
-              label: tr(
-                context,
-                ko: "잠 시작 시각",
-                en: "Sleep start",
-                es: "Inicio del sueno",
-              ),
-              value: _startTime,
-              onTap: _pickSleepStartTime,
-            ),
-            const SizedBox(height: 8),
-            _sleepTimeTile(
-              label: tr(
-                context,
-                ko: "잠 종료 시각",
-                en: "Sleep end",
-                es: "Fin del sueno",
-              ),
-              value: _sleepEndTime,
-              onTap: _pickSleepEndTime,
-            ),
+            _inlineTimeEditor(includeEnd: true),
             const SizedBox(height: 8),
             InputDecorator(
               decoration: InputDecoration(
@@ -670,14 +703,16 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
       case HomeTileType.medication:
         return Column(
           children: <Widget>[
+            _inlineTimeEditor(includeEnd: false),
+            const SizedBox(height: 8),
             TextField(
               controller: _nameController,
               decoration: InputDecoration(
                 labelText: tr(
                   context,
-                  ko: "약 이름",
-                  en: "Medication name",
-                  es: "Nombre del medicamento",
+                  ko: "투약 종류",
+                  en: "Medication type",
+                  es: "Tipo de medicacion",
                 ),
                 border: const OutlineInputBorder(),
               ),
@@ -699,19 +734,25 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
           ],
         );
       case HomeTileType.memo:
-        return TextField(
-          controller: _memoController,
-          minLines: 2,
-          maxLines: 3,
-          decoration: InputDecoration(
-            labelText: tr(
-              context,
-              ko: "메모 내용",
-              en: "Memo",
-              es: "Memo",
+        return Column(
+          children: <Widget>[
+            _inlineTimeEditor(includeEnd: false),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _memoController,
+              minLines: 2,
+              maxLines: 3,
+              decoration: InputDecoration(
+                labelText: tr(
+                  context,
+                  ko: "메모 내용",
+                  en: "Memo",
+                  es: "Memo",
+                ),
+                border: const OutlineInputBorder(),
+              ),
             ),
-            border: const OutlineInputBorder(),
-          ),
+          ],
         );
     }
   }
@@ -735,24 +776,6 @@ class _RecordEntrySheetState extends State<RecordEntrySheet> {
                   ?.copyWith(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 12),
-            if (widget.tile != HomeTileType.sleep) ...<Widget>[
-              ListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                title: Text(
-                  tr(
-                    context,
-                    ko: "기록 시각",
-                    en: "Date & time",
-                    es: "Fecha y hora",
-                  ),
-                ),
-                subtitle: Text(_timeLabel(_startTime)),
-                trailing: const Icon(Icons.schedule_outlined),
-                onTap: _pickStartTime,
-              ),
-              const SizedBox(height: 8),
-            ],
             _buildBody(),
             if (_error != null) ...<Widget>[
               const SizedBox(height: 10),

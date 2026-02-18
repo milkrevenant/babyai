@@ -260,7 +260,13 @@ class HomeTileSettingsPage extends StatelessWidget {
                 style: const TextStyle(fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 6),
-              ...HomeTileType.values.map(
+              ...<HomeTileType>[
+                HomeTileType.formula,
+                HomeTileType.sleep,
+                HomeTileType.diaper,
+                HomeTileType.weaning,
+                HomeTileType.medication,
+              ].map(
                 (HomeTileType tile) => SwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   value: themeController.isHomeTileEnabled(tile),

@@ -22,11 +22,11 @@ var defaultBottomMenuEnabled = map[string]bool{
 
 var defaultHomeTiles = map[string]bool{
 	"formula":    true,
-	"breastfeed": true,
+	"breastfeed": false,
 	"weaning":    true,
 	"diaper":     true,
 	"sleep":      true,
-	"medication": false,
+	"medication": true,
 	"memo":       false,
 }
 

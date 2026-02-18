@@ -70,33 +70,33 @@ class AppThemeController extends ChangeNotifier {
   static const Map<HomeTileType, bool> _defaultHomeTilesFormula =
       <HomeTileType, bool>{
     HomeTileType.formula: true,
-    HomeTileType.breastfeed: true,
+    HomeTileType.breastfeed: false,
     HomeTileType.weaning: true,
     HomeTileType.diaper: true,
     HomeTileType.sleep: true,
-    HomeTileType.medication: false,
+    HomeTileType.medication: true,
     HomeTileType.memo: false,
   };
 
   static const Map<HomeTileType, bool> _defaultHomeTilesBreastfeeding =
       <HomeTileType, bool>{
     HomeTileType.formula: true,
-    HomeTileType.breastfeed: true,
+    HomeTileType.breastfeed: false,
     HomeTileType.weaning: true,
     HomeTileType.diaper: true,
     HomeTileType.sleep: true,
-    HomeTileType.medication: false,
+    HomeTileType.medication: true,
     HomeTileType.memo: false,
   };
 
   static const Map<HomeTileType, bool> _defaultHomeTilesWeaning =
       <HomeTileType, bool>{
     HomeTileType.formula: true,
-    HomeTileType.breastfeed: true,
+    HomeTileType.breastfeed: false,
     HomeTileType.weaning: true,
     HomeTileType.diaper: true,
     HomeTileType.sleep: true,
-    HomeTileType.medication: false,
+    HomeTileType.medication: true,
     HomeTileType.memo: false,
   };
 

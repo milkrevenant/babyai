@@ -539,8 +539,6 @@ class RecordingPageState extends State<RecordingPage> {
 
     final String lastFormula =
         _formatTime(_asString(snapshot["last_formula_time"]));
-    final String lastBreastfeed =
-        _formatTime(_asString(snapshot["last_breastfeed_time"]));
     final String recentSleep =
         _formatTime(_asString(snapshot["recent_sleep_time"]));
     final String recentSleepDuration =
@@ -605,29 +603,23 @@ class RecordingPageState extends State<RecordingPage> {
                   AppSettingsScope.maybeOf(context);
               final int tileColumns =
                   (settings?.homeTileColumns ?? 2).clamp(2, 3);
-              final bool showFormula =
-                  settings?.isHomeTileEnabled(HomeTileType.formula) ?? true;
-              final bool showBreastfeed =
-                  settings?.isHomeTileEnabled(HomeTileType.breastfeed) ?? true;
-              final bool showSleep =
-                  settings?.isHomeTileEnabled(HomeTileType.sleep) ?? true;
-              final bool showDiaper =
-                  settings?.isHomeTileEnabled(HomeTileType.diaper) ?? true;
-              final bool showWeaning =
-                  settings?.isHomeTileEnabled(HomeTileType.weaning) ?? true;
 
               final List<Widget> tiles = <Widget>[
-                if (showFormula)
+                if (settings?.isHomeTileEnabled(HomeTileType.formula) ?? true)
                   _metricTile(
                     title: tr(
                       context,
-                      ko: "총 수유량",
-                      en: "Total formula",
-                      es: "Formula total",
+                      ko: "분유 입력",
+                      en: "Formula Entry",
+                      es: "Registro de formula",
                     ),
-                    headline: "$formulaTotal ml",
-                    icon: Icons.monitor_weight_outlined,
+                    headline: lastFormula,
+                    icon: Icons.local_drink_outlined,
                     meta: <Widget>[
+                      _tileMetaLine(
+                        tr(context, ko: "총 수유량", en: "Total", es: "Total"),
+                        "$formulaTotal ml",
+                      ),
                       _tileMetaLine(
                         tr(context, ko: "오늘 횟수", en: "Count", es: "Conteo"),
                         "$formulaCount",
@@ -637,53 +629,13 @@ class RecordingPageState extends State<RecordingPage> {
                         ? null
                         : () => _openQuickEntry(HomeTileType.formula),
                   ),
-                if (showFormula)
+                if (settings?.isHomeTileEnabled(HomeTileType.sleep) ?? true)
                   _metricTile(
                     title: tr(
                       context,
-                      ko: "마지막 분유",
-                      en: "Last formula",
-                      es: "Ultima formula",
-                    ),
-                    headline: lastFormula,
-                    icon: Icons.local_drink_outlined,
-                    meta: <Widget>[
-                      _tileMetaLine(
-                        tr(context, ko: "총 수유량", en: "Total", es: "Total"),
-                        "$formulaTotal ml",
-                      ),
-                    ],
-                    onTap: _entrySaving
-                        ? null
-                        : () => _openQuickEntry(HomeTileType.formula),
-                  ),
-                if (showBreastfeed)
-                  _metricTile(
-                    title: tr(
-                      context,
-                      ko: "마지막 모유",
-                      en: "Last breastfeed",
-                      es: "Ultima lactancia",
-                    ),
-                    headline: lastBreastfeed,
-                    icon: Icons.favorite_outline,
-                    meta: <Widget>[
-                      _tileMetaLine(
-                        tr(context, ko: "오늘 횟수", en: "Count", es: "Conteo"),
-                        "$breastfeedCount",
-                      ),
-                    ],
-                    onTap: _entrySaving
-                        ? null
-                        : () => _openQuickEntry(HomeTileType.breastfeed),
-                  ),
-                if (showSleep)
-                  _metricTile(
-                    title: tr(
-                      context,
-                      ko: "수면",
-                      en: "Sleep",
-                      es: "Sueno",
+                      ko: "수면 입력",
+                      en: "Sleep Entry",
+                      es: "Registro de sueno",
                     ),
                     headline: recentSleep,
                     icon: Icons.bedtime_outlined,
@@ -705,23 +657,25 @@ class RecordingPageState extends State<RecordingPage> {
                         ? null
                         : () => _openQuickEntry(HomeTileType.sleep),
                   ),
-                if (showDiaper)
+                if (settings?.isHomeTileEnabled(HomeTileType.diaper) ?? true)
                   _metricTile(
                     title: tr(
                       context,
-                      ko: "기저귀",
-                      en: "Diaper",
-                      es: "Panal",
+                      ko: "기저귀 입력",
+                      en: "Diaper Entry",
+                      es: "Registro de panal",
                     ),
                     headline: "$diaperPeeCount / $diaperPooCount",
                     icon: Icons.baby_changing_station_outlined,
                     meta: <Widget>[
                       _tileMetaLine(
-                        tr(context, ko: "소변", en: "Pee", es: "Orina"),
+                        tr(context,
+                            ko: "마지막 소변", en: "Last pee", es: "Ultima orina"),
                         lastPee,
                       ),
                       _tileMetaLine(
-                        tr(context, ko: "대변", en: "Poo", es: "Heces"),
+                        tr(context,
+                            ko: "마지막 대변", en: "Last poo", es: "Ultimas heces"),
                         lastPoo,
                       ),
                     ],
@@ -729,13 +683,13 @@ class RecordingPageState extends State<RecordingPage> {
                         ? null
                         : () => _openQuickEntry(HomeTileType.diaper),
                   ),
-                if (showWeaning)
+                if (settings?.isHomeTileEnabled(HomeTileType.weaning) ?? true)
                   _metricTile(
                     title: tr(
                       context,
-                      ko: "이유식",
-                      en: "Weaning",
-                      es: "Destete",
+                      ko: "이유식 입력",
+                      en: "Weaning Entry",
+                      es: "Registro de destete",
                     ),
                     headline: lastWeaning,
                     icon: Icons.rice_bowl_outlined,
@@ -749,23 +703,29 @@ class RecordingPageState extends State<RecordingPage> {
                         ? null
                         : () => _openQuickEntry(HomeTileType.weaning),
                   ),
-              ];
-
-              if (tiles.isEmpty) {
-                return Card(
-                  child: ListTile(
-                    leading: const Icon(Icons.view_module_outlined),
-                    title: Text(
-                      tr(
-                        context,
-                        ko: "표시할 홈 타일이 없습니다.",
-                        en: "No visible home tiles.",
-                        es: "No hay tiles visibles.",
-                      ),
+                if (settings?.isHomeTileEnabled(HomeTileType.medication) ??
+                    true)
+                  _metricTile(
+                    title: tr(
+                      context,
+                      ko: "투약 입력",
+                      en: "Medication Entry",
+                      es: "Registro de medicacion",
                     ),
+                    headline: _formatTime(
+                        _asString(snapshot["last_medication_time"])),
+                    icon: Icons.medication_outlined,
+                    meta: <Widget>[
+                      _tileMetaLine(
+                        tr(context, ko: "오늘 횟수", en: "Count", es: "Conteo"),
+                        "$medicationCount",
+                      ),
+                    ],
+                    onTap: _entrySaving
+                        ? null
+                        : () => _openQuickEntry(HomeTileType.medication),
                   ),
-                );
-              }
+              ];
 
               return GridView(
                 shrinkWrap: true,
@@ -774,7 +734,7 @@ class RecordingPageState extends State<RecordingPage> {
                   crossAxisCount: tileColumns,
                   crossAxisSpacing: 10,
                   mainAxisSpacing: 10,
-                  childAspectRatio: tileColumns == 3 ? 0.96 : 1.18,
+                  childAspectRatio: tileColumns == 3 ? 0.9 : 1.1,
                 ),
                 children: tiles,
               );
