@@ -54,6 +54,27 @@ type aiQueryRequest struct {
 	UsePersonalData bool   `json:"use_personal_data"`
 }
 
+type chatSessionCreateRequest struct {
+	ChildID string `json:"child_id"`
+}
+
+type chatMessageCreateRequest struct {
+	Role      string         `json:"role"`
+	Content   string         `json:"content"`
+	Intent    string         `json:"intent"`
+	Context   map[string]any `json:"context_json"`
+	ChildID   string         `json:"child_id"`
+	SessionID string         `json:"session_id"`
+}
+
+type chatQueryRequest struct {
+	SessionID       string `json:"session_id"`
+	ChildID         string `json:"child_id"`
+	Query           string `json:"query"`
+	Tone            string `json:"tone"`
+	UsePersonalData bool   `json:"use_personal_data"`
+}
+
 type photoUploadCompleteRequest struct {
 	AlbumID      string `json:"album_id"`
 	ObjectKey    string `json:"object_key"`

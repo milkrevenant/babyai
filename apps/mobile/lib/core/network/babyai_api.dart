@@ -84,12 +84,19 @@ class BabyAIApi {
     }
   }
 
-  Options _authOptions() {
+  Options _authOptions({
+    Duration? connectTimeout,
+    Duration? receiveTimeout,
+    Duration? sendTimeout,
+  }) {
     _requireToken();
     return Options(
       headers: <String, String>{
         "Authorization": "Bearer $_runtimeBearerToken",
       },
+      connectTimeout: connectTimeout,
+      receiveTimeout: receiveTimeout,
+      sendTimeout: sendTimeout,
     );
   }
 
@@ -526,7 +533,145 @@ class BabyAIApi {
           "tone": "neutral",
           "use_personal_data": true,
         },
+        options: _authOptions(
+          connectTimeout: const Duration(seconds: 15),
+          sendTimeout: const Duration(seconds: 30),
+          receiveTimeout: const Duration(seconds: 90),
+        ),
+      );
+      return _requireMap(response);
+    } catch (error) {
+      throw _toFailure(error);
+    }
+  }
+
+  Future<Map<String, dynamic>> createChatSession({
+    String? childId,
+  }) async {
+    try {
+      final Response<dynamic> response = await _dio.post<dynamic>(
+        "/api/v1/chat/sessions",
+        data: <String, dynamic>{
+          if (childId != null && childId.trim().isNotEmpty)
+            "child_id": childId.trim()
+          else if (activeBabyId.isNotEmpty)
+            "child_id": activeBabyId,
+        },
         options: _authOptions(),
+      );
+      return _requireMap(response);
+    } catch (error) {
+      throw _toFailure(error);
+    }
+  }
+
+  Future<Map<String, dynamic>> getChatSessions({
+    String? childId,
+    int limit = 50,
+  }) async {
+    try {
+      final Map<String, dynamic> params = <String, dynamic>{
+        "limit": limit.clamp(1, 100),
+      };
+      if (childId != null && childId.trim().isNotEmpty) {
+        params["child_id"] = childId.trim();
+      } else if (activeBabyId.isNotEmpty) {
+        params["child_id"] = activeBabyId;
+      }
+      final Response<dynamic> response = await _dio.get<dynamic>(
+        "/api/v1/chat/sessions",
+        queryParameters: params,
+        options: _authOptions(),
+      );
+      return _requireMap(response);
+    } catch (error) {
+      throw _toFailure(error);
+    }
+  }
+
+  Future<Map<String, dynamic>> createChatMessage({
+    required String sessionId,
+    required String role,
+    required String content,
+    String? intent,
+    Map<String, dynamic>? contextJson,
+    String? childId,
+  }) async {
+    try {
+      final String sid = sessionId.trim();
+      if (sid.isEmpty) {
+        throw ApiFailure("sessionId is required");
+      }
+      final Response<dynamic> response = await _dio.post<dynamic>(
+        "/api/v1/chat/sessions/$sid/messages",
+        data: <String, dynamic>{
+          "role": role.trim(),
+          "content": content,
+          if (intent != null && intent.trim().isNotEmpty)
+            "intent": intent.trim(),
+          if (contextJson != null) "context_json": contextJson,
+          if (childId != null && childId.trim().isNotEmpty)
+            "child_id": childId.trim()
+          else if (activeBabyId.isNotEmpty)
+            "child_id": activeBabyId,
+        },
+        options: _authOptions(),
+      );
+      return _requireMap(response);
+    } catch (error) {
+      throw _toFailure(error);
+    }
+  }
+
+  Future<Map<String, dynamic>> getChatMessages(String sessionId) async {
+    try {
+      final String sid = sessionId.trim();
+      if (sid.isEmpty) {
+        throw ApiFailure("sessionId is required");
+      }
+      final Response<dynamic> response = await _dio.get<dynamic>(
+        "/api/v1/chat/sessions/$sid/messages",
+        options: _authOptions(),
+      );
+      return _requireMap(response);
+    } catch (error) {
+      throw _toFailure(error);
+    }
+  }
+
+  Future<Map<String, dynamic>> chatQuery({
+    required String sessionId,
+    required String query,
+    String tone = "neutral",
+    bool usePersonalData = true,
+    String? childId,
+  }) async {
+    try {
+      final String sid = sessionId.trim();
+      if (sid.isEmpty) {
+        throw ApiFailure("sessionId is required");
+      }
+      final String question = query.trim();
+      if (question.isEmpty) {
+        throw ApiFailure("query is required");
+      }
+      final Response<dynamic> response = await _dio.post<dynamic>(
+        "/api/v1/chat/query",
+        data: <String, dynamic>{
+          "session_id": sid,
+          "query": question,
+          "tone": tone,
+          "use_personal_data": usePersonalData,
+          if (childId != null && childId.trim().isNotEmpty)
+            "child_id": childId.trim()
+          else if (activeBabyId.isNotEmpty)
+            "child_id": activeBabyId,
+        },
+        options: _authOptions(
+          connectTimeout: const Duration(seconds: 15),
+          sendTimeout: const Duration(seconds: 30),
+          receiveTimeout: const Duration(seconds: 90),
+        ),
       );
       return _requireMap(response);
     } catch (error) {

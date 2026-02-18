@@ -11,6 +11,8 @@ dependencies:
     sdk: flutter
   cupertino_icons: ^1.0.8
   dio: ^5.7.0
+  flutter_markdown: ^0.7.6+2
+  markdown: ^7.3.0
   speech_to_text: ^7.0.0
   image_picker: ^1.1.2
   share_plus: ^10.1.4

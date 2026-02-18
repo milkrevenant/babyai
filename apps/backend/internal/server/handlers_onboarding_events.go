@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -363,6 +364,19 @@ func (a *App) confirmEvents(c *gin.Context) {
 			writeError(c, http.StatusInternalServerError, "Failed to save event")
 			return
 		}
+		if err := a.projectEventToPRDTables(
+			c.Request.Context(),
+			tx,
+			babyID,
+			event.Type,
+			event.StartTime.UTC(),
+			event.EndTime,
+			event.Value,
+		); err != nil {
+			log.Printf("projectEventToPRDTables failed clip_id=%s baby_id=%s event_type=%s err=%v", payload.ClipID, babyID, event.Type, err)
+			writeError(c, http.StatusInternalServerError, "Failed to project PRD event")
+			return
+		}
 	}
 
 	if _, err := tx.Exec(
@@ -481,6 +495,19 @@ func (a *App) createManualEvent(c *gin.Context) {
 		user.ID,
 	); err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to save event")
+		return
+	}
+	if err := a.projectEventToPRDTables(
+		c.Request.Context(),
+		tx,
+		baby.ID,
+		eventType,
+		startTime,
+		payload.EndTime,
+		value,
+	); err != nil {
+		log.Printf("projectEventToPRDTables failed event_id=%s baby_id=%s event_type=%s err=%v", eventID, baby.ID, eventType, err)
+		writeError(c, http.StatusInternalServerError, "Failed to project PRD event")
 		return
 	}
 

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<actions>
+    <action intentName="com.google.android.gms.actions.CREATE_NOTE">
+        <fulfillment urlTemplate="babyai://log?text={text}">
+            <parameter-mapping
+                intentParameter="text"
+                urlParameter="text" />
+        </fulfillment>
+    </action>
+</actions>

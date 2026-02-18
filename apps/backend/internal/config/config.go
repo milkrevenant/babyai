@@ -23,6 +23,11 @@ type Config struct {
 	JWTIssuer          string
 	AuthAutoCreateUser bool
 	CORSAllowOrigins   []string
+	OpenAIAPIKey       string
+	OpenAIModel        string
+	OpenAIBaseURL      string
+	AIMaxOutputTokens  int
+	AITimeoutSeconds   int
 }
 
 func Load() Config {
@@ -45,6 +50,11 @@ func Load() Config {
 			"CORS_ALLOW_ORIGINS",
 			[]string{"http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"},
 		),
+		OpenAIAPIKey:      getEnv("OPENAI_API_KEY", ""),
+		OpenAIModel:       getEnv("OPENAI_MODEL", "gpt-5-mini"),
+		OpenAIBaseURL:     getEnv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+		AIMaxOutputTokens: getEnvInt("AI_MAX_OUTPUT_TOKENS", 600),
+		AITimeoutSeconds:  getEnvInt("AI_TIMEOUT_SECONDS", 20),
 	}
 }
 
@@ -101,6 +111,18 @@ func getEnvBool(key string, fallback bool) bool {
 		return fallback
 	}
 	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func getEnvInt(key string, fallback int) int {
+	value, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
 	if err != nil {
 		return fallback
 	}

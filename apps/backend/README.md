@@ -53,6 +53,13 @@ Optional:
 - `JWT_ISSUER`
 - `AUTH_AUTOCREATE_USER` (default `false`)
 - `CORS_ALLOW_ORIGINS`
+- `OPENAI_MODEL` (default `gpt-5-mini`)
+- `OPENAI_BASE_URL` (default `https://api.openai.com/v1`)
+- `AI_MAX_OUTPUT_TOKENS` (default `600`)
+- `AI_TIMEOUT_SECONDS` (default `20`)
+
+Required for real AI routes in non-test env:
+- `OPENAI_API_KEY`
 
 Example:
 ```env
@@ -67,7 +74,23 @@ JWT_AUDIENCE=
 JWT_ISSUER=
 AUTH_AUTOCREATE_USER=false
 CORS_ALLOW_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000
+OPENAI_API_KEY=<your-openai-api-key>
+OPENAI_MODEL=gpt-5-mini
+OPENAI_BASE_URL=https://api.openai.com/v1
+AI_MAX_OUTPUT_TOKENS=600
+AI_TIMEOUT_SECONDS=20
 ```
+
+## AI Credit Billing
+- Credit charge: `ceil(total_tokens / 1000)` per AI response.
+- Applied routes: `POST /api/v1/chat/query`, `POST /api/v1/ai/query`.
+- Wallet unit: `User`.
+- Grace policy: up to `3` times per UTC day when balance is insufficient.
+- Monthly lazy grant on AI call:
+  - `AI_ONLY = 300`
+  - `AI_PHOTO = 500`
+  - `PHOTO_SHARE = 0`
+- Exhausted response: HTTP `402` with `detail=Insufficient AI credits`.
 
 ## Auth Behavior
 All `/api/v1/*` routes require:
@@ -179,6 +202,10 @@ go test ./... -count=1
 - `GET /api/v1/quick/today-summary`
 - `GET /api/v1/quick/landing-snapshot`
 - `POST /api/v1/ai/query`
+- `POST /api/v1/chat/sessions`
+- `POST /api/v1/chat/sessions/:session_id/messages`
+- `GET /api/v1/chat/sessions/:session_id/messages`
+- `POST /api/v1/chat/query`
 - `GET /api/v1/reports/daily`
 - `GET /api/v1/reports/weekly`
 - `POST /api/v1/photos/upload-url`

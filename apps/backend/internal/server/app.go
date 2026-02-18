@@ -55,6 +55,7 @@ type dbQuerier interface {
 type App struct {
 	cfg config.Config
 	db  *pgxpool.Pool
+	ai  AIClient
 }
 
 type AuthUser struct {
@@ -66,7 +67,13 @@ type AuthUser struct {
 }
 
 func New(cfg config.Config, db *pgxpool.Pool) *App {
-	return &App{cfg: cfg, db: db}
+	var aiClient AIClient
+	if strings.EqualFold(cfg.AppEnv, "test") {
+		aiClient = MockAIClient{Model: cfg.OpenAIModel}
+	} else {
+		aiClient = NewOpenAIResponsesClient(cfg)
+	}
+	return &App{cfg: cfg, db: db, ai: aiClient}
 }
 
 func (a *App) Router() *gin.Engine {
@@ -111,6 +118,11 @@ func (a *App) Router() *gin.Engine {
 	api.GET("/quick/today-summary", a.quickTodaySummary)
 	api.GET("/quick/landing-snapshot", a.quickLandingSnapshot)
 	api.POST("/ai/query", a.aiQuery)
+	api.POST("/chat/sessions", a.createChatSession)
+	api.GET("/chat/sessions", a.listChatSessions)
+	api.POST("/chat/sessions/:session_id/messages", a.createChatMessage)
+	api.GET("/chat/sessions/:session_id/messages", a.getChatMessages)
+	api.POST("/chat/query", a.chatQuery)
 	api.GET("/reports/daily", a.getDailyReport)
 	api.GET("/reports/weekly", a.getWeeklyReport)
 	api.POST("/photos/upload-url", a.createPhotoUploadURL)
