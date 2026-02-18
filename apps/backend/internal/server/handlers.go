@@ -74,6 +74,7 @@ type updateMySettingsRequest struct {
 	BottomMenu       map[string]bool `json:"bottom_menu_enabled"`
 	ChildCareProfile *string         `json:"child_care_profile"`
 	HomeTiles        map[string]bool `json:"home_tiles"`
+	HomeTileColumns  *int            `json:"home_tile_columns"`
 }
 
 type manualEventCreateRequest struct {

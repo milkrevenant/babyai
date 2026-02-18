@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -21,8 +22,8 @@ var defaultBottomMenuEnabled = map[string]bool{
 
 var defaultHomeTiles = map[string]bool{
 	"formula":    true,
-	"breastfeed": false,
-	"weaning":    false,
+	"breastfeed": true,
+	"weaning":    true,
 	"diaper":     true,
 	"sleep":      true,
 	"medication": false,
@@ -149,6 +150,15 @@ func (a *App) upsertMySettings(c *gin.Context) {
 		appSettings["home_tiles"] = merged
 	}
 
+	if payload.HomeTileColumns != nil {
+		columns := *payload.HomeTileColumns
+		if columns < 2 || columns > 3 {
+			writeError(c, http.StatusBadRequest, "home_tile_columns must be 2 or 3")
+			return
+		}
+		appSettings["home_tile_columns"] = columns
+	}
+
 	persona["app_settings"] = appSettings
 
 	if _, err := a.db.Exec(
@@ -191,6 +201,7 @@ func buildSettingsResponse(persona map[string]any) gin.H {
 		"bottom_menu_enabled": resolveBottomMenuEnabled(persona),
 		"child_care_profile":  resolveChildCareProfile(persona),
 		"home_tiles":          resolveHomeTiles(persona),
+		"home_tile_columns":   resolveHomeTileColumns(persona),
 	}
 }
 
@@ -285,6 +296,17 @@ func resolveHomeTiles(persona map[string]any) map[string]bool {
 	return resolved
 }
 
+func resolveHomeTileColumns(persona map[string]any) int {
+	if appSettings, ok := persona["app_settings"].(map[string]any); ok {
+		if raw, ok := toInt(appSettings["home_tile_columns"]); ok {
+			if raw >= 2 && raw <= 3 {
+				return raw
+			}
+		}
+	}
+	return 2
+}
+
 func copyBoolMap(input map[string]bool) map[string]bool {
 	result := make(map[string]bool, len(input))
 	for key, value := range input {
@@ -314,6 +336,29 @@ func toBool(input any) (bool, bool) {
 		}
 	}
 	return false, false
+}
+
+func toInt(input any) (int, bool) {
+	switch value := input.(type) {
+	case int:
+		return value, true
+	case int32:
+		return int(value), true
+	case int64:
+		return int(value), true
+	case float64:
+		return int(value), true
+	case string:
+		parsed := strings.TrimSpace(value)
+		if parsed == "" {
+			return 0, false
+		}
+		intVal, err := strconv.Atoi(parsed)
+		if err == nil {
+			return intVal, true
+		}
+	}
+	return 0, false
 }
 
 func normalizeThemeMode(input string) (string, bool) {

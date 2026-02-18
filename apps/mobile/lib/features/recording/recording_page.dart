@@ -138,69 +138,6 @@ class RecordingPageState extends State<RecordingPage> {
     }
   }
 
-  HomeTileType _fallbackTileForProfile(ChildCareProfile profile) {
-    switch (profile) {
-      case ChildCareProfile.breastfeeding:
-        return HomeTileType.breastfeed;
-      case ChildCareProfile.weaning:
-        return HomeTileType.weaning;
-      case ChildCareProfile.formula:
-        return HomeTileType.formula;
-    }
-  }
-
-  List<HomeTileType> _visibleTiles(AppThemeController controller) {
-    final List<HomeTileType> tiles = HomeTileType.values
-        .where((HomeTileType tile) => controller.isHomeTileEnabled(tile))
-        .toList();
-    if (tiles.isNotEmpty) {
-      return tiles;
-    }
-    return <HomeTileType>[
-      _fallbackTileForProfile(controller.childCareProfile),
-      HomeTileType.diaper,
-      HomeTileType.sleep,
-    ];
-  }
-
-  String _tileLabel(BuildContext context, HomeTileType tile) {
-    switch (tile) {
-      case HomeTileType.formula:
-        return tr(context, ko: "분유", en: "Formula", es: "Formula");
-      case HomeTileType.breastfeed:
-        return tr(context, ko: "모유", en: "Breastfeed", es: "Lactancia");
-      case HomeTileType.weaning:
-        return tr(context, ko: "이유식", en: "Weaning", es: "Destete");
-      case HomeTileType.diaper:
-        return tr(context, ko: "기저귀", en: "Diaper", es: "Panal");
-      case HomeTileType.sleep:
-        return tr(context, ko: "수면", en: "Sleep", es: "Sueno");
-      case HomeTileType.medication:
-        return tr(context, ko: "투약", en: "Medication", es: "Medicacion");
-      case HomeTileType.memo:
-        return tr(context, ko: "메모", en: "Memo", es: "Memo");
-    }
-  }
-
-  IconData _tileIcon(HomeTileType tile) {
-    switch (tile) {
-      case HomeTileType.formula:
-        return Icons.local_drink_outlined;
-      case HomeTileType.breastfeed:
-        return Icons.favorite_outline;
-      case HomeTileType.weaning:
-        return Icons.rice_bowl_outlined;
-      case HomeTileType.diaper:
-        return Icons.baby_changing_station_outlined;
-      case HomeTileType.sleep:
-        return Icons.bedtime_outlined;
-      case HomeTileType.medication:
-        return Icons.medication_outlined;
-      case HomeTileType.memo:
-        return Icons.sticky_note_2_outlined;
-    }
-  }
-
   int? _intFromPrefill(Map<String, dynamic> prefill, String key) {
     final Object? raw = prefill[key];
     if (raw is int) {
@@ -504,44 +441,89 @@ class RecordingPageState extends State<RecordingPage> {
     await _openQuickEntry(tile, prefill: prefill);
   }
 
-  Widget _statTile({
-    required String label,
-    required String value,
-    required IconData icon,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: Theme.of(context)
-            .colorScheme
-            .surfaceContainerHighest
-            .withValues(alpha: 0.36),
-        borderRadius: BorderRadius.circular(12),
-      ),
+  Widget _tileMetaLine(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
       child: Row(
         children: <Widget>[
-          Icon(icon, size: 18),
-          const SizedBox(width: 8),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(label, style: const TextStyle(fontSize: 12)),
-                Text(
-                  value,
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
-              ],
+            child: Text(
+              label,
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                fontSize: 11.5,
+              ),
+              overflow: TextOverflow.ellipsis,
             ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            value,
+            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5),
+            overflow: TextOverflow.ellipsis,
           ),
         ],
       ),
     );
   }
 
+  Widget _metricTile({
+    required String title,
+    required String headline,
+    required IconData icon,
+    List<Widget> meta = const <Widget>[],
+    VoidCallback? onTap,
+  }) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    return Material(
+      color: color.surfaceContainerHigh,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Row(
+                children: <Widget>[
+                  Icon(icon, size: 28),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                headline,
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+              if (meta.isNotEmpty) ...<Widget>[
+                const SizedBox(height: 6),
+                ...meta,
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final AppThemeController controller = AppSettingsScope.of(context);
     final Map<String, dynamic> snapshot = _snapshot ?? <String, dynamic>{};
     final Map<String, int> formulaBands =
         _asBandMap(snapshot["formula_amount_by_time_band_ml"]);
@@ -550,6 +532,7 @@ class RecordingPageState extends State<RecordingPage> {
         formulaBands.values.fold<int>(0, (int sum, int value) => sum + value);
     final int formulaCount = _asInt(snapshot["formula_count"]) ?? 0;
     final int breastfeedCount = _asInt(snapshot["breastfeed_count"]) ?? 0;
+    final int weaningCount = _asInt(snapshot["weaning_count"]) ?? 0;
     final int diaperPeeCount = _asInt(snapshot["diaper_pee_count"]) ?? 0;
     final int diaperPooCount = _asInt(snapshot["diaper_poo_count"]) ?? 0;
     final int medicationCount = _asInt(snapshot["medication_count"]) ?? 0;
@@ -562,8 +545,12 @@ class RecordingPageState extends State<RecordingPage> {
         _formatTime(_asString(snapshot["recent_sleep_time"]));
     final String recentSleepDuration =
         _formatDuration(_asInt(snapshot["recent_sleep_duration_min"]));
-    final String sinceLastSleep =
-        _formatDuration(_asInt(snapshot["minutes_since_last_sleep"]));
+    final String lastSleepEnd =
+        _formatTime(_asString(snapshot["last_sleep_end_time"]));
+    final String lastPee = _formatTime(_asString(snapshot["last_pee_time"]));
+    final String lastPoo = _formatTime(_asString(snapshot["last_poo_time"]));
+    final String lastWeaning =
+        _formatTime(_asString(snapshot["last_weaning_time"]));
 
     final String specialMemo = _asString(snapshot["special_memo"]) ??
         tr(
@@ -579,8 +566,6 @@ class RecordingPageState extends State<RecordingPage> {
       formulaBands["afternoon"]!.toDouble(),
       formulaBands["evening"]!.toDouble(),
     ];
-
-    final List<HomeTileType> tiles = _visibleTiles(controller);
 
     return RefreshIndicator(
       onRefresh: _loadLandingSnapshot,
@@ -614,147 +599,186 @@ class RecordingPageState extends State<RecordingPage> {
             ),
           ],
           const SizedBox(height: 8),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(
-                    tr(
+          Builder(
+            builder: (BuildContext context) {
+              final AppThemeController? settings =
+                  AppSettingsScope.maybeOf(context);
+              final int tileColumns =
+                  (settings?.homeTileColumns ?? 2).clamp(2, 3);
+              final bool showFormula =
+                  settings?.isHomeTileEnabled(HomeTileType.formula) ?? true;
+              final bool showBreastfeed =
+                  settings?.isHomeTileEnabled(HomeTileType.breastfeed) ?? true;
+              final bool showSleep =
+                  settings?.isHomeTileEnabled(HomeTileType.sleep) ?? true;
+              final bool showDiaper =
+                  settings?.isHomeTileEnabled(HomeTileType.diaper) ?? true;
+              final bool showWeaning =
+                  settings?.isHomeTileEnabled(HomeTileType.weaning) ?? true;
+
+              final List<Widget> tiles = <Widget>[
+                if (showFormula)
+                  _metricTile(
+                    title: tr(
                       context,
-                      ko: "오늘의 기록 랜딩",
-                      en: "Today Snapshot",
-                      es: "Resumen de hoy",
+                      ko: "총 수유량",
+                      en: "Total formula",
+                      es: "Formula total",
                     ),
-                    style: const TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.w700,
+                    headline: "$formulaTotal ml",
+                    icon: Icons.monitor_weight_outlined,
+                    meta: <Widget>[
+                      _tileMetaLine(
+                        tr(context, ko: "오늘 횟수", en: "Count", es: "Conteo"),
+                        "$formulaCount",
+                      ),
+                    ],
+                    onTap: _entrySaving
+                        ? null
+                        : () => _openQuickEntry(HomeTileType.formula),
+                  ),
+                if (showFormula)
+                  _metricTile(
+                    title: tr(
+                      context,
+                      ko: "마지막 분유",
+                      en: "Last formula",
+                      es: "Ultima formula",
+                    ),
+                    headline: lastFormula,
+                    icon: Icons.local_drink_outlined,
+                    meta: <Widget>[
+                      _tileMetaLine(
+                        tr(context, ko: "총 수유량", en: "Total", es: "Total"),
+                        "$formulaTotal ml",
+                      ),
+                    ],
+                    onTap: _entrySaving
+                        ? null
+                        : () => _openQuickEntry(HomeTileType.formula),
+                  ),
+                if (showBreastfeed)
+                  _metricTile(
+                    title: tr(
+                      context,
+                      ko: "마지막 모유",
+                      en: "Last breastfeed",
+                      es: "Ultima lactancia",
+                    ),
+                    headline: lastBreastfeed,
+                    icon: Icons.favorite_outline,
+                    meta: <Widget>[
+                      _tileMetaLine(
+                        tr(context, ko: "오늘 횟수", en: "Count", es: "Conteo"),
+                        "$breastfeedCount",
+                      ),
+                    ],
+                    onTap: _entrySaving
+                        ? null
+                        : () => _openQuickEntry(HomeTileType.breastfeed),
+                  ),
+                if (showSleep)
+                  _metricTile(
+                    title: tr(
+                      context,
+                      ko: "수면",
+                      en: "Sleep",
+                      es: "Sueno",
+                    ),
+                    headline: recentSleep,
+                    icon: Icons.bedtime_outlined,
+                    meta: <Widget>[
+                      _tileMetaLine(
+                        tr(context,
+                            ko: "최근 잠 지속", en: "Duration", es: "Duracion"),
+                        recentSleepDuration,
+                      ),
+                      _tileMetaLine(
+                        tr(context,
+                            ko: "마지막 잠 종료",
+                            en: "Last sleep end",
+                            es: "Fin del sueno"),
+                        lastSleepEnd,
+                      ),
+                    ],
+                    onTap: _entrySaving
+                        ? null
+                        : () => _openQuickEntry(HomeTileType.sleep),
+                  ),
+                if (showDiaper)
+                  _metricTile(
+                    title: tr(
+                      context,
+                      ko: "기저귀",
+                      en: "Diaper",
+                      es: "Panal",
+                    ),
+                    headline: "$diaperPeeCount / $diaperPooCount",
+                    icon: Icons.baby_changing_station_outlined,
+                    meta: <Widget>[
+                      _tileMetaLine(
+                        tr(context, ko: "소변", en: "Pee", es: "Orina"),
+                        lastPee,
+                      ),
+                      _tileMetaLine(
+                        tr(context, ko: "대변", en: "Poo", es: "Heces"),
+                        lastPoo,
+                      ),
+                    ],
+                    onTap: _entrySaving
+                        ? null
+                        : () => _openQuickEntry(HomeTileType.diaper),
+                  ),
+                if (showWeaning)
+                  _metricTile(
+                    title: tr(
+                      context,
+                      ko: "이유식",
+                      en: "Weaning",
+                      es: "Destete",
+                    ),
+                    headline: lastWeaning,
+                    icon: Icons.rice_bowl_outlined,
+                    meta: <Widget>[
+                      _tileMetaLine(
+                        tr(context, ko: "오늘 횟수", en: "Count", es: "Conteo"),
+                        "$weaningCount",
+                      ),
+                    ],
+                    onTap: _entrySaving
+                        ? null
+                        : () => _openQuickEntry(HomeTileType.weaning),
+                  ),
+              ];
+
+              if (tiles.isEmpty) {
+                return Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.view_module_outlined),
+                    title: Text(
+                      tr(
+                        context,
+                        ko: "표시할 홈 타일이 없습니다.",
+                        en: "No visible home tiles.",
+                        es: "No hay tiles visibles.",
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    "${tr(context, ko: "총 수유량", en: "Total formula", es: "Formula total")}: $formulaTotal ml",
-                  ),
-                  const SizedBox(height: 12),
-                  GridView.builder(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: tiles.length,
-                    gridDelegate:
-                        const SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: 3,
-                      mainAxisSpacing: 8,
-                      crossAxisSpacing: 8,
-                      childAspectRatio: 1.2,
-                    ),
-                    itemBuilder: (BuildContext context, int index) {
-                      final HomeTileType tile = tiles[index];
-                      return Material(
-                        color: Theme.of(context)
-                            .colorScheme
-                            .surfaceContainerHighest
-                            .withValues(alpha: 0.4),
-                        borderRadius: BorderRadius.circular(16),
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(16),
-                          onTap:
-                              _entrySaving ? null : () => _openQuickEntry(tile),
-                          child: Padding(
-                            padding: const EdgeInsets.all(10),
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: <Widget>[
-                                Icon(_tileIcon(tile), size: 22),
-                                const SizedBox(height: 8),
-                                Text(
-                                  _tileLabel(context, tile),
-                                  textAlign: TextAlign.center,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          GridView.count(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            crossAxisCount: 2,
-            mainAxisSpacing: 8,
-            crossAxisSpacing: 8,
-            childAspectRatio: 2.2,
-            children: <Widget>[
-              _statTile(
-                label: tr(
-                  context,
-                  ko: "마지막 분유",
-                  en: "Last formula",
-                  es: "Ultima formula",
+                );
+              }
+
+              return GridView(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: tileColumns,
+                  crossAxisSpacing: 10,
+                  mainAxisSpacing: 10,
+                  childAspectRatio: tileColumns == 3 ? 0.96 : 1.18,
                 ),
-                value: lastFormula,
-                icon: Icons.local_drink_outlined,
-              ),
-              _statTile(
-                label: tr(
-                  context,
-                  ko: "마지막 모유",
-                  en: "Last breastfeed",
-                  es: "Ultima lactancia",
-                ),
-                value: lastBreastfeed,
-                icon: Icons.favorite_outline,
-              ),
-              _statTile(
-                label: tr(
-                  context,
-                  ko: "최근 잔 시간",
-                  en: "Recent sleep",
-                  es: "Sueno reciente",
-                ),
-                value: recentSleep,
-                icon: Icons.bedtime_outlined,
-              ),
-              _statTile(
-                label: tr(
-                  context,
-                  ko: "최근 잠 지속 시간",
-                  en: "Sleep duration",
-                  es: "Duracion",
-                ),
-                value: recentSleepDuration,
-                icon: Icons.timelapse_outlined,
-              ),
-              _statTile(
-                label: tr(
-                  context,
-                  ko: "마지막 잠 이후",
-                  en: "Since last sleep",
-                  es: "Desde ultimo sueno",
-                ),
-                value: sinceLastSleep,
-                icon: Icons.hourglass_top_outlined,
-              ),
-              _statTile(
-                label: tr(
-                  context,
-                  ko: "기저귀 소/대",
-                  en: "Diaper pee/poo",
-                  es: "Panal orina/heces",
-                ),
-                value: "$diaperPeeCount / $diaperPooCount",
-                icon: Icons.baby_changing_station_outlined,
-              ),
-            ],
+                children: tiles,
+              );
+            },
           ),
           const SizedBox(height: 10),
           Card(
@@ -812,6 +836,7 @@ class RecordingPageState extends State<RecordingPage> {
             "${tr(context, ko: "오늘 기록", en: "Today records", es: "Registros de hoy")}: "
             "${tr(context, ko: "분유", en: "Formula", es: "Formula")} $formulaCount, "
             "${tr(context, ko: "모유", en: "Breastfeed", es: "Lactancia")} $breastfeedCount, "
+            "${tr(context, ko: "이유식", en: "Weaning", es: "Destete")} $weaningCount, "
             "${tr(context, ko: "투약", en: "Medication", es: "Medicacion")} $medicationCount",
             style: TextStyle(
               color: Theme.of(context).colorScheme.onSurfaceVariant,

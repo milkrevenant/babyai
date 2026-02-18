@@ -70,8 +70,8 @@ class AppThemeController extends ChangeNotifier {
   static const Map<HomeTileType, bool> _defaultHomeTilesFormula =
       <HomeTileType, bool>{
     HomeTileType.formula: true,
-    HomeTileType.breastfeed: false,
-    HomeTileType.weaning: false,
+    HomeTileType.breastfeed: true,
+    HomeTileType.weaning: true,
     HomeTileType.diaper: true,
     HomeTileType.sleep: true,
     HomeTileType.medication: false,
@@ -80,9 +80,9 @@ class AppThemeController extends ChangeNotifier {
 
   static const Map<HomeTileType, bool> _defaultHomeTilesBreastfeeding =
       <HomeTileType, bool>{
-    HomeTileType.formula: false,
+    HomeTileType.formula: true,
     HomeTileType.breastfeed: true,
-    HomeTileType.weaning: false,
+    HomeTileType.weaning: true,
     HomeTileType.diaper: true,
     HomeTileType.sleep: true,
     HomeTileType.medication: false,
@@ -91,8 +91,8 @@ class AppThemeController extends ChangeNotifier {
 
   static const Map<HomeTileType, bool> _defaultHomeTilesWeaning =
       <HomeTileType, bool>{
-    HomeTileType.formula: false,
-    HomeTileType.breastfeed: false,
+    HomeTileType.formula: true,
+    HomeTileType.breastfeed: true,
     HomeTileType.weaning: true,
     HomeTileType.diaper: true,
     HomeTileType.sleep: true,
@@ -106,6 +106,7 @@ class AppThemeController extends ChangeNotifier {
   AppAccentTone _accentTone = AppAccentTone.gold;
   AppLanguage _language = AppLanguage.ko;
   ChildCareProfile _childCareProfile = ChildCareProfile.formula;
+  int _homeTileColumns = 2;
 
   final Map<AppBottomMenu, bool> _bottomMenuEnabled =
       Map<AppBottomMenu, bool>.from(_defaultBottomMenuEnabled);
@@ -118,6 +119,7 @@ class AppThemeController extends ChangeNotifier {
   AppAccentTone get accentTone => _accentTone;
   AppLanguage get language => _language;
   ChildCareProfile get childCareProfile => _childCareProfile;
+  int get homeTileColumns => _homeTileColumns;
 
   Map<AppBottomMenu, bool> get bottomMenuEnabled =>
       Map<AppBottomMenu, bool>.unmodifiable(_bottomMenuEnabled);
@@ -203,6 +205,7 @@ class AppThemeController extends ChangeNotifier {
             .toString(),
         ChildCareProfile.formula,
       );
+      _homeTileColumns = _parseHomeTileColumns(settings["home_tile_columns"]);
 
       _applyBottomMenuFromPayload(settings["bottom_menu_enabled"]);
       _applyHomeTilesFromPayload(settings["home_tiles"]);
@@ -310,6 +313,15 @@ class AppThemeController extends ChangeNotifier {
     await _syncSettings();
   }
 
+  Future<void> setHomeTileColumns(int columns) async {
+    if (columns < 2 || columns > 3 || _homeTileColumns == columns) {
+      return;
+    }
+    _homeTileColumns = columns;
+    notifyListeners();
+    await _syncSettings();
+  }
+
   void _applyDefaultHomeTiles(ChildCareProfile profile) {
     _homeTileEnabled.clear();
     switch (profile) {
@@ -382,6 +394,23 @@ class AppThemeController extends ChangeNotifier {
     }
   }
 
+  int _parseHomeTileColumns(Object? value) {
+    if (value is int) {
+      return (value >= 2 && value <= 3) ? value : 2;
+    }
+    if (value is double) {
+      final int rounded = value.round();
+      return (rounded >= 2 && rounded <= 3) ? rounded : 2;
+    }
+    if (value is String) {
+      final int? parsed = int.tryParse(value.trim());
+      if (parsed != null && parsed >= 2 && parsed <= 3) {
+        return parsed;
+      }
+    }
+    return 2;
+  }
+
   Map<String, bool> _serializeBottomMenu() {
     return <String, bool>{
       for (final AppBottomMenu menu in AppBottomMenu.values)
@@ -407,6 +436,7 @@ class AppThemeController extends ChangeNotifier {
         bottomMenuEnabled: _serializeBottomMenu(),
         childCareProfile: _childCareProfile.name,
         homeTiles: _serializeHomeTiles(),
+        homeTileColumns: _homeTileColumns,
       );
     } catch (_) {
       // Keep local state if sync fails.

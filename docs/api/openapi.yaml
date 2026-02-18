@@ -9,6 +9,7 @@ servers:
     description: local
 tags:
   - name: health
+  - name: dev
   - name: onboarding
   - name: events
   - name: ai
@@ -35,6 +36,38 @@ paths:
                 properties:
                   status: { type: string, example: ok }
                   service: { type: string, example: babyai-api }
+
+  /dev/local-token:
+    post:
+      tags: [dev]
+      summary: Issue local development JWT token (local env only)
+      operationId: issueLocalDevToken
+      parameters:
+        - in: query
+          name: sub
+          required: false
+          schema: { type: string, format: uuid }
+        - in: query
+          name: name
+          required: false
+          schema: { type: string }
+        - in: query
+          name: provider
+          required: false
+          schema:
+            type: string
+            enum: [google, apple, phone]
+      responses:
+        '200':
+          description: Local dev token issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalDevTokenResponse'
+        '404':
+          description: Not available outside local environment
+        '400':
+          description: Invalid input
 
   /api/v1/onboarding/parent:
     post:
@@ -114,6 +147,23 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/UserSettingsResponse'
+    patch:
+      tags: [settings]
+      summary: Update current app settings for authenticated user
+      operationId: updateMySettings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserSettingsUpdateRequest'
+      responses:
+        '200':
+          description: Updated user settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserSettingsResponse'
 
   /api/v1/babies/profile:
     get:
@@ -149,23 +199,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/BabyProfileResponse'
-    patch:
-      tags: [settings]
-      summary: Update current app settings for authenticated user
-      operationId: updateMySettings
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/UserSettingsUpdateRequest'
-      responses:
-        '200':
-          description: Updated user settings
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UserSettingsResponse'
 
   /api/v1/ai/query:
     post:
@@ -185,6 +218,102 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AiQueryResponse'
+
+  /api/v1/quick/last-feeding:
+    get:
+      tags: [ai]
+      summary: Get latest feeding snapshot
+      operationId: quickLastFeeding
+      parameters:
+        - in: query
+          name: baby_id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: tone
+          schema: { $ref: '#/components/schemas/AiTone' }
+        - in: query
+          name: tz_offset
+          schema: { type: string, example: '+09:00' }
+      responses:
+        '200':
+          description: Latest feeding snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuickSnapshotResponse'
+
+  /api/v1/quick/recent-sleep:
+    get:
+      tags: [ai]
+      summary: Get latest sleep snapshot
+      operationId: quickRecentSleep
+      parameters:
+        - in: query
+          name: baby_id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: tone
+          schema: { $ref: '#/components/schemas/AiTone' }
+        - in: query
+          name: tz_offset
+          schema: { type: string, example: '+09:00' }
+      responses:
+        '200':
+          description: Latest sleep snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuickSnapshotResponse'
+
+  /api/v1/quick/last-diaper:
+    get:
+      tags: [ai]
+      summary: Get latest diaper snapshot
+      operationId: quickLastDiaper
+      parameters:
+        - in: query
+          name: baby_id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: tone
+          schema: { $ref: '#/components/schemas/AiTone' }
+        - in: query
+          name: tz_offset
+          schema: { type: string, example: '+09:00' }
+      responses:
+        '200':
+          description: Latest diaper snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuickSnapshotResponse'
+
+  /api/v1/quick/last-medication:
+    get:
+      tags: [ai]
+      summary: Get latest medication snapshot
+      operationId: quickLastMedication
+      parameters:
+        - in: query
+          name: baby_id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: tone
+          schema: { $ref: '#/components/schemas/AiTone' }
+        - in: query
+          name: tz_offset
+          schema: { type: string, example: '+09:00' }
+      responses:
+        '200':
+          description: Latest medication snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuickSnapshotResponse'
 
   /api/v1/quick/last-poo-time:
     get:
@@ -356,6 +485,46 @@ paths:
                   variants:
                     type: object
                     additionalProperties: { type: string }
+
+  /api/v1/photos/upload:
+    post:
+      tags: [photos]
+      summary: Upload photo file directly from mobile app
+      operationId: uploadPhotoFromDevice
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PhotoDeviceUploadRequest'
+      responses:
+        '200':
+          description: Photo uploaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PhotoDeviceUploadResponse'
+
+  /api/v1/photos/recent:
+    get:
+      tags: [photos]
+      summary: List recently uploaded photos for a baby
+      operationId: listRecentPhotos
+      parameters:
+        - in: query
+          name: baby_id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 200, default: 48 }
+      responses:
+        '200':
+          description: Recent photos
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecentPhotosResponse'
 
   /api/v1/subscription/me:
     get:
@@ -561,6 +730,18 @@ components:
         tone: { $ref: '#/components/schemas/AiTone' }
         use_personal_data: { type: boolean }
 
+    QuickSnapshotResponse:
+      type: object
+      properties:
+        timestamp: { type: string, format: date-time, nullable: true }
+        local_time: { type: string, format: date-time, nullable: true }
+        amount_ml: { type: number, nullable: true }
+        duration_min: { type: number, nullable: true }
+        type: { type: string, nullable: true }
+        confidence: { type: number, nullable: true }
+        reference_text: { type: string }
+        message: { type: string }
+
     LastPooTimeResponse:
       type: object
       properties:
@@ -608,10 +789,15 @@ components:
         last_breastfeed_time: { type: string, format: date-time, nullable: true }
         recent_sleep_time: { type: string, format: date-time, nullable: true }
         recent_sleep_duration_min: { type: integer, nullable: true }
+        last_sleep_end_time: { type: string, format: date-time, nullable: true }
         minutes_since_last_sleep: { type: integer, nullable: true }
         diaper_pee_count: { type: integer }
         diaper_poo_count: { type: integer }
         last_diaper_time: { type: string, format: date-time, nullable: true }
+        last_pee_time: { type: string, format: date-time, nullable: true }
+        last_poo_time: { type: string, format: date-time, nullable: true }
+        weaning_count: { type: integer }
+        last_weaning_time: { type: string, format: date-time, nullable: true }
         medication_count: { type: integer }
         last_medication_time: { type: string, format: date-time, nullable: true }
         special_memo: { type: string }
@@ -710,12 +896,43 @@ components:
       type: object
       properties:
         theme_mode: { $ref: '#/components/schemas/ThemeMode' }
+        language: { type: string, enum: [ko, en, es] }
+        main_font: { type: string, enum: [notoSans, systemSans] }
+        highlight_font: { type: string, enum: [ibmPlexSans, notoSans] }
+        accent_tone: { type: string, enum: [gold, teal, coral, indigo] }
+        bottom_menu_enabled:
+          type: object
+          additionalProperties: { type: boolean }
+        child_care_profile:
+          type: string
+          enum: [breastfeeding, formula, weaning]
+        home_tiles:
+          type: object
+          additionalProperties: { type: boolean }
+        home_tile_columns:
+          type: integer
+          enum: [2, 3]
 
     UserSettingsUpdateRequest:
       type: object
-      required: [theme_mode]
       properties:
         theme_mode: { $ref: '#/components/schemas/ThemeMode' }
+        language: { type: string, enum: [ko, en, es] }
+        main_font: { type: string, enum: [notoSans, systemSans] }
+        highlight_font: { type: string, enum: [ibmPlexSans, notoSans] }
+        accent_tone: { type: string, enum: [gold, teal, coral, indigo] }
+        bottom_menu_enabled:
+          type: object
+          additionalProperties: { type: boolean }
+        child_care_profile:
+          type: string
+          enum: [breastfeeding, formula, weaning]
+        home_tiles:
+          type: object
+          additionalProperties: { type: boolean }
+        home_tile_columns:
+          type: integer
+          enum: [2, 3]
 
     PhotoUploadCompleteRequest:
       type: object
@@ -724,6 +941,68 @@ components:
         album_id: { type: string }
         object_key: { type: string }
         downloadable: { type: boolean, default: false }
+
+    PhotoDeviceUploadRequest:
+      type: object
+      required: [file]
+      properties:
+        file:
+          type: string
+          format: binary
+        album_id: { type: string }
+        baby_id: { type: string }
+        downloadable:
+          type: string
+          description: true/false or 1/0 in multipart form
+
+    PhotoDeviceUploadResponse:
+      type: object
+      properties:
+        status: { type: string, example: uploaded }
+        photo_id: { type: string }
+        album_id: { type: string }
+        downloadable: { type: boolean }
+        object_key: { type: string }
+        photo_url: { type: string, format: uri }
+        variants:
+          type: object
+          additionalProperties: { type: string }
+
+    RecentPhotoItem:
+      type: object
+      properties:
+        photo_id: { type: string }
+        album_id: { type: string }
+        album_title: { type: string }
+        downloadable: { type: boolean }
+        created_at: { type: string, format: date-time }
+        preview_url: { type: string, format: uri }
+        original_url: { type: string, format: uri }
+        variants_json:
+          type: object
+          additionalProperties: true
+
+    RecentPhotosResponse:
+      type: object
+      properties:
+        baby_id: { type: string }
+        count: { type: integer }
+        reference_text: { type: string }
+        photos:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecentPhotoItem'
+
+    LocalDevTokenResponse:
+      type: object
+      properties:
+        token: { type: string }
+        sub: { type: string, format: uuid }
+        name: { type: string }
+        provider:
+          type: string
+          enum: [google, apple, phone]
+        reference_text: { type: string }
 
     CheckoutRequest:
       type: object

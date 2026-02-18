@@ -62,6 +62,188 @@ func TestQuickLastPooTimeReturnsLatestEvent(t *testing.T) {
 	}
 }
 
+func TestQuickLastFeedingReturnsNoDataWhenNoEvents(t *testing.T) {
+	resetDatabase(t)
+	fixture := seedOwnerFixture(t)
+
+	rec := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodGet,
+		"/api/v1/quick/last-feeding?baby_id="+fixture.BabyID,
+		signToken(t, fixture.UserID, nil),
+		nil,
+		nil,
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	body := decodeJSONMap(t, rec)
+	if body["timestamp"] != nil {
+		t.Fatalf("expected timestamp=nil, got %v", body["timestamp"])
+	}
+	if body["type"] != nil {
+		t.Fatalf("expected type=nil, got %v", body["type"])
+	}
+	if body["reference_text"] != "No confirmed feeding events are stored yet." {
+		t.Fatalf("unexpected reference_text: %v", body["reference_text"])
+	}
+}
+
+func TestQuickLastFeedingReturnsLatestWithTimezoneFields(t *testing.T) {
+	resetDatabase(t)
+	fixture := seedOwnerFixture(t)
+	base := time.Date(2026, 2, 17, 12, 0, 0, 0, time.UTC)
+	seedEvent(t, "", fixture.BabyID, "BREASTFEED", base.Add(-2*time.Hour), nil, map[string]any{"duration_min": 15}, fixture.UserID)
+	seedEvent(t, "", fixture.BabyID, "FORMULA", base.Add(-30*time.Minute), nil, map[string]any{"ml": 140}, fixture.UserID)
+
+	rec := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodGet,
+		"/api/v1/quick/last-feeding?baby_id="+fixture.BabyID+"&tz_offset=+09:00",
+		signToken(t, fixture.UserID, nil),
+		nil,
+		nil,
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	body := decodeJSONMap(t, rec)
+	if body["type"] != "FORMULA" {
+		t.Fatalf("expected type=FORMULA, got %v", body["type"])
+	}
+	amountML, ok := body["amount_ml"].(float64)
+	if !ok || int(amountML) != 140 {
+		t.Fatalf("expected amount_ml=140, got %v", body["amount_ml"])
+	}
+	localTime, ok := body["local_time"].(string)
+	if !ok || !strings.HasSuffix(localTime, "+09:00") {
+		t.Fatalf("expected local_time with +09:00 offset, got %v", body["local_time"])
+	}
+}
+
+func TestQuickRecentSleepReturnsDurationFromEvent(t *testing.T) {
+	resetDatabase(t)
+	fixture := seedOwnerFixture(t)
+	start := time.Date(2026, 2, 17, 2, 20, 0, 0, time.UTC)
+	end := start.Add(50 * time.Minute)
+	seedEvent(t, "", fixture.BabyID, "SLEEP", start, &end, map[string]any{}, fixture.UserID)
+
+	rec := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodGet,
+		"/api/v1/quick/recent-sleep?baby_id="+fixture.BabyID+"&tz_offset=-05:00",
+		signToken(t, fixture.UserID, nil),
+		nil,
+		nil,
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	body := decodeJSONMap(t, rec)
+	if body["type"] != "SLEEP" {
+		t.Fatalf("expected type=SLEEP, got %v", body["type"])
+	}
+	duration, ok := body["duration_min"].(float64)
+	if !ok || int(duration) != 50 {
+		t.Fatalf("expected duration_min=50, got %v", body["duration_min"])
+	}
+}
+
+func TestQuickLastDiaperReturnsLatestType(t *testing.T) {
+	resetDatabase(t)
+	fixture := seedOwnerFixture(t)
+	base := time.Date(2026, 2, 17, 4, 0, 0, 0, time.UTC)
+	seedEvent(t, "", fixture.BabyID, "PEE", base.Add(-20*time.Minute), nil, map[string]any{"count": 1}, fixture.UserID)
+	seedEvent(t, "", fixture.BabyID, "POO", base.Add(-5*time.Minute), nil, map[string]any{"count": 1}, fixture.UserID)
+
+	rec := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodGet,
+		"/api/v1/quick/last-diaper?baby_id="+fixture.BabyID,
+		signToken(t, fixture.UserID, nil),
+		nil,
+		nil,
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	body := decodeJSONMap(t, rec)
+	if body["type"] != "POO" {
+		t.Fatalf("expected type=POO, got %v", body["type"])
+	}
+	if body["timestamp"] == nil {
+		t.Fatalf("expected timestamp, got nil")
+	}
+}
+
+func TestQuickLastMedicationReturnsLatestEvent(t *testing.T) {
+	resetDatabase(t)
+	fixture := seedOwnerFixture(t)
+	start := time.Date(2026, 2, 17, 5, 30, 0, 0, time.UTC)
+	end := start.Add(20 * time.Minute)
+	seedEvent(
+		t,
+		"",
+		fixture.BabyID,
+		"MEDICATION",
+		start,
+		&end,
+		map[string]any{"name": "vitamin-d"},
+		fixture.UserID,
+	)
+
+	rec := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodGet,
+		"/api/v1/quick/last-medication?baby_id="+fixture.BabyID,
+		signToken(t, fixture.UserID, nil),
+		nil,
+		nil,
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	body := decodeJSONMap(t, rec)
+	if body["type"] != "MEDICATION" {
+		t.Fatalf("expected type=MEDICATION, got %v", body["type"])
+	}
+	duration, ok := body["duration_min"].(float64)
+	if !ok || int(duration) != 20 {
+		t.Fatalf("expected duration_min=20, got %v", body["duration_min"])
+	}
+}
+
+func TestQuickSnapshotEndpointsRejectInvalidTZOffset(t *testing.T) {
+	resetDatabase(t)
+	fixture := seedOwnerFixture(t)
+
+	rec := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodGet,
+		"/api/v1/quick/last-feeding?baby_id="+fixture.BabyID+"&tz_offset=0900",
+		signToken(t, fixture.UserID, nil),
+		nil,
+		nil,
+	)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if detail := responseDetail(t, rec); detail != "tz_offset must be in +/-HH:MM format" {
+		t.Fatalf("unexpected detail: %q", detail)
+	}
+}
+
 func TestQuickNextFeedingETAWithInsufficientDataIsUnstable(t *testing.T) {
 	resetDatabase(t)
 	fixture := seedOwnerFixture(t)
@@ -165,6 +347,7 @@ func TestQuickLandingSnapshotReturnsStructuredDashboardData(t *testing.T) {
 	sleepStart := base.Add(11 * time.Hour)
 	sleepEnd := sleepStart.Add(95 * time.Minute)
 	seedEvent(t, "", fixture.BabyID, "SLEEP", sleepStart, &sleepEnd, map[string]any{}, fixture.UserID)
+	seedEvent(t, "", fixture.BabyID, "MEMO", base.Add(12*time.Hour+20*time.Minute), nil, map[string]any{"memo": "80g", "category": "WEANING"}, fixture.UserID)
 	seedEvent(t, "", fixture.BabyID, "PEE", base.Add(16*time.Hour+40*time.Minute), nil, map[string]any{}, fixture.UserID)
 	seedEvent(t, "", fixture.BabyID, "POO", base.Add(17*time.Hour+5*time.Minute), nil, map[string]any{}, fixture.UserID)
 	seedEvent(t, "", fixture.BabyID, "MEDICATION", base.Add(18*time.Hour), nil, map[string]any{"name": "vitamin-d"}, fixture.UserID)
@@ -214,6 +397,9 @@ func TestQuickLandingSnapshotReturnsStructuredDashboardData(t *testing.T) {
 	if !ok || int(duration) != 95 {
 		t.Fatalf("expected recent_sleep_duration_min=95, got %v", body["recent_sleep_duration_min"])
 	}
+	if body["last_sleep_end_time"] == nil {
+		t.Fatalf("expected last_sleep_end_time, got nil")
+	}
 	elapsed, ok := body["minutes_since_last_sleep"].(float64)
 	if !ok || elapsed < 0 {
 		t.Fatalf("expected minutes_since_last_sleep>=0, got %v", body["minutes_since_last_sleep"])
@@ -227,8 +413,20 @@ func TestQuickLandingSnapshotReturnsStructuredDashboardData(t *testing.T) {
 	if pooCount, ok := body["diaper_poo_count"].(float64); !ok || int(pooCount) != 1 {
 		t.Fatalf("expected diaper_poo_count=1, got %v", body["diaper_poo_count"])
 	}
+	if body["last_pee_time"] == nil {
+		t.Fatalf("expected last_pee_time, got nil")
+	}
+	if body["last_poo_time"] == nil {
+		t.Fatalf("expected last_poo_time, got nil")
+	}
 	if body["last_diaper_time"] == nil {
 		t.Fatalf("expected last_diaper_time, got nil")
+	}
+	if weaningCount, ok := body["weaning_count"].(float64); !ok || int(weaningCount) != 1 {
+		t.Fatalf("expected weaning_count=1, got %v", body["weaning_count"])
+	}
+	if body["last_weaning_time"] == nil {
+		t.Fatalf("expected last_weaning_time, got nil")
 	}
 	if medicationCount, ok := body["medication_count"].(float64); !ok || int(medicationCount) != 1 {
 		t.Fatalf("expected medication_count=1, got %v", body["medication_count"])
@@ -281,6 +479,164 @@ func TestAIQueryReturnsRecordBasedPooAnswer(t *testing.T) {
 	}
 }
 
+func TestAIQueryReturnsLastFeedingAnswer(t *testing.T) {
+	resetDatabase(t)
+	fixture := seedOwnerFixture(t)
+	latest := time.Now().UTC().Add(-30 * time.Minute).Truncate(time.Second)
+	seedEvent(t, "", fixture.BabyID, "FORMULA", latest, nil, map[string]any{"ml": 130}, fixture.UserID)
+
+	rec := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodPost,
+		"/api/v1/ai/query",
+		signToken(t, fixture.UserID, nil),
+		map[string]any{
+			"baby_id":           fixture.BabyID,
+			"question":          "last feeding",
+			"use_personal_data": true,
+		},
+		nil,
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	body := decodeJSONMap(t, rec)
+	answer, _ := body["answer"].(string)
+	if !strings.Contains(answer, "Latest feeding event is FORMULA at") {
+		t.Fatalf("unexpected answer: %q", answer)
+	}
+	if !strings.Contains(answer, "Amount: 130 ml.") {
+		t.Fatalf("expected amount in answer: %q", answer)
+	}
+}
+
+func TestAIQueryReturnsRecentSleepAnswer(t *testing.T) {
+	resetDatabase(t)
+	fixture := seedOwnerFixture(t)
+	start := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Second)
+	end := start.Add(40 * time.Minute)
+	seedEvent(t, "", fixture.BabyID, "SLEEP", start, &end, map[string]any{}, fixture.UserID)
+
+	rec := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodPost,
+		"/api/v1/ai/query",
+		signToken(t, fixture.UserID, nil),
+		map[string]any{
+			"baby_id":           fixture.BabyID,
+			"question":          "recent sleep",
+			"use_personal_data": true,
+		},
+		nil,
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	body := decodeJSONMap(t, rec)
+	answer, _ := body["answer"].(string)
+	if !strings.Contains(answer, "Latest sleep event started at") {
+		t.Fatalf("unexpected answer: %q", answer)
+	}
+	if !strings.Contains(answer, "Duration: 40 minutes.") {
+		t.Fatalf("expected duration in answer: %q", answer)
+	}
+}
+
+func TestAIQueryReturnsLastDiaperAnswer(t *testing.T) {
+	resetDatabase(t)
+	fixture := seedOwnerFixture(t)
+	base := time.Now().UTC().Truncate(time.Second)
+	seedEvent(t, "", fixture.BabyID, "PEE", base.Add(-30*time.Minute), nil, map[string]any{}, fixture.UserID)
+	seedEvent(t, "", fixture.BabyID, "POO", base.Add(-10*time.Minute), nil, map[string]any{}, fixture.UserID)
+
+	rec := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodPost,
+		"/api/v1/ai/query",
+		signToken(t, fixture.UserID, nil),
+		map[string]any{
+			"baby_id":           fixture.BabyID,
+			"question":          "last diaper",
+			"use_personal_data": true,
+		},
+		nil,
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	body := decodeJSONMap(t, rec)
+	answer, _ := body["answer"].(string)
+	if !strings.Contains(answer, "Latest diaper event is POO at") {
+		t.Fatalf("unexpected answer: %q", answer)
+	}
+}
+
+func TestAIQueryReturnsLastMedicationAnswer(t *testing.T) {
+	resetDatabase(t)
+	fixture := seedOwnerFixture(t)
+	start := time.Now().UTC().Add(-45 * time.Minute).Truncate(time.Second)
+	end := start.Add(15 * time.Minute)
+	seedEvent(t, "", fixture.BabyID, "MEDICATION", start, &end, map[string]any{}, fixture.UserID)
+
+	rec := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodPost,
+		"/api/v1/ai/query",
+		signToken(t, fixture.UserID, nil),
+		map[string]any{
+			"baby_id":           fixture.BabyID,
+			"question":          "last medication",
+			"use_personal_data": true,
+		},
+		nil,
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	body := decodeJSONMap(t, rec)
+	answer, _ := body["answer"].(string)
+	if !strings.Contains(answer, "Latest medication event is at") {
+		t.Fatalf("unexpected answer: %q", answer)
+	}
+	if !strings.Contains(answer, "Duration: 15 minutes.") {
+		t.Fatalf("expected duration in answer: %q", answer)
+	}
+}
+
+func TestAIQueryReturnsTodaySummaryAnswer(t *testing.T) {
+	resetDatabase(t)
+	fixture := seedOwnerFixture(t)
+	start := startOfUTCDay(time.Now().UTC()).Add(1 * time.Hour)
+	seedEvent(t, "", fixture.BabyID, "FORMULA", start, nil, map[string]any{"ml": 90}, fixture.UserID)
+	seedEvent(t, "", fixture.BabyID, "PEE", start.Add(20*time.Minute), nil, map[string]any{}, fixture.UserID)
+
+	rec := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodPost,
+		"/api/v1/ai/query",
+		signToken(t, fixture.UserID, nil),
+		map[string]any{
+			"baby_id":           fixture.BabyID,
+			"question":          "today summary",
+			"use_personal_data": true,
+		},
+		nil,
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	body := decodeJSONMap(t, rec)
+	answer, _ := body["answer"].(string)
+	if !strings.Contains(answer, "Today's summary:") {
+		t.Fatalf("unexpected answer: %q", answer)
+	}
+}
+
 func TestAIQueryReturnsGenericAnswerWhenPersonalDataDisabled(t *testing.T) {
 	resetDatabase(t)
 	fixture := seedOwnerFixture(t)
@@ -302,7 +658,7 @@ func TestAIQueryReturnsGenericAnswerWhenPersonalDataDisabled(t *testing.T) {
 		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
 	body := decodeJSONMap(t, rec)
-	if body["answer"] != "I can answer about feeding ETA, diaper timing, and daily summaries once logs are available." {
+	if body["answer"] != "I can answer about last feeding, recent sleep, diaper timing, medication timing, feeding ETA, and daily summaries once logs are available." {
 		t.Fatalf("unexpected generic answer: %v", body["answer"])
 	}
 }

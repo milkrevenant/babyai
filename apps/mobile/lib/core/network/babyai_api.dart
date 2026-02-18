@@ -98,6 +98,18 @@ class BabyAIApi {
       return error;
     }
     if (error is DioException) {
+      final String rawMessage = (error.message ?? "").toLowerCase();
+      if (error.type == DioExceptionType.connectionError ||
+          error.type == DioExceptionType.connectionTimeout ||
+          error.type == DioExceptionType.unknown ||
+          rawMessage.contains("connection refused") ||
+          rawMessage.contains("failed host lookup") ||
+          rawMessage.contains("connection error")) {
+        return ApiFailure(
+          "Cannot reach API server (${_dio.options.baseUrl}). "
+          "Run backend server or set API_BASE_URL.",
+        );
+      }
       final int? code = error.response?.statusCode;
       final Object? data = error.response?.data;
       if (data is Map<String, dynamic>) {
@@ -121,6 +133,16 @@ class BabyAIApi {
       return payload;
     }
     throw ApiFailure("Unexpected API response shape");
+  }
+
+  String _localTimezoneOffset() {
+    final Duration offset = DateTime.now().timeZoneOffset;
+    final int totalMinutes = offset.inMinutes;
+    final String sign = totalMinutes >= 0 ? "+" : "-";
+    final int absMinutes = totalMinutes.abs();
+    final int hours = absMinutes ~/ 60;
+    final int minutes = absMinutes % 60;
+    return "$sign${hours.toString().padLeft(2, "0")}:${minutes.toString().padLeft(2, "0")}";
   }
 
   Future<Map<String, dynamic>> onboardingParent({
@@ -165,6 +187,31 @@ class BabyAIApi {
         options: _authOptions(),
       );
       return _requireMap(response);
+    } catch (error) {
+      throw _toFailure(error);
+    }
+  }
+
+  Future<Map<String, dynamic>> issueLocalDevToken({
+    String? sub,
+    String? name,
+    String provider = "google",
+  }) async {
+    try {
+      final Response<dynamic> response = await _dio.post<dynamic>(
+        "/dev/local-token",
+        queryParameters: <String, dynamic>{
+          if (sub != null && sub.trim().isNotEmpty) "sub": sub.trim(),
+          if (name != null && name.trim().isNotEmpty) "name": name.trim(),
+          if (provider.trim().isNotEmpty) "provider": provider.trim(),
+        },
+      );
+      final Map<String, dynamic> payload = _requireMap(response);
+      final String token = (payload["token"] ?? "").toString().trim();
+      if (token.isNotEmpty) {
+        setBearerToken(token);
+      }
+      return payload;
     } catch (error) {
       throw _toFailure(error);
     }
@@ -232,7 +279,10 @@ class BabyAIApi {
       _requireBabyId();
       final Response<dynamic> response = await _dio.get<dynamic>(
         "/api/v1/quick/last-poo-time",
-        queryParameters: <String, dynamic>{"baby_id": activeBabyId},
+        queryParameters: <String, dynamic>{
+          "baby_id": activeBabyId,
+          "tz_offset": _localTimezoneOffset(),
+        },
         options: _authOptions(),
       );
       return _requireMap(response);
@@ -246,7 +296,10 @@ class BabyAIApi {
       _requireBabyId();
       final Response<dynamic> response = await _dio.get<dynamic>(
         "/api/v1/quick/next-feeding-eta",
-        queryParameters: <String, dynamic>{"baby_id": activeBabyId},
+        queryParameters: <String, dynamic>{
+          "baby_id": activeBabyId,
+          "tz_offset": _localTimezoneOffset(),
+        },
         options: _authOptions(),
       );
       return _requireMap(response);
@@ -260,7 +313,78 @@ class BabyAIApi {
       _requireBabyId();
       final Response<dynamic> response = await _dio.get<dynamic>(
         "/api/v1/quick/today-summary",
-        queryParameters: <String, dynamic>{"baby_id": activeBabyId},
+        queryParameters: <String, dynamic>{
+          "baby_id": activeBabyId,
+          "tz_offset": _localTimezoneOffset(),
+        },
+        options: _authOptions(),
+      );
+      return _requireMap(response);
+    } catch (error) {
+      throw _toFailure(error);
+    }
+  }
+
+  Future<Map<String, dynamic>> quickLastFeeding() async {
+    try {
+      _requireBabyId();
+      final Response<dynamic> response = await _dio.get<dynamic>(
+        "/api/v1/quick/last-feeding",
+        queryParameters: <String, dynamic>{
+          "baby_id": activeBabyId,
+          "tz_offset": _localTimezoneOffset(),
+        },
+        options: _authOptions(),
+      );
+      return _requireMap(response);
+    } catch (error) {
+      throw _toFailure(error);
+    }
+  }
+
+  Future<Map<String, dynamic>> quickRecentSleep() async {
+    try {
+      _requireBabyId();
+      final Response<dynamic> response = await _dio.get<dynamic>(
+        "/api/v1/quick/recent-sleep",
+        queryParameters: <String, dynamic>{
+          "baby_id": activeBabyId,
+          "tz_offset": _localTimezoneOffset(),
+        },
+        options: _authOptions(),
+      );
+      return _requireMap(response);
+    } catch (error) {
+      throw _toFailure(error);
+    }
+  }
+
+  Future<Map<String, dynamic>> quickLastDiaper() async {
+    try {
+      _requireBabyId();
+      final Response<dynamic> response = await _dio.get<dynamic>(
+        "/api/v1/quick/last-diaper",
+        queryParameters: <String, dynamic>{
+          "baby_id": activeBabyId,
+          "tz_offset": _localTimezoneOffset(),
+        },
+        options: _authOptions(),
+      );
+      return _requireMap(response);
+    } catch (error) {
+      throw _toFailure(error);
+    }
+  }
+
+  Future<Map<String, dynamic>> quickLastMedication() async {
+    try {
+      _requireBabyId();
+      final Response<dynamic> response = await _dio.get<dynamic>(
+        "/api/v1/quick/last-medication",
+        queryParameters: <String, dynamic>{
+          "baby_id": activeBabyId,
+          "tz_offset": _localTimezoneOffset(),
+        },
         options: _authOptions(),
       );
       return _requireMap(response);
@@ -290,6 +414,7 @@ class BabyAIApi {
     Map<String, bool>? bottomMenuEnabled,
     String? childCareProfile,
     Map<String, bool>? homeTiles,
+    int? homeTileColumns,
   }) async {
     try {
       final Map<String, dynamic> payload = <String, dynamic>{
@@ -307,6 +432,7 @@ class BabyAIApi {
         if (childCareProfile != null && childCareProfile.trim().isNotEmpty)
           "child_care_profile": childCareProfile.trim(),
         if (homeTiles != null) "home_tiles": homeTiles,
+        if (homeTileColumns != null) "home_tile_columns": homeTileColumns,
       };
       final Response<dynamic> response = await _dio.patch<dynamic>(
         "/api/v1/settings/me",
@@ -523,6 +649,55 @@ class BabyAIApi {
           "album_id": activeAlbumId,
           "object_key": objectKey,
           "downloadable": downloadable,
+        },
+        options: _authOptions(),
+      );
+      return _requireMap(response);
+    } catch (error) {
+      throw _toFailure(error);
+    }
+  }
+
+  Future<Map<String, dynamic>> uploadPhotoFromDevice({
+    required String filePath,
+    bool downloadable = false,
+  }) async {
+    try {
+      _requireBabyId();
+      final String fileName = filePath.trim().split("/").last;
+      final FormData payload = FormData.fromMap(<String, dynamic>{
+        "baby_id": activeBabyId,
+        if (activeAlbumId.isNotEmpty) "album_id": activeAlbumId,
+        "downloadable": downloadable ? "true" : "false",
+        "file": await MultipartFile.fromFile(
+          filePath,
+          filename: fileName.isEmpty ? "photo.jpg" : fileName,
+        ),
+      });
+      final Response<dynamic> response = await _dio.post<dynamic>(
+        "/api/v1/photos/upload",
+        data: payload,
+        options: _authOptions(),
+      );
+      final Map<String, dynamic> data = _requireMap(response);
+      final String albumID = (data["album_id"] ?? "").toString().trim();
+      if (albumID.isNotEmpty) {
+        setRuntimeIds(albumId: albumID);
+      }
+      return data;
+    } catch (error) {
+      throw _toFailure(error);
+    }
+  }
+
+  Future<Map<String, dynamic>> recentPhotos({int limit = 48}) async {
+    try {
+      _requireBabyId();
+      final Response<dynamic> response = await _dio.get<dynamic>(
+        "/api/v1/photos/recent",
+        queryParameters: <String, dynamic>{
+          "baby_id": activeBabyId,
+          "limit": limit,
         },
         options: _authOptions(),
       );

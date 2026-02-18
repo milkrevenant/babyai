@@ -8,6 +8,94 @@ class HomeTileSettingsPage extends StatelessWidget {
 
   final AppThemeController themeController;
 
+  Widget _boundedControl(Widget child) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 540),
+        child: child,
+      ),
+    );
+  }
+
+  InputDecoration _dropdownDecoration(BuildContext context, String label) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    final BorderRadius borderRadius = BorderRadius.circular(14);
+    return InputDecoration(
+      labelText: label,
+      filled: true,
+      fillColor: color.surfaceContainerHighest.withValues(alpha: 0.24),
+      border: OutlineInputBorder(borderRadius: borderRadius),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: borderRadius,
+        borderSide: BorderSide(color: color.outlineVariant),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: borderRadius,
+        borderSide: BorderSide(color: color.primary, width: 1.4),
+      ),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+    );
+  }
+
+  Widget _profileDropdown({
+    required BuildContext context,
+    required ChildCareProfile initialValue,
+    required List<DropdownMenuItem<ChildCareProfile>> items,
+    required ValueChanged<ChildCareProfile?> onChanged,
+  }) {
+    return _boundedControl(
+      DropdownButtonFormField<ChildCareProfile>(
+        initialValue: initialValue,
+        isExpanded: true,
+        menuMaxHeight: 320,
+        borderRadius: BorderRadius.circular(14),
+        icon: const Icon(Icons.expand_more_rounded, size: 20),
+        decoration: _dropdownDecoration(
+          context,
+          tr(
+            context,
+            ko: "설문 기본 유형",
+            en: "Default profile",
+            es: "Perfil predeterminado",
+          ),
+        ),
+        items: items,
+        onChanged: onChanged,
+      ),
+    );
+  }
+
+  Widget _columnsDropdown({
+    required BuildContext context,
+    required int initialValue,
+    required ValueChanged<int?> onChanged,
+  }) {
+    return _boundedControl(
+      DropdownButtonFormField<int>(
+        initialValue: initialValue,
+        isExpanded: true,
+        menuMaxHeight: 240,
+        borderRadius: BorderRadius.circular(14),
+        icon: const Icon(Icons.expand_more_rounded, size: 20),
+        decoration: _dropdownDecoration(
+          context,
+          tr(
+            context,
+            ko: "홈 타일 열 수",
+            en: "Home tile columns",
+            es: "Columnas de tiles",
+          ),
+        ),
+        items: const <DropdownMenuItem<int>>[
+          DropdownMenuItem<int>(value: 2, child: Text("2")),
+          DropdownMenuItem<int>(value: 3, child: Text("3")),
+        ],
+        onChanged: onChanged,
+      ),
+    );
+  }
+
   String _profileLabel(BuildContext context, ChildCareProfile profile) {
     switch (profile) {
       case ChildCareProfile.breastfeeding:
@@ -96,17 +184,9 @@ class HomeTileSettingsPage extends StatelessWidget {
                 style: const TextStyle(fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 8),
-              DropdownButtonFormField<ChildCareProfile>(
+              _profileDropdown(
+                context: context,
                 initialValue: themeController.childCareProfile,
-                decoration: InputDecoration(
-                  labelText: tr(
-                    context,
-                    ko: "설문 기본 유형",
-                    en: "Default profile",
-                    es: "Perfil predeterminado",
-                  ),
-                  border: const OutlineInputBorder(),
-                ),
                 items: ChildCareProfile.values
                     .map(
                       (ChildCareProfile profile) =>
@@ -144,6 +224,27 @@ class HomeTileSettingsPage extends StatelessWidget {
                   ko: "모유/분유/이유식 유형에 맞는 기본 타일 세트를 다시 적용합니다.",
                   en: "Re-apply tile defaults for breastfeeding/formula/weaning.",
                   es: "Reaplica los tiles segun lactancia/formula/destete.",
+                ),
+                style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant),
+              ),
+              const SizedBox(height: 14),
+              _columnsDropdown(
+                context: context,
+                initialValue: themeController.homeTileColumns,
+                onChanged: (int? value) {
+                  if (value != null) {
+                    themeController.setHomeTileColumns(value);
+                  }
+                },
+              ),
+              const SizedBox(height: 8),
+              Text(
+                tr(
+                  context,
+                  ko: "기본은 2열이며, 필요 시 3열로 더 촘촘하게 배치할 수 있습니다.",
+                  en: "Default is 2 columns. Switch to 3 columns for denser tiles.",
+                  es: "Por defecto son 2 columnas. Cambie a 3 para mayor densidad.",
                 ),
                 style: TextStyle(
                     color: Theme.of(context).colorScheme.onSurfaceVariant),

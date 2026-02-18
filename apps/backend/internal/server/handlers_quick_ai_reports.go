@@ -1,7 +1,9 @@
 package server
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -10,6 +12,410 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
 )
+
+func parseTZOffset(raw string) (*time.Location, string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return time.UTC, "+00:00", nil
+	}
+
+	if len(trimmed) != 6 || trimmed[3] != ':' || (trimmed[0] != '+' && trimmed[0] != '-') {
+		return nil, "", errors.New("tz_offset must be in +/-HH:MM format")
+	}
+
+	hours, err := strconv.Atoi(trimmed[1:3])
+	if err != nil {
+		return nil, "", errors.New("tz_offset must be in +/-HH:MM format")
+	}
+	minutes, err := strconv.Atoi(trimmed[4:6])
+	if err != nil {
+		return nil, "", errors.New("tz_offset must be in +/-HH:MM format")
+	}
+	if hours > 14 || minutes > 59 || (hours == 14 && minutes != 0) {
+		return nil, "", errors.New("tz_offset is out of range")
+	}
+
+	totalSeconds := (hours * 60 * 60) + (minutes * 60)
+	sign := trimmed[0:1]
+	if sign == "-" {
+		totalSeconds *= -1
+	}
+	normalized := fmt.Sprintf("%s%02d:%02d", sign, hours, minutes)
+	return time.FixedZone("UTC"+normalized, totalSeconds), normalized, nil
+}
+
+func formatLocalTimeRFC3339(value *time.Time, location *time.Location) *string {
+	if value == nil {
+		return nil
+	}
+	loc := location
+	if loc == nil {
+		loc = time.UTC
+	}
+	formatted := value.In(loc).Format(time.RFC3339)
+	return &formatted
+}
+
+func stringPointer(value string) *string {
+	copied := value
+	return &copied
+}
+
+func parseNumericValue(raw any) (float64, bool) {
+	switch value := raw.(type) {
+	case float64:
+		return value, true
+	case float32:
+		return float64(value), true
+	case int:
+		return float64(value), true
+	case int64:
+		return float64(value), true
+	case json.Number:
+		parsed, err := value.Float64()
+		if err == nil {
+			return parsed, true
+		}
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		if err == nil {
+			return parsed, true
+		}
+	}
+	return 0, false
+}
+
+func extractOptionalNumberFromMap(data map[string]any, keys ...string) *float64 {
+	if data == nil {
+		return nil
+	}
+	for _, key := range keys {
+		raw, ok := data[key]
+		if !ok {
+			continue
+		}
+		parsed, ok := parseNumericValue(raw)
+		if !ok {
+			continue
+		}
+		return &parsed
+	}
+	return nil
+}
+
+func extractConfidenceScore(valueMap map[string]any, metadataMap map[string]any) *float64 {
+	candidates := []map[string]any{metadataMap, valueMap}
+	for _, candidate := range candidates {
+		if score := extractOptionalNumberFromMap(candidate, "confidence", "confidence_score"); score != nil {
+			return score
+		}
+		if candidate == nil {
+			continue
+		}
+		if nested, ok := candidate["confidence"].(map[string]any); ok {
+			if score := extractOptionalNumberFromMap(nested, "overall", "score", "value"); score != nil {
+				return score
+			}
+		}
+	}
+	return nil
+}
+
+func extractDurationMinutes(valueMap map[string]any, startTime time.Time, endTime *time.Time) *float64 {
+	if fromPayload := extractOptionalNumberFromMap(valueMap, "duration_min", "duration_minutes", "minutes", "duration"); fromPayload != nil {
+		return fromPayload
+	}
+	if endTime == nil {
+		return nil
+	}
+	duration := endTime.UTC().Sub(startTime.UTC()).Minutes()
+	if duration < 0 {
+		duration = 0
+	}
+	return &duration
+}
+
+func quickSnapshotNoData(referenceText string, message string) gin.H {
+	return gin.H{
+		"timestamp":      nil,
+		"local_time":     nil,
+		"amount_ml":      nil,
+		"duration_min":   nil,
+		"type":           nil,
+		"confidence":     nil,
+		"reference_text": referenceText,
+		"message":        message,
+	}
+}
+
+func (a *App) quickLastFeeding(c *gin.Context) {
+	user, ok := authUserFromContext(c)
+	if !ok {
+		writeError(c, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	babyID := c.Query("baby_id")
+	tone := strings.TrimSpace(c.DefaultQuery("tone", "neutral"))
+	localZone, _, err := parseTZOffset(c.Query("tz_offset"))
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	baby, statusCode, err := a.getBabyWithAccess(c.Request.Context(), user.ID, babyID, readRoles)
+	if err != nil {
+		writeError(c, statusCode, err.Error())
+		return
+	}
+
+	var eventType string
+	var startedAt time.Time
+	var endedAt *time.Time
+	var valueRaw []byte
+	var metadataRaw []byte
+	err = a.db.QueryRow(
+		c.Request.Context(),
+		`SELECT type, "startTime", "endTime", "valueJson", "metadataJson"
+		 FROM "Event"
+		 WHERE "babyId" = $1 AND type IN ('FORMULA', 'BREASTFEED')
+		 ORDER BY "startTime" DESC
+		 LIMIT 1`,
+		baby.ID,
+	).Scan(&eventType, &startedAt, &endedAt, &valueRaw, &metadataRaw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		c.JSON(http.StatusOK, quickSnapshotNoData(
+			"No confirmed feeding events are stored yet.",
+			"No feeding records yet. Add one and I can answer immediately.",
+		))
+		return
+	}
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to load feeding events")
+		return
+	}
+
+	startedUTC := startedAt.UTC()
+	valueMap := parseJSONStringMap(valueRaw)
+	metadataMap := parseJSONStringMap(metadataRaw)
+	amountML := extractOptionalNumberFromMap(valueMap, "amount_ml", "ml", "volume_ml")
+	durationMin := extractDurationMinutes(valueMap, startedUTC, endedAt)
+	eventTypeValue := strings.ToUpper(strings.TrimSpace(eventType))
+
+	c.JSON(http.StatusOK, gin.H{
+		"timestamp":      formatNullableTimeRFC3339(&startedUTC),
+		"local_time":     formatLocalTimeRFC3339(&startedUTC, localZone),
+		"amount_ml":      amountML,
+		"duration_min":   durationMin,
+		"type":           stringPointer(eventTypeValue),
+		"confidence":     extractConfidenceScore(valueMap, metadataMap),
+		"reference_text": "Latest confirmed feeding event (FORMULA or BREASTFEED).",
+		"message": toneWrap(
+			tone,
+			"Latest feeding ("+strings.ToLower(eventTypeValue)+") was logged at "+startedUTC.Format("15:04")+" UTC.",
+			"The most recent feeding event type is "+eventTypeValue+" at "+startedUTC.Format("15:04")+" UTC.",
+			"Last feeding: "+eventTypeValue+" at "+startedUTC.Format("15:04")+" UTC.",
+		),
+	})
+}
+
+func (a *App) quickRecentSleep(c *gin.Context) {
+	user, ok := authUserFromContext(c)
+	if !ok {
+		writeError(c, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	babyID := c.Query("baby_id")
+	tone := strings.TrimSpace(c.DefaultQuery("tone", "neutral"))
+	localZone, _, err := parseTZOffset(c.Query("tz_offset"))
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	baby, statusCode, err := a.getBabyWithAccess(c.Request.Context(), user.ID, babyID, readRoles)
+	if err != nil {
+		writeError(c, statusCode, err.Error())
+		return
+	}
+
+	var startedAt time.Time
+	var endedAt *time.Time
+	var valueRaw []byte
+	var metadataRaw []byte
+	err = a.db.QueryRow(
+		c.Request.Context(),
+		`SELECT "startTime", "endTime", "valueJson", "metadataJson"
+		 FROM "Event"
+		 WHERE "babyId" = $1 AND type = 'SLEEP'
+		 ORDER BY "startTime" DESC
+		 LIMIT 1`,
+		baby.ID,
+	).Scan(&startedAt, &endedAt, &valueRaw, &metadataRaw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		c.JSON(http.StatusOK, quickSnapshotNoData(
+			"No confirmed sleep events are stored yet.",
+			"No sleep records yet. Add one and I can summarize sleep timing.",
+		))
+		return
+	}
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to load sleep events")
+		return
+	}
+
+	startedUTC := startedAt.UTC()
+	valueMap := parseJSONStringMap(valueRaw)
+	metadataMap := parseJSONStringMap(metadataRaw)
+
+	c.JSON(http.StatusOK, gin.H{
+		"timestamp":      formatNullableTimeRFC3339(&startedUTC),
+		"local_time":     formatLocalTimeRFC3339(&startedUTC, localZone),
+		"amount_ml":      nil,
+		"duration_min":   extractDurationMinutes(valueMap, startedUTC, endedAt),
+		"type":           stringPointer("SLEEP"),
+		"confidence":     extractConfidenceScore(valueMap, metadataMap),
+		"reference_text": "Latest confirmed sleep event for this baby.",
+		"message": toneWrap(
+			tone,
+			"Most recent sleep was logged at "+startedUTC.Format("15:04")+" UTC.",
+			"The latest recorded sleep event time is "+startedUTC.Format("15:04")+" UTC.",
+			"Recent sleep: "+startedUTC.Format("15:04")+" UTC.",
+		),
+	})
+}
+
+func (a *App) quickLastDiaper(c *gin.Context) {
+	user, ok := authUserFromContext(c)
+	if !ok {
+		writeError(c, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	babyID := c.Query("baby_id")
+	tone := strings.TrimSpace(c.DefaultQuery("tone", "neutral"))
+	localZone, _, err := parseTZOffset(c.Query("tz_offset"))
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	baby, statusCode, err := a.getBabyWithAccess(c.Request.Context(), user.ID, babyID, readRoles)
+	if err != nil {
+		writeError(c, statusCode, err.Error())
+		return
+	}
+
+	var eventType string
+	var startedAt time.Time
+	var valueRaw []byte
+	var metadataRaw []byte
+	err = a.db.QueryRow(
+		c.Request.Context(),
+		`SELECT type, "startTime", "valueJson", "metadataJson"
+		 FROM "Event"
+		 WHERE "babyId" = $1 AND type IN ('PEE', 'POO')
+		 ORDER BY "startTime" DESC
+		 LIMIT 1`,
+		baby.ID,
+	).Scan(&eventType, &startedAt, &valueRaw, &metadataRaw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		c.JSON(http.StatusOK, quickSnapshotNoData(
+			"No confirmed diaper events are stored yet.",
+			"No diaper records yet. Add one and I can answer immediately.",
+		))
+		return
+	}
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to load diaper events")
+		return
+	}
+
+	startedUTC := startedAt.UTC()
+	valueMap := parseJSONStringMap(valueRaw)
+	metadataMap := parseJSONStringMap(metadataRaw)
+	eventTypeValue := strings.ToUpper(strings.TrimSpace(eventType))
+
+	c.JSON(http.StatusOK, gin.H{
+		"timestamp":      formatNullableTimeRFC3339(&startedUTC),
+		"local_time":     formatLocalTimeRFC3339(&startedUTC, localZone),
+		"amount_ml":      nil,
+		"duration_min":   nil,
+		"type":           stringPointer(eventTypeValue),
+		"confidence":     extractConfidenceScore(valueMap, metadataMap),
+		"reference_text": "Latest confirmed diaper event (PEE or POO).",
+		"message": toneWrap(
+			tone,
+			"Latest diaper event ("+strings.ToLower(eventTypeValue)+") was logged at "+startedUTC.Format("15:04")+" UTC.",
+			"The most recent diaper event type is "+eventTypeValue+" at "+startedUTC.Format("15:04")+" UTC.",
+			"Last diaper: "+eventTypeValue+" at "+startedUTC.Format("15:04")+" UTC.",
+		),
+	})
+}
+
+func (a *App) quickLastMedication(c *gin.Context) {
+	user, ok := authUserFromContext(c)
+	if !ok {
+		writeError(c, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	babyID := c.Query("baby_id")
+	tone := strings.TrimSpace(c.DefaultQuery("tone", "neutral"))
+	localZone, _, err := parseTZOffset(c.Query("tz_offset"))
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	baby, statusCode, err := a.getBabyWithAccess(c.Request.Context(), user.ID, babyID, readRoles)
+	if err != nil {
+		writeError(c, statusCode, err.Error())
+		return
+	}
+
+	var startedAt time.Time
+	var endedAt *time.Time
+	var valueRaw []byte
+	var metadataRaw []byte
+	err = a.db.QueryRow(
+		c.Request.Context(),
+		`SELECT "startTime", "endTime", "valueJson", "metadataJson"
+		 FROM "Event"
+		 WHERE "babyId" = $1 AND type = 'MEDICATION'
+		 ORDER BY "startTime" DESC
+		 LIMIT 1`,
+		baby.ID,
+	).Scan(&startedAt, &endedAt, &valueRaw, &metadataRaw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		c.JSON(http.StatusOK, quickSnapshotNoData(
+			"No confirmed medication events are stored yet.",
+			"No medication records yet. Add one and I can answer immediately.",
+		))
+		return
+	}
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to load medication events")
+		return
+	}
+
+	startedUTC := startedAt.UTC()
+	valueMap := parseJSONStringMap(valueRaw)
+	metadataMap := parseJSONStringMap(metadataRaw)
+
+	c.JSON(http.StatusOK, gin.H{
+		"timestamp":      formatNullableTimeRFC3339(&startedUTC),
+		"local_time":     formatLocalTimeRFC3339(&startedUTC, localZone),
+		"amount_ml":      nil,
+		"duration_min":   extractDurationMinutes(valueMap, startedUTC, endedAt),
+		"type":           stringPointer("MEDICATION"),
+		"confidence":     extractConfidenceScore(valueMap, metadataMap),
+		"reference_text": "Latest confirmed medication event for this baby.",
+		"message": toneWrap(
+			tone,
+			"Latest medication event was logged at "+startedUTC.Format("15:04")+" UTC.",
+			"The latest recorded medication event time is "+startedUTC.Format("15:04")+" UTC.",
+			"Last medication: "+startedUTC.Format("15:04")+" UTC.",
+		),
+	})
+}
 
 func (a *App) quickLastPooTime(c *gin.Context) {
 	user, ok := authUserFromContext(c)
@@ -212,7 +618,7 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 
 	rows, err := a.db.Query(
 		c.Request.Context(),
-		`SELECT type, "startTime", "endTime", "valueJson"
+		`SELECT type, "startTime", "endTime", "valueJson", "metadataJson"
 		 FROM "Event"
 		 WHERE "babyId" = $1
 		   AND "startTime" >= $2
@@ -244,9 +650,14 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 	var recentSleepTime *time.Time
 	var recentSleepDurationMin *int
 	var sleepReferenceTime *time.Time
+	var lastSleepEndTime *time.Time
 	diaperPeeCount := 0
 	diaperPooCount := 0
+	var lastPeeTime *time.Time
+	var lastPooTime *time.Time
 	var lastDiaperTime *time.Time
+	weaningCount := 0
+	var lastWeaningTime *time.Time
 	medicationCount := 0
 	var lastMedicationTime *time.Time
 	specialMemo := "No special memo for today."
@@ -256,13 +667,15 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 		var startedAt time.Time
 		var endedAt *time.Time
 		var valueRaw []byte
-		if err := rows.Scan(&eventType, &startedAt, &endedAt, &valueRaw); err != nil {
+		var metadataRaw []byte
+		if err := rows.Scan(&eventType, &startedAt, &endedAt, &valueRaw, &metadataRaw); err != nil {
 			writeError(c, http.StatusInternalServerError, "Failed to parse events")
 			return
 		}
 
 		startedUTC := startedAt.UTC()
 		valueMap := parseJSONStringMap(valueRaw)
+		metadataMap := parseJSONStringMap(metadataRaw)
 
 		switch eventType {
 		case "FORMULA":
@@ -287,6 +700,7 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 				if endedAt != nil {
 					endedUTC := endedAt.UTC()
 					sleepReferenceTime = &endedUTC
+					lastSleepEndTime = &endedUTC
 					duration := int(endedUTC.Sub(startedUTC).Minutes())
 					if duration < 0 {
 						duration = 0
@@ -299,12 +713,18 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 
 		case "PEE":
 			diaperPeeCount++
+			if lastPeeTime == nil {
+				lastPeeTime = &startedUTC
+			}
 			if lastDiaperTime == nil {
 				lastDiaperTime = &startedUTC
 			}
 
 		case "POO":
 			diaperPooCount++
+			if lastPooTime == nil {
+				lastPooTime = &startedUTC
+			}
 			if lastDiaperTime == nil {
 				lastDiaperTime = &startedUTC
 			}
@@ -316,6 +736,12 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 			}
 
 		case "MEMO":
+			if isWeaningMemo(valueMap, metadataMap) {
+				weaningCount++
+				if lastWeaningTime == nil {
+					lastWeaningTime = &startedUTC
+				}
+			}
 			if specialMemo == "No special memo for today." {
 				memoText := extractMemoText(valueMap)
 				if memoText == "" {
@@ -361,10 +787,15 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 		"last_breastfeed_time":            formatNullableTimeRFC3339(lastBreastfeedTime),
 		"recent_sleep_time":               formatNullableTimeRFC3339(recentSleepTime),
 		"recent_sleep_duration_min":       recentSleepDurationMin,
+		"last_sleep_end_time":             formatNullableTimeRFC3339(lastSleepEndTime),
 		"minutes_since_last_sleep":        minutesSinceLastSleep,
 		"diaper_pee_count":                diaperPeeCount,
 		"diaper_poo_count":                diaperPooCount,
+		"last_pee_time":                   formatNullableTimeRFC3339(lastPeeTime),
+		"last_poo_time":                   formatNullableTimeRFC3339(lastPooTime),
 		"last_diaper_time":                formatNullableTimeRFC3339(lastDiaperTime),
+		"weaning_count":                   weaningCount,
+		"last_weaning_time":               formatNullableTimeRFC3339(lastWeaningTime),
 		"medication_count":                medicationCount,
 		"last_medication_time":            formatNullableTimeRFC3339(lastMedicationTime),
 		"special_memo":                    specialMemo,
@@ -410,12 +841,65 @@ func extractMemoText(value map[string]any) string {
 	return ""
 }
 
+func isWeaningMemo(value map[string]any, metadata map[string]any) bool {
+	candidates := []string{
+		toString(value["category"]),
+		toString(value["entry_kind"]),
+		toString(metadata["category"]),
+		toString(metadata["entry_kind"]),
+	}
+	for _, candidate := range candidates {
+		if strings.EqualFold(strings.TrimSpace(candidate), "WEANING") {
+			return true
+		}
+	}
+	return false
+}
+
 func formatNullableTimeRFC3339(value *time.Time) *string {
 	if value == nil {
 		return nil
 	}
 	formatted := value.UTC().Format(time.RFC3339)
 	return &formatted
+}
+
+func containsAnyKeyword(text string, keywords []string) bool {
+	for _, keyword := range keywords {
+		if strings.Contains(text, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+func aiQuestionSignals(question string) map[string]bool {
+	return map[string]bool{
+		"asksLast": containsAnyKeyword(question, []string{
+			"last", "latest", "recent", "마지막", "최근", "최신",
+		}),
+		"asksPoo": containsAnyKeyword(question, []string{
+			"poo", "poop", "stool", "대변", "응가", "똥",
+		}),
+		"asksFeed": containsAnyKeyword(question, []string{
+			"feeding", "feed", "formula", "breastfeed", "수유", "분유", "모유",
+		}),
+		"asksSleep": containsAnyKeyword(question, []string{
+			"sleep", "nap", "수면", "잠",
+		}),
+		"asksDiaper": containsAnyKeyword(question, []string{
+			"diaper", "pee", "poo", "poop", "기저귀", "소변", "대변",
+		}),
+		"asksMedication": containsAnyKeyword(question, []string{
+			"medication", "medicine", "dose", "투약", "약", "복용",
+		}),
+		"asksTodaySummary": containsAnyKeyword(question, []string{
+			"today summary", "daily summary", "today", "오늘 요약", "오늘", "요약",
+		}),
+		"asksNextEta": containsAnyKeyword(question, []string{
+			"eta", "next", "when", "다음", "언제", "예정",
+		}),
+	}
 }
 
 func (a *App) aiQuery(c *gin.Context) {
@@ -444,7 +928,217 @@ func (a *App) aiQuery(c *gin.Context) {
 		labels = []string{"record_based"}
 	}
 
-	if payload.UsePersonalData && (strings.Contains(question, "poo") || strings.Contains(question, "diaper")) {
+	signals := aiQuestionSignals(question)
+
+	if payload.UsePersonalData && signals["asksTodaySummary"] {
+		start := startOfUTCDay(time.Now().UTC())
+		end := start.Add(24 * time.Hour)
+		rows, err := a.db.Query(
+			c.Request.Context(),
+			`SELECT type, "startTime", "endTime", "valueJson"
+			 FROM "Event"
+			 WHERE "babyId" = $1 AND "startTime" >= $2 AND "startTime" < $3`,
+			baby.ID,
+			start,
+			end,
+		)
+		if err != nil {
+			writeError(c, http.StatusInternalServerError, "Failed to load events")
+			return
+		}
+		defer rows.Close()
+
+		counts := map[string]int{}
+		formulaTotal := 0.0
+		sleepMinutes := 0
+		for rows.Next() {
+			var eventType string
+			var startedAt time.Time
+			var endedAt *time.Time
+			var valueRaw []byte
+			if err := rows.Scan(&eventType, &startedAt, &endedAt, &valueRaw); err != nil {
+				writeError(c, http.StatusInternalServerError, "Failed to parse events")
+				return
+			}
+			counts[eventType]++
+			valueJSON := parseJSONStringMap(valueRaw)
+			if eventType == "FORMULA" {
+				formulaTotal += extractNumberFromMap(valueJSON, "ml", "amount_ml", "volume_ml")
+			}
+			if eventType == "SLEEP" && endedAt != nil {
+				minutes := int(endedAt.UTC().Sub(startedAt.UTC()).Minutes())
+				if minutes > 0 {
+					sleepMinutes += minutes
+				}
+			}
+		}
+
+		answer := "Today's summary: feedings " + strconv.Itoa(counts["FORMULA"]+counts["BREASTFEED"]) +
+			", formula " + strconv.Itoa(int(formulaTotal)) + " ml, sleep " + strconv.Itoa(sleepMinutes) +
+			" min, diaper pee " + strconv.Itoa(counts["PEE"]) + ", poo " + strconv.Itoa(counts["POO"]) + "."
+		c.JSON(http.StatusOK, gin.H{
+			"answer":            answer,
+			"labels":            labels,
+			"tone":              payload.Tone,
+			"use_personal_data": payload.UsePersonalData,
+		})
+		return
+	}
+
+	if payload.UsePersonalData && signals["asksFeed"] && signals["asksLast"] && !signals["asksNextEta"] {
+		var eventType string
+		var startedAt time.Time
+		var valueRaw []byte
+		err := a.db.QueryRow(
+			c.Request.Context(),
+			`SELECT type, "startTime", "valueJson"
+			 FROM "Event"
+			 WHERE "babyId" = $1 AND type IN ('FORMULA', 'BREASTFEED')
+			 ORDER BY "startTime" DESC LIMIT 1`,
+			baby.ID,
+		).Scan(&eventType, &startedAt, &valueRaw)
+		if errors.Is(err, pgx.ErrNoRows) {
+			c.JSON(http.StatusOK, gin.H{
+				"answer":            "No feeding records found yet.",
+				"labels":            labels,
+				"tone":              payload.Tone,
+				"use_personal_data": payload.UsePersonalData,
+			})
+			return
+		}
+		if err != nil {
+			writeError(c, http.StatusInternalServerError, "Failed to load events")
+			return
+		}
+		valueMap := parseJSONStringMap(valueRaw)
+		amountML := extractOptionalNumberFromMap(valueMap, "ml", "amount_ml", "volume_ml")
+		answer := "Latest feeding event is " + strings.ToUpper(eventType) + " at " + startedAt.UTC().Format(time.RFC3339) + "."
+		if amountML != nil {
+			answer += " Amount: " + strconv.Itoa(int(*amountML+0.5)) + " ml."
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"answer":            answer,
+			"labels":            labels,
+			"tone":              payload.Tone,
+			"use_personal_data": payload.UsePersonalData,
+		})
+		return
+	}
+
+	if payload.UsePersonalData && signals["asksSleep"] && signals["asksLast"] {
+		var startedAt time.Time
+		var endedAt *time.Time
+		var valueRaw []byte
+		err := a.db.QueryRow(
+			c.Request.Context(),
+			`SELECT "startTime", "endTime", "valueJson"
+			 FROM "Event"
+			 WHERE "babyId" = $1 AND type = 'SLEEP'
+			 ORDER BY "startTime" DESC LIMIT 1`,
+			baby.ID,
+		).Scan(&startedAt, &endedAt, &valueRaw)
+		if errors.Is(err, pgx.ErrNoRows) {
+			c.JSON(http.StatusOK, gin.H{
+				"answer":            "No sleep records found yet.",
+				"labels":            labels,
+				"tone":              payload.Tone,
+				"use_personal_data": payload.UsePersonalData,
+			})
+			return
+		}
+		if err != nil {
+			writeError(c, http.StatusInternalServerError, "Failed to load events")
+			return
+		}
+		valueMap := parseJSONStringMap(valueRaw)
+		duration := extractDurationMinutes(valueMap, startedAt.UTC(), endedAt)
+		answer := "Latest sleep event started at " + startedAt.UTC().Format(time.RFC3339) + "."
+		if duration != nil {
+			answer += " Duration: " + strconv.Itoa(int(*duration+0.5)) + " minutes."
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"answer":            answer,
+			"labels":            labels,
+			"tone":              payload.Tone,
+			"use_personal_data": payload.UsePersonalData,
+		})
+		return
+	}
+
+	if payload.UsePersonalData && signals["asksDiaper"] && signals["asksLast"] && !signals["asksPoo"] {
+		var eventType string
+		var startedAt time.Time
+		err := a.db.QueryRow(
+			c.Request.Context(),
+			`SELECT type, "startTime"
+			 FROM "Event"
+			 WHERE "babyId" = $1 AND type IN ('PEE', 'POO')
+			 ORDER BY "startTime" DESC LIMIT 1`,
+			baby.ID,
+		).Scan(&eventType, &startedAt)
+		if errors.Is(err, pgx.ErrNoRows) {
+			c.JSON(http.StatusOK, gin.H{
+				"answer":            "No diaper records found yet.",
+				"labels":            labels,
+				"tone":              payload.Tone,
+				"use_personal_data": payload.UsePersonalData,
+			})
+			return
+		}
+		if err != nil {
+			writeError(c, http.StatusInternalServerError, "Failed to load events")
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"answer":            "Latest diaper event is " + strings.ToUpper(eventType) + " at " + startedAt.UTC().Format(time.RFC3339) + ".",
+			"labels":            labels,
+			"tone":              payload.Tone,
+			"use_personal_data": payload.UsePersonalData,
+		})
+		return
+	}
+
+	if payload.UsePersonalData && signals["asksMedication"] && signals["asksLast"] {
+		var startedAt time.Time
+		var endedAt *time.Time
+		var valueRaw []byte
+		err := a.db.QueryRow(
+			c.Request.Context(),
+			`SELECT "startTime", "endTime", "valueJson"
+			 FROM "Event"
+			 WHERE "babyId" = $1 AND type = 'MEDICATION'
+			 ORDER BY "startTime" DESC LIMIT 1`,
+			baby.ID,
+		).Scan(&startedAt, &endedAt, &valueRaw)
+		if errors.Is(err, pgx.ErrNoRows) {
+			c.JSON(http.StatusOK, gin.H{
+				"answer":            "No medication records found yet.",
+				"labels":            labels,
+				"tone":              payload.Tone,
+				"use_personal_data": payload.UsePersonalData,
+			})
+			return
+		}
+		if err != nil {
+			writeError(c, http.StatusInternalServerError, "Failed to load events")
+			return
+		}
+		valueMap := parseJSONStringMap(valueRaw)
+		duration := extractDurationMinutes(valueMap, startedAt.UTC(), endedAt)
+		answer := "Latest medication event is at " + startedAt.UTC().Format(time.RFC3339) + "."
+		if duration != nil {
+			answer += " Duration: " + strconv.Itoa(int(*duration+0.5)) + " minutes."
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"answer":            answer,
+			"labels":            labels,
+			"tone":              payload.Tone,
+			"use_personal_data": payload.UsePersonalData,
+		})
+		return
+	}
+
+	if payload.UsePersonalData && (signals["asksPoo"] || (signals["asksDiaper"] && signals["asksLast"])) {
 		var last time.Time
 		err := a.db.QueryRow(
 			c.Request.Context(),
@@ -475,7 +1169,7 @@ func (a *App) aiQuery(c *gin.Context) {
 		return
 	}
 
-	if payload.UsePersonalData && (strings.Contains(question, "feed") || strings.Contains(question, "eta")) {
+	if payload.UsePersonalData && (signals["asksFeed"] || signals["asksNextEta"]) {
 		rows, err := a.db.Query(
 			c.Request.Context(),
 			`SELECT "startTime" FROM "Event"
@@ -532,7 +1226,7 @@ func (a *App) aiQuery(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"answer":            "I can answer about feeding ETA, diaper timing, and daily summaries once logs are available.",
+		"answer":            "I can answer about last feeding, recent sleep, diaper timing, medication timing, feeding ETA, and daily summaries once logs are available.",
 		"labels":            labels,
 		"tone":              payload.Tone,
 		"use_personal_data": payload.UsePersonalData,
