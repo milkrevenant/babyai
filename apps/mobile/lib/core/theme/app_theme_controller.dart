@@ -110,7 +110,7 @@ class AppThemeController extends ChangeNotifier {
 
   AppThemeMode _mode = AppThemeMode.system;
   AppMainFont _mainFont = AppMainFont.notoSans;
-  AppHighlightFont _highlightFont = AppHighlightFont.ibmPlexSans;
+  AppHighlightFont _highlightFont = AppHighlightFont.notoSans;
   AppAccentTone _accentTone = AppAccentTone.gold;
   AppLanguage _language = AppLanguage.ko;
   ChildCareProfile _childCareProfile = ChildCareProfile.formula;
@@ -204,9 +204,9 @@ class AppThemeController extends ChangeNotifier {
       );
       _highlightFont = _enumByName<AppHighlightFont>(
         AppHighlightFont.values,
-        (settings["highlight_font"] ?? AppHighlightFont.ibmPlexSans.name)
+        (settings["highlight_font"] ?? AppHighlightFont.notoSans.name)
             .toString(),
-        AppHighlightFont.ibmPlexSans,
+        AppHighlightFont.notoSans,
       );
       _accentTone = _enumByName<AppAccentTone>(
         AppAccentTone.values,

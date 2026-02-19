@@ -48,6 +48,18 @@ type chatContextResult struct {
 	Summary string
 }
 
+type childProfileSnapshot struct {
+	Name             string
+	BirthDate        time.Time
+	AgeDays          int
+	AgeMonths        int
+	WeightKg         *float64
+	WeightSource     string
+	HeightCm         *float64
+	HeightSource     string
+	GrowthMeasuredAt *time.Time
+}
+
 type creditSnapshot struct {
 	Balance    int
 	GraceUsed  int
@@ -85,6 +97,7 @@ const (
 	chatConversationTurnLimit = 30
 	chatMemorySummaryCharMax  = 3200
 	chatMemoryLineCharMax     = 180
+	smalltalkReplyRuneMax     = 90
 )
 
 func (e *chatHTTPError) Error() string {
@@ -164,10 +177,37 @@ func (a *App) createChatSession(c *gin.Context) {
 			return
 		}
 		householdID = resolvedHouseholdID
-		childRef = nil
+		defaultChildID, err := a.resolvePrimaryChildForHousehold(c.Request.Context(), householdID)
+		if err != nil {
+			writeError(c, http.StatusInternalServerError, "Failed to resolve default child profile")
+			return
+		}
+		if defaultChildID == "" {
+			childRef = nil
+		} else {
+			childRef = defaultChildID
+		}
 	}
 
 	sessionID := uuid.NewString()
+	if _, err := a.db.Exec(
+		c.Request.Context(),
+		`UPDATE "ChatSession"
+		 SET status = 'CLOSED',
+		     "endedAt" = COALESCE("endedAt", NOW()),
+		     "updatedAt" = NOW()
+		 WHERE "userId" = $1
+		   AND "householdId" = $2
+		   AND COALESCE("childId", '') = COALESCE($3::text, '')
+		   AND status = 'ACTIVE'`,
+		user.ID,
+		householdID,
+		childRef,
+	); err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to rotate previous chat session")
+		return
+	}
+
 	var startedAt time.Time
 	err := a.db.QueryRow(
 		c.Request.Context(),
@@ -529,6 +569,13 @@ func (a *App) runChatQuery(
 		childID = strings.TrimSpace(*session.ChildID)
 	}
 	if payload.UsePersonalData && childID == "" {
+		resolvedChildID, resolveErr := a.resolvePrimaryChildForHousehold(ctx, session.HouseholdID)
+		if resolveErr != nil {
+			return chatExecutionResult{}, resolveErr
+		}
+		childID = strings.TrimSpace(resolvedChildID)
+	}
+	if payload.UsePersonalData && childID == "" {
 		return chatExecutionResult{}, &chatHTTPError{Status: http.StatusBadRequest, Detail: "child_id is required when use_personal_data is true"}
 	}
 
@@ -587,19 +634,27 @@ func (a *App) runChatQuery(
 		return chatExecutionResult{}, err
 	}
 
-	firstUserMessage, err := a.loadFirstUserMessage(ctx, session.ID)
+	firstUserMessageID, firstUserMessage, fixedIntent, err := a.loadFirstUserMessageIntent(ctx, session.ID)
 	if err != nil {
 		_ = a.releaseReservedCredits(ctx, user.ID, preflight.Reserved)
 		return chatExecutionResult{}, err
 	}
 
-	intent := a.resolveAIIntentWithSessionByModel(ctx, question, turns, firstUserMessage)
+	intent := a.resolveSessionIntentFromFirstUserMessage(
+		ctx,
+		session.ID,
+		question,
+		turns,
+		firstUserMessageID,
+		firstUserMessage,
+		fixedIntent,
+	)
 	smalltalkStyleHint := ""
 	if intent == aiIntentSmalltalk {
 		smalltalkStyleHint = deriveSmalltalkStyleHint(turns, question)
 	}
 
-	chatContext, err := a.buildChatContext(ctx, childID, intent, question, now, payload.UsePersonalData)
+	chatContext, err := a.buildChatContext(ctx, user.ID, childID, intent, question, now, payload.UsePersonalData)
 	if err != nil {
 		_ = a.releaseReservedCredits(ctx, user.ID, preflight.Reserved)
 		return chatExecutionResult{}, err
@@ -626,6 +681,11 @@ func (a *App) runChatQuery(
 		log.Printf("ai usage missing session_id=%s user_id=%s child_id=%s intent=%s model=%s", session.ID, user.ID, childID, intent, aiResponse.Model)
 		_ = a.releaseReservedCredits(ctx, user.ID, preflight.Reserved)
 		return chatExecutionResult{}, errors.New("AI response missing usage tokens")
+	}
+	finalAnswer := strings.TrimSpace(aiResponse.Answer)
+	finalAnswer = sanitizeUserFacingAnswer(finalAnswer)
+	if intent == aiIntentSmalltalk {
+		finalAnswer = sanitizeSmalltalkAnswer(finalAnswer)
 	}
 
 	userContext := cloneMap(chatContext.Meta)
@@ -661,7 +721,7 @@ func (a *App) runChatQuery(
 		session.HouseholdID,
 		childRef,
 		"assistant",
-		aiResponse.Answer,
+		finalAnswer,
 		string(intent),
 		assistantContext,
 	)
@@ -701,7 +761,7 @@ func (a *App) runChatQuery(
 		SessionID:          session.ID,
 		AssistantMessageID: assistantMessageID,
 		Intent:             intent,
-		Answer:             aiResponse.Answer,
+		Answer:             finalAnswer,
 		Model:              aiResponse.Model,
 		Usage:              aiResponse.Usage,
 		Credit:             billing,
@@ -735,6 +795,31 @@ func (a *App) resolveDefaultHouseholdForUser(ctx context.Context, userID string)
 		return "", err
 	}
 	return householdID, nil
+}
+
+func (a *App) resolvePrimaryChildForHousehold(ctx context.Context, householdID string) (string, error) {
+	householdValue := strings.TrimSpace(householdID)
+	if householdValue == "" {
+		return "", nil
+	}
+
+	var childID string
+	err := a.db.QueryRow(
+		ctx,
+		`SELECT id
+		 FROM "Baby"
+		 WHERE "householdId" = $1
+		 ORDER BY "createdAt" ASC, id ASC
+		 LIMIT 1`,
+		householdValue,
+	).Scan(&childID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(childID), nil
 }
 
 func (a *App) getOrCreateCompatChatSession(
@@ -986,24 +1071,45 @@ func (a *App) loadSessionMessageCount(ctx context.Context, sessionID string) (in
 	return count, nil
 }
 
-func (a *App) loadFirstUserMessage(ctx context.Context, sessionID string) (string, error) {
-	var content string
+func (a *App) loadFirstUserMessageIntent(ctx context.Context, sessionID string) (string, string, aiIntent, error) {
+	var messageID, content string
+	var intent *string
 	err := a.db.QueryRow(
 		ctx,
-		`SELECT content
+		`SELECT id, content, intent
 		 FROM "ChatMessage"
 		 WHERE "sessionId" = $1 AND role = 'user'
 		 ORDER BY "createdAt" ASC
 		 LIMIT 1`,
 		sessionID,
-	).Scan(&content)
+	).Scan(&messageID, &content, &intent)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", nil
+		return "", "", "", nil
 	}
 	if err != nil {
-		return "", err
+		return "", "", "", err
 	}
-	return strings.TrimSpace(content), nil
+	normalizedIntent := aiIntent("")
+	if intent != nil {
+		normalizedIntent = normalizeAIIntentLabel(*intent)
+	}
+	return strings.TrimSpace(messageID), strings.TrimSpace(content), normalizedIntent, nil
+}
+
+func (a *App) saveFirstUserIntent(ctx context.Context, messageID string, intent aiIntent) error {
+	trimmedMessageID := strings.TrimSpace(messageID)
+	if trimmedMessageID == "" || strings.TrimSpace(string(intent)) == "" {
+		return nil
+	}
+	_, err := a.db.Exec(
+		ctx,
+		`UPDATE "ChatMessage"
+		 SET intent = $2
+		 WHERE id = $1 AND role = 'user'`,
+		trimmedMessageID,
+		string(intent),
+	)
+	return err
 }
 
 func (a *App) saveSessionMemorySummary(
@@ -1146,13 +1252,19 @@ func (a *App) prepareSessionMemory(
 	return turns, summary, currentSummarizedCount, nil
 }
 
-func (a *App) resolveAIIntentWithSessionByModel(
+func (a *App) resolveSessionIntentFromFirstUserMessage(
 	ctx context.Context,
+	sessionID string,
 	question string,
 	turns []ChatTurn,
+	firstUserMessageID string,
 	firstUserMessage string,
+	fixedIntent aiIntent,
 ) aiIntent {
 	fallback := resolveAIIntentWithSession(question, turns)
+	if fixedIntent != "" {
+		return fixedIntent
+	}
 
 	firstMessage := strings.TrimSpace(firstUserMessage)
 	if firstMessage == "" {
@@ -1164,27 +1276,44 @@ func (a *App) resolveAIIntentWithSessionByModel(
 	if firstMessage == "" {
 		return fallback
 	}
+	// Guardrail: caregiver self-state utterances should stay in smalltalk.
+	if isLikelyCaregiverSelfTalk(firstMessage) {
+		if strings.TrimSpace(firstUserMessageID) != "" {
+			if saveErr := a.saveFirstUserIntent(ctx, firstUserMessageID, aiIntentSmalltalk); saveErr != nil {
+				log.Printf("failed to persist caregiver-self smalltalk intent session_id=%s message_id=%s err=%v", sessionID, firstUserMessageID, saveErr)
+			}
+		}
+		return aiIntentSmalltalk
+	}
 
 	intent, err := a.resolveAIIntentByFirstMessage(ctx, firstMessage, question)
 	if err != nil || intent == "" {
 		return fallback
+	}
+	if strings.TrimSpace(firstUserMessageID) != "" {
+		if saveErr := a.saveFirstUserIntent(ctx, firstUserMessageID, intent); saveErr != nil {
+			log.Printf("failed to persist first-user intent session_id=%s message_id=%s intent=%s err=%v", sessionID, firstUserMessageID, intent, saveErr)
+		}
 	}
 	return intent
 }
 
 func (a *App) resolveAIIntentByFirstMessage(ctx context.Context, firstMessage, latestQuestion string) (aiIntent, error) {
 	systemPrompt := strings.Join([]string{
-		"You are an intent router for a parenting assistant.",
-		"Classify the conversation intent using the first user message as the primary signal.",
-		"Allowed intents are only: smalltalk, data_query, medical_related, care_routine.",
-		"Return ONLY a strict JSON object.",
+		"너는 육아 도우미의 의도 분류 라우터다.",
+		"화자는 기본적으로 아이가 아닌 보호자로 가정한다.",
+		"첫 사용자 메시지를 가장 중요한 신호로 사용해 대화 의도를 분류한다.",
+		"허용 의도는 smalltalk, data_query, medical_related, care_routine 네 가지뿐이다.",
+		"메시지가 보호자 본인 상태(예: 배고픔/피곤함/스트레스)이고 아이 주어가 명시되지 않으면 smalltalk로 분류한다.",
+		"모호한 1인칭 표현을 아이 상태로 과추론하지 않는다.",
+		"반드시 JSON 객체만 반환한다.",
 		`JSON schema: {"intent":"smalltalk|data_query|medical_related|care_routine","confidence":0.0,"reason":"short reason"}`,
-		"No markdown, no code fence, no extra text.",
+		"마크다운, 코드펜스, 부가 설명 텍스트는 금지한다.",
 	}, "\n")
 	userPrompt := strings.Join([]string{
-		"first_user_message: " + strings.TrimSpace(firstMessage),
-		"latest_user_message: " + strings.TrimSpace(latestQuestion),
-		"Select exactly one intent.",
+		"첫 사용자 메시지: " + strings.TrimSpace(firstMessage),
+		"최신 사용자 메시지: " + strings.TrimSpace(latestQuestion),
+		"의도는 정확히 1개만 선택한다.",
 	}, "\n")
 
 	resp, err := a.ai.Query(ctx, AIModelRequest{
@@ -1200,6 +1329,35 @@ func (a *App) resolveAIIntentByFirstMessage(ctx context.Context, firstMessage, l
 		return "", errors.New("intent router returned invalid JSON")
 	}
 	return intent, nil
+}
+
+func isLikelyCaregiverSelfTalk(message string) bool {
+	normalized := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(message)), " "))
+	if normalized == "" {
+		return false
+	}
+
+	childSubjectMarkers := []string{
+		"아기", "아이", "애기", "우리애", "우리 아이", "아들", "딸",
+		"baby", "child", "kid", "infant", "newborn", "toddler",
+	}
+	if containsAnyKeyword(normalized, childSubjectMarkers) {
+		return false
+	}
+
+	parentingDomainMarkers := []string{
+		"수유", "분유", "모유", "기저귀", "이유식", "수면", "낮잠", "밤잠", "체온", "열", "기침", "구토", "설사",
+		"feeding", "formula", "breastfeed", "diaper", "nap", "sleep", "fever", "cough", "vomit", "diarrhea",
+	}
+	if containsAnyKeyword(normalized, parentingDomainMarkers) {
+		return false
+	}
+
+	caregiverStateMarkers := []string{
+		"배고프", "배가 고파", "피곤", "졸리", "지치", "힘들", "우울", "불안", "스트레스", "멘붕",
+		"hungry", "starving", "tired", "sleepy", "exhausted", "stressed", "overwhelmed", "burned out", "burnt out", "anxious",
+	}
+	return containsAnyKeyword(normalized, caregiverStateMarkers)
 }
 
 func firstUserMessageFromTurns(turns []ChatTurn) string {
@@ -1338,6 +1496,7 @@ func isVagueFollowUp(question string) bool {
 }
 func (a *App) buildChatContext(
 	ctx context.Context,
+	userID string,
 	childID string,
 	intent aiIntent,
 	question string,
@@ -1345,35 +1504,78 @@ func (a *App) buildChatContext(
 	usePersonalData bool,
 ) (chatContextResult, error) {
 	if !usePersonalData || strings.TrimSpace(childID) == "" {
+		timeRange := "none"
+		summary := "이번 질의는 개인 기록 컨텍스트가 비활성화되어 있습니다."
+		if intent == aiIntentSmalltalk {
+			timeRange = "smalltalk_chat_only"
+			summary = strings.Join([]string{
+				"일상대화 전용 모드입니다.",
+				"이 모드에서는 개인 DB 컨텍스트가 비활성화되어 세션 대화 맥락만 활용합니다.",
+			}, "\n")
+		}
 		meta := map[string]any{
 			"child_id":             nil,
-			"time_range":           "none",
+			"time_range":           timeRange,
 			"evidence_event_ids":   []string{},
 			"has_estimated_values": false,
 			"has_missing_data":     true,
 		}
 		return chatContextResult{
 			Meta:    meta,
-			Summary: "Personal data context is disabled for this query.",
+			Summary: summary,
 		}, nil
 	}
 
 	nowUTC := now.UTC()
+	profileSnapshot, err := a.loadChildProfileSnapshot(ctx, userID, childID)
+	if err != nil {
+		return chatContextResult{}, err
+	}
+	birthDateText := ""
+	if !profileSnapshot.BirthDate.IsZero() {
+		birthDateText = profileSnapshot.BirthDate.UTC().Format("2006-01-02")
+	}
 	if intent == aiIntentSmalltalk {
 		meta := map[string]any{
-			"child_id":             childID,
-			"time_range":           "smalltalk_minimal",
-			"evidence_event_ids":   []string{},
-			"has_estimated_values": false,
-			"has_missing_data":     false,
+			"child_id":                       childID,
+			"time_range":                     "smalltalk_profile_snapshot",
+			"evidence_event_ids":             []string{},
+			"has_estimated_values":           false,
+			"has_missing_data":               false,
+			"profile_name":                   profileSnapshot.Name,
+			"profile_birth_date_utc":         birthDateText,
+			"profile_age_days":               profileSnapshot.AgeDays,
+			"profile_age_months":             profileSnapshot.AgeMonths,
+			"profile_age_months_basis":       "calendar_from_birth_date",
+			"profile_weight_kg":              profileSnapshot.WeightKg,
+			"profile_weight_source":          profileSnapshot.WeightSource,
+			"profile_height_cm":              profileSnapshot.HeightCm,
+			"profile_height_source":          profileSnapshot.HeightSource,
+			"profile_growth_measured_at_utc": formatNullableTimeRFC3339(profileSnapshot.GrowthMeasuredAt),
+		}
+		summaryLines := []string{
+			fmt.Sprintf("일상대화용 아동 프로필 DB 스냅샷 (child_id=%s).", childID),
+			fmt.Sprintf("- 이름=%s", profileSnapshot.Name),
+			fmt.Sprintf("- 생년월일=%s", birthDateText),
+			fmt.Sprintf("- 나이=%d일 (만 %d개월, 생년월일 기준)", profileSnapshot.AgeDays, profileSnapshot.AgeMonths),
+		}
+		if profileSnapshot.WeightKg != nil {
+			summaryLines = append(summaryLines, fmt.Sprintf("- 몸무게=%.1fkg (출처=%s)", *profileSnapshot.WeightKg, profileSnapshot.WeightSource))
+		} else {
+			summaryLines = append(summaryLines, "- 몸무게=없음")
+		}
+		if profileSnapshot.HeightCm != nil {
+			line := fmt.Sprintf("- 키=%.1fcm (출처=%s)", *profileSnapshot.HeightCm, profileSnapshot.HeightSource)
+			if profileSnapshot.GrowthMeasuredAt != nil {
+				line = line + fmt.Sprintf(", 측정시각=%s", formatContextTime(*profileSnapshot.GrowthMeasuredAt))
+			}
+			summaryLines = append(summaryLines, line)
+		} else {
+			summaryLines = append(summaryLines, "- 키=없음")
 		}
 		return chatContextResult{
-			Meta: meta,
-			Summary: strings.Join([]string{
-				fmt.Sprintf("Smalltalk mode for child_id=%s.", childID),
-				"Keep conversation warm and natural.",
-				"Do not inject raw records unless the user explicitly asks for data details.",
-			}, "\n"),
+			Meta:    meta,
+			Summary: strings.Join(summaryLines, "\n"),
 		}, nil
 	}
 
@@ -1419,18 +1621,18 @@ func (a *App) buildChatContext(
 		evidenceIDs = append(evidenceIDs, eventID)
 
 		details := []string{
-			fmt.Sprintf("event_id=%s", strings.TrimSpace(eventID)),
-			fmt.Sprintf("type=%s", strings.ToUpper(eventType)),
-			fmt.Sprintf("start=%s", startAt.UTC().Format(time.RFC3339)),
+			fmt.Sprintf("이벤트ID=%s", strings.TrimSpace(eventID)),
+			fmt.Sprintf("유형=%s", strings.ToUpper(eventType)),
+			fmt.Sprintf("시작시각=%s", formatContextTime(startAt)),
 		}
 		if endAt != nil {
-			details = append(details, fmt.Sprintf("end=%s", endAt.UTC().Format(time.RFC3339)))
+			details = append(details, fmt.Sprintf("종료시각=%s", formatContextTime(*endAt)))
 		}
 		if v := strings.TrimSpace(valueText); v != "" && v != "{}" && v != "null" {
-			details = append(details, "value="+v)
+			details = append(details, "값="+v)
 		}
 		if m := strings.TrimSpace(metadataText); m != "" && m != "{}" && m != "null" {
-			details = append(details, "meta="+m)
+			details = append(details, "메타="+m)
 		}
 		rawLines = append(rawLines, "- "+strings.Join(details, " | "))
 	}
@@ -1496,7 +1698,7 @@ func (a *App) buildChatContext(
 				dailyRows.Close()
 				return chatContextResult{}, err
 			}
-			dailyOverviewLines = append(dailyOverviewLines, fmt.Sprintf("- %s: %d events", strings.TrimSpace(day), count))
+			dailyOverviewLines = append(dailyOverviewLines, fmt.Sprintf("- %s: %d건", strings.TrimSpace(day), count))
 		}
 		if err := dailyRows.Err(); err != nil {
 			dailyRows.Close()
@@ -1511,33 +1713,67 @@ func (a *App) buildChatContext(
 	}
 	hasMissingData := len(rawLines) == 0
 	meta := map[string]any{
-		"child_id":             childID,
-		"time_range":           rawRangeLabel,
-		"evidence_event_ids":   evidenceIDs,
-		"has_estimated_values": false,
-		"has_missing_data":     hasMissingData,
-		"raw_since_utc":        rawStart.Format(time.RFC3339),
-		"raw_until_utc":        rawEnd.Format(time.RFC3339),
-		"monthly_since_utc":    monthlyStart.Format(time.RFC3339),
-		"monthly_until_utc":    monthlyEnd.Format(time.RFC3339),
+		"child_id":                       childID,
+		"time_range":                     rawRangeLabel,
+		"evidence_event_ids":             evidenceIDs,
+		"has_estimated_values":           false,
+		"has_missing_data":               hasMissingData,
+		"reference_now_utc":              nowUTC.Format(time.RFC3339),
+		"raw_since_utc":                  rawStart.Format(time.RFC3339),
+		"raw_until_utc":                  rawEnd.Format(time.RFC3339),
+		"monthly_since_utc":              monthlyStart.Format(time.RFC3339),
+		"monthly_until_utc":              monthlyEnd.Format(time.RFC3339),
+		"profile_name":                   profileSnapshot.Name,
+		"profile_birth_date_utc":         birthDateText,
+		"profile_age_days":               profileSnapshot.AgeDays,
+		"profile_age_months":             profileSnapshot.AgeMonths,
+		"profile_age_months_basis":       "calendar_from_birth_date",
+		"profile_weight_kg":              profileSnapshot.WeightKg,
+		"profile_weight_source":          profileSnapshot.WeightSource,
+		"profile_height_cm":              profileSnapshot.HeightCm,
+		"profile_height_source":          profileSnapshot.HeightSource,
+		"profile_growth_measured_at_utc": formatNullableTimeRFC3339(profileSnapshot.GrowthMeasuredAt),
 	}
 	if requestedDate != nil {
 		meta["requested_date_utc"] = requestedDate.Format("2006-01-02")
 	}
 
-	summaryLines := make([]string, 0, len(rawLines)+80)
-	summaryLines = append(summaryLines, fmt.Sprintf("Child-specific context for child_id=%s.", childID))
+	summaryLines := make([]string, 0, len(rawLines)+96)
+	summaryLines = append(summaryLines, fmt.Sprintf("아동 기준 참고 컨텍스트 (child_id=%s).", childID))
+	summaryLines = append(summaryLines,
+		"아동 프로필 스냅샷:",
+		fmt.Sprintf("- 이름=%s", profileSnapshot.Name),
+		fmt.Sprintf("- 생년월일=%s", birthDateText),
+		fmt.Sprintf("- 나이=%d일 (만 %d개월, 생년월일 기준)", profileSnapshot.AgeDays, profileSnapshot.AgeMonths),
+		fmt.Sprintf("- 현재 기준 시각=%s", formatContextTime(nowUTC)),
+	)
+	if profileSnapshot.WeightKg != nil {
+		summaryLines = append(summaryLines,
+			fmt.Sprintf("- 몸무게=%.1fkg (출처=%s)", *profileSnapshot.WeightKg, profileSnapshot.WeightSource),
+		)
+	} else {
+		summaryLines = append(summaryLines, "- 몸무게=없음")
+	}
+	if profileSnapshot.HeightCm != nil {
+		line := fmt.Sprintf("- 키=%.1fcm (출처=%s)", *profileSnapshot.HeightCm, profileSnapshot.HeightSource)
+		if profileSnapshot.GrowthMeasuredAt != nil {
+			line = line + fmt.Sprintf(", 측정시각=%s", formatContextTime(*profileSnapshot.GrowthMeasuredAt))
+		}
+		summaryLines = append(summaryLines, line)
+	} else {
+		summaryLines = append(summaryLines, "- 키=없음")
+	}
 	if requestedDate != nil {
 		summaryLines = append(summaryLines,
-			fmt.Sprintf("User requested raw records for specific date (UTC): %s.", requestedDate.Format("2006-01-02")),
+			fmt.Sprintf("사용자가 특정 날짜 원시 기록을 요청함: %s.", requestedDate.Format("2006-01-02")),
 		)
 	}
 	summaryLines = append(summaryLines,
-		fmt.Sprintf("Raw records window (UTC): %s to %s.", rawStart.Format(time.RFC3339), rawEnd.Format(time.RFC3339)),
-		"Raw event lines below are direct stored payloads (value/meta) from user-entered records.",
+		fmt.Sprintf("원시 기록 조회 구간: %s ~ %s.", formatContextTime(rawStart), formatContextTime(rawEnd)),
+		"아래 원시 이벤트는 사용자가 입력한 기록의 저장 원본(값/메타)입니다.",
 	)
 	if len(rawLines) == 0 {
-		summaryLines = append(summaryLines, "- No raw events found in the selected raw window.")
+		summaryLines = append(summaryLines, "- 선택한 원시 구간에 기록이 없습니다.")
 	} else {
 		summaryLines = append(summaryLines, rawLines...)
 		rawTypes := make([]string, 0, len(rawCountByType))
@@ -1545,20 +1781,20 @@ func (a *App) buildChatContext(
 			rawTypes = append(rawTypes, eventType)
 		}
 		sort.Strings(rawTypes)
-		summaryLines = append(summaryLines, "Raw window counts by type:")
+		summaryLines = append(summaryLines, "원시 구간 유형별 건수:")
 		for _, eventType := range rawTypes {
 			summaryLines = append(summaryLines,
-				fmt.Sprintf("- %s: %d events", strings.ToUpper(strings.TrimSpace(eventType)), rawCountByType[eventType]),
+				fmt.Sprintf("- %s: %d건", strings.ToUpper(strings.TrimSpace(eventType)), rawCountByType[eventType]),
 			)
 		}
 	}
 
 	summaryLines = append(summaryLines,
-		"Monthly summary overview (older than the raw window, up to 30 days):",
-		fmt.Sprintf("Period (UTC): %s to %s.", monthlyStart.Format(time.RFC3339), monthlyEnd.Format(time.RFC3339)),
+		"월간 요약(원시 구간 이전 최대 30일):",
+		fmt.Sprintf("월간 요약 구간: %s ~ %s.", formatContextTime(monthlyStart), formatContextTime(monthlyEnd)),
 	)
 	if len(monthlyCountByType) == 0 {
-		summaryLines = append(summaryLines, "- No monthly summary events found in the configured period.")
+		summaryLines = append(summaryLines, "- 설정된 월간 구간에 요약할 기록이 없습니다.")
 	} else {
 		types := make([]string, 0, len(monthlyCountByType))
 		for eventType := range monthlyCountByType {
@@ -1567,14 +1803,14 @@ func (a *App) buildChatContext(
 		sort.Strings(types)
 		for _, eventType := range types {
 			summaryLines = append(summaryLines,
-				fmt.Sprintf("- %s: %d events", strings.ToUpper(strings.TrimSpace(eventType)), monthlyCountByType[eventType]),
+				fmt.Sprintf("- %s: %d건", strings.ToUpper(strings.TrimSpace(eventType)), monthlyCountByType[eventType]),
 			)
 		}
 	}
 	if len(dailyOverviewLines) == 0 {
-		summaryLines = append(summaryLines, "- No daily overview rows in the monthly summary period.")
+		summaryLines = append(summaryLines, "- 월간 구간 일자별 집계가 없습니다.")
 	} else {
-		summaryLines = append(summaryLines, "Daily counts in monthly period:")
+		summaryLines = append(summaryLines, "월간 구간 일자별 건수:")
 		summaryLines = append(summaryLines, dailyOverviewLines...)
 	}
 
@@ -1584,9 +1820,104 @@ func (a *App) buildChatContext(
 	}, nil
 }
 
+func (a *App) loadChildProfileSnapshot(ctx context.Context, userID, childID string) (childProfileSnapshot, error) {
+	profile, _, err := a.resolveBabyProfile(ctx, userID, childID, readRoles)
+	if err != nil {
+		return childProfileSnapshot{}, err
+	}
+
+	snapshot := childProfileSnapshot{
+		Name:         strings.TrimSpace(profile.Name),
+		BirthDate:    startOfUTCDay(profile.BirthDate.UTC()),
+		AgeDays:      profile.AgeDays,
+		AgeMonths:    ageMonthsFromBirthDate(profile.BirthDate.UTC(), time.Now().UTC()),
+		WeightKg:     profile.WeightKg,
+		WeightSource: "profile_settings",
+		HeightCm:     nil,
+		HeightSource: "not_available",
+	}
+	if snapshot.AgeMonths < 0 {
+		snapshot.AgeMonths = 0
+	}
+	if snapshot.WeightKg == nil {
+		snapshot.WeightSource = "not_available"
+	}
+
+	var growthStartAt time.Time
+	var growthValueRaw []byte
+	growthErr := a.db.QueryRow(
+		ctx,
+		`SELECT "startTime", "valueJson"::text
+		 FROM "Event"
+		 WHERE "babyId" = $1
+		   AND type = 'GROWTH'
+		 ORDER BY "startTime" DESC
+		 LIMIT 1`,
+		childID,
+	).Scan(&growthStartAt, &growthValueRaw)
+	if growthErr != nil && !errors.Is(growthErr, pgx.ErrNoRows) {
+		return childProfileSnapshot{}, growthErr
+	}
+	if growthErr == nil {
+		valueMap := parseJSONStringMap(growthValueRaw)
+		if snapshot.WeightKg == nil {
+			if weight := extractNumberFromMap(valueMap, "weight_kg", "weightKg", "weight"); weight > 0 {
+				rounded := roundToOneDecimal(weight)
+				snapshot.WeightKg = &rounded
+				snapshot.WeightSource = "latest_growth_event"
+			}
+		}
+		if height := extractNumberFromMap(
+			valueMap,
+			"height_cm",
+			"length_cm",
+			"stature_cm",
+			"heightCm",
+			"lengthCm",
+			"height",
+			"length",
+		); height > 0 {
+			rounded := roundToOneDecimal(height)
+			snapshot.HeightCm = &rounded
+			snapshot.HeightSource = "latest_growth_event"
+			measuredAt := growthStartAt.UTC()
+			snapshot.GrowthMeasuredAt = &measuredAt
+		}
+	}
+
+	if snapshot.Name == "" {
+		snapshot.Name = "child"
+	}
+	return snapshot, nil
+}
+
+func ageMonthsFromBirthDate(birthDate, now time.Time) int {
+	if birthDate.IsZero() {
+		return 0
+	}
+	birthUTC := startOfUTCDay(birthDate.UTC())
+	nowUTC := startOfUTCDay(now.UTC())
+	if nowUTC.Before(birthUTC) {
+		return 0
+	}
+	months := (nowUTC.Year()-birthUTC.Year())*12 + int(nowUTC.Month()) - int(birthUTC.Month())
+	if nowUTC.Day() < birthUTC.Day() {
+		months--
+	}
+	if months < 0 {
+		return 0
+	}
+	return months
+}
+
 var (
-	isoDatePattern    = regexp.MustCompile(`\b(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})\b`)
-	koreanDatePattern = regexp.MustCompile(`(?:(20\d{2})\s*년\s*)?(\d{1,2})\s*월\s*(\d{1,2})\s*일`)
+	htmlBreakTagPattern    = regexp.MustCompile(`(?i)<br\s*/?>`)
+	utcParenPattern        = regexp.MustCompile(`(?i)\(\s*UTC\s*\)`)
+	utcWordPattern         = regexp.MustCompile(`(?i)\bUTC\b`)
+	rfc3339DateTimePattern = regexp.MustCompile(`\b20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\b`)
+	timeWithZSuffixPattern = regexp.MustCompile(`\b(20\d{2}-\d{2}-\d{2}\s+\d{2}:\d{2})(?::\d{2})?Z\b`)
+	isoDatePattern         = regexp.MustCompile(`\b(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})\b`)
+	koreanDatePattern      = regexp.MustCompile(`(?:(20\d{2})\s*년\s*)?(\d{1,2})\s*월\s*(\d{1,2})\s*일`)
 )
 
 func resolveRawWindow(question string, nowUTC time.Time) (time.Time, time.Time, *time.Time) {
@@ -1672,93 +2003,132 @@ func buildChatSystemPrompt(
 	}
 
 	lines := []string{
-		"You are BabyAI, a warm and practical parenting assistant.",
-		"The user is a caregiver using a parenting AI chatbot.",
-		"Speak naturally like a daily conversation with a caregiver.",
-		"Do not mention technical terms such as database, logs, API, JSON, schema, token, model, or system prompt.",
-		"Do not expose internal field names or key-value strings to the user.",
-		"If data is missing or estimated, explain that in simple everyday language.",
-		"Never claim diagnosis or prescription certainty; describe possibilities and safe next actions.",
-		"Always answer in Markdown.",
-		"Format guideline: choose Markdown structure based on context so the answer is easy to scan.",
-		"Format guideline: for record-based summaries, prefer a compact Markdown table first.",
-		"Format guideline: if summary and guidance are both present, put analysis/advice below a horizontal rule (`---`).",
-		"Format guideline: use clear headings with `#`/`##` and bold key labels for readability.",
-		"Format guideline: checklists or checkboxes (`- [ ]`, `- [x]`) are allowed when action tracking helps.",
-		"Format guideline: avoid excessive bullet points; use bullets only for true multi-item lists.",
-		"Format guideline: emojis are welcome when they improve warmth/readability; do not artificially limit them.",
-		"Format guideline: keep paragraphs short and scannable.",
-		"Answer tone: " + toneValue + ".",
+		"너는 BabyAI이며, 보호자와 대화하는 따뜻하고 실용적인 육아 도우미다.",
+		"모든 답변의 기본 언어는 한국어다. 사용자가 다른 언어를 명시적으로 요청할 때만 해당 언어를 사용한다.",
+		"같은 세션의 이전 대화를 이어서 답하고, 단발성 답변처럼 끊지 않는다.",
+		"필요하면 직전 대화 맥락을 짧게 연결해 연속성을 유지한다.",
+		"사용자 노출 답변에서 UTC 같은 시간대 용어를 쓰지 않는다.",
+		"날짜/시간 표기는 `YYYY-MM-DD HH:MM` 형식으로 통일한다.",
+		"데이터베이스, 로그, API, JSON, 스키마, 토큰, 모델, 시스템 프롬프트 같은 내부 기술 용어를 사용자에게 말하지 않는다.",
+		"내부 필드명과 key-value 원문을 그대로 노출하지 않는다.",
+		"공지문/정책문/병원 게시문처럼 딱딱한 문체를 피하고 자연스러운 한국어 대화체를 사용한다.",
+		"최종 답변에 HTML 태그(`<br>` 등)를 사용하지 않는다.",
+		"데이터가 누락되거나 추정치가 섞이면 쉬운 한국어로 짧고 명확하게 설명한다.",
+		"진단/처방을 단정하지 말고 가능성과 안전한 다음 행동을 제시한다.",
+		"시간 예측 질문(예: 다음 수유 ETA)은 컨텍스트에 제공된 현재 기준 시각을 기준으로 계산한다.",
+		"smalltalk가 아닌 의도에서는 Markdown으로 답한다.",
+		"모바일 화면에서 읽기 쉽도록 짧은 문단과 짧은 줄바꿈 중심으로 작성한다.",
+		"핵심 결론은 첫 줄 1문장으로 제시한다.",
+		"문단은 1~2문장으로 유지하고 긴 문장은 여러 줄로 나눈다.",
+		"중요 정보(날짜, 시간, ml, 횟수, 퍼센트, 체온/체중 등 수치)는 값과 단위를 함께 Markdown 굵게(`**...**`)로 표시한다.",
+		"강조 예시: **2026-02-15 14:30**, **120ml**, **3회**.",
+		"중요 수치가 2개 이상이면 한 줄에 몰아쓰지 말고 줄을 나눠 제시한다.",
+		"강조는 핵심 정보 위주로만 사용하고 문장 전체를 굵게 처리하지 않는다.",
+		"불릿은 필요한 경우에만 사용하고 항목 수를 과도하게 늘리지 않는다.",
+		"데이터 항목이 많거나 비교 포인트가 3개 이상이면 Markdown 표를 우선 사용한다.",
+		"데이터 항목 수가 적으면 표보다 짧은 요약 문단/불릿을 우선한다.",
+		"표를 쓸 때는 2열(`항목`, `요약`) 중심으로 구성하고 `항목`은 짧게, `요약`은 상대적으로 자세히 작성한다.",
+		"요약에는 가능하면 항목별 `횟수`, `시간(범위/마지막 시각)`, `ml 용량(총량/마지막 또는 회당)`을 함께 제시한다.",
+		"모바일 가독성을 위해 표의 열 이름과 셀 텍스트는 짧게 유지하고, 꼭 필요한 열만 남긴다.",
+		"표 셀은 1~2줄 중심으로 작성하고, 긴 문장은 나눠 셀 높이가 과도하게 커지지 않게 한다.",
+		"표 셀 내부 줄바꿈은 Markdown 기본 줄바꿈에 맞게 처리하고 `<br>` 같은 HTML 태그는 쓰지 않는다.",
+		"표 셀 값은 공백, 쉼표, 슬래시(`/`), 하이픈(`-`) 단위로 자연 줄바꿈 가능하게 짧은 표현을 사용한다.",
+		"기본 응답에서는 메모(원문 노트)를 본문에 넣지 않고, 사용자가 요청할 때만 별도 섹션으로 제공한다.",
+		"요약과 가이드를 함께 제시할 때는 필요 시 구분선(`---`)을 사용한다.",
+		"응답 톤: " + toneValue + ".",
 	}
 
-	if usePersonalData {
-		if intent == aiIntentSmalltalk {
-			lines = append(lines,
-				"Smalltalk mode: avoid unsolicited raw data dump unless user asks for record details.",
-				"Context summary: "+context.Summary,
-			)
-		} else {
-			lines = append(lines,
-				"Use only the supplied data context for factual claims.",
-				"When context is requested_date_raw, prioritize that specific date raw records.",
-				"When context is last_7d_raw, use raw records for the recent 7-day window and use monthly summary for older trends.",
-				"Context summary: "+context.Summary,
-			)
-		}
+	if intent == aiIntentSmalltalk {
+		lines = append(lines,
+			"일상대화 모드: 이 세션은 기록 분석보다 대화 중심으로 운영한다.",
+			"일상대화 모드: 필요하면 아동 프로필 DB 정보(생년월일 기준 월령/일령, 몸무게/키)를 1문장으로 자연스럽게 반영한다.",
+			"일상대화 모드: 이벤트 통계/표/과도한 분석은 기본적으로 생략하고, 사용자가 원할 때만 간단히 언급한다.",
+			"일상대화 모드: 해결책 제시보다 짧은 대화 왕복을 우선한다.",
+			"일상대화 모드: 과한 공감/감정 과장은 피하고 담백하게 위로한다.",
+			"일상대화 모드: 답변은 기본 1~2문장으로 짧게 유지한다.",
+			"일상대화 모드: 필요하면 한 번에 질문 1개만 던져 자연스럽게 주고받는다.",
+			"일상대화 모드: 사용자가 조언을 명시적으로 요청하기 전에는 해결책/팁/체크리스트를 먼저 제시하지 않는다.",
+			"일상대화 모드 형식: 일반 채팅 문장만 출력한다. 제목(`#`), 불릿(`-`, `*`), 번호 목록은 사용하지 않는다.",
+			"일상대화 모드 형식: 장식용 기호 나열을 피한다.",
+			"일상대화 모드 이모지: 필요할 때만 가볍게 사용하고 반복 장식은 피한다.",
+			"참고 컨텍스트: "+context.Summary,
+		)
+	} else if usePersonalData {
+		lines = append(lines,
+			"기록 기반 모드: 보호자가 아이 관련 내용을 묻는 상황으로 보고 제공된 아이 기록을 사실 근거로 사용한다.",
+			"사실 판단은 제공된 데이터 컨텍스트 안에서만 수행한다.",
+			"필요하면 아이 프로필(월령/일령, 몸무게, 키)을 함께 반영한다.",
+			"context.time_range가 requested_date_raw이면 해당 날짜 원시 기록을 우선한다.",
+			"context.time_range가 last_7d_raw이면 최근 7일 원시 기록을 우선하고, 그 이전 추세는 월간 요약으로 보완한다.",
+			"참고 컨텍스트: "+context.Summary,
+		)
 	} else {
-		lines = append(lines, "Personal data is disabled for this query. Provide general guidance only.")
+		lines = append(lines, "개인 기록이 비활성화된 질의이므로 일반 가이드만 제공한다.")
 	}
 	if summary := strings.TrimSpace(sessionMemorySummary); summary != "" {
 		lines = append(lines,
-			"Conversation memory from older turns (compressed summary):",
+			"이전 대화 메모(압축 요약):",
 			summary,
 		)
 	}
 	if intent == aiIntentSmalltalk {
 		if hint := strings.TrimSpace(smalltalkStyleHint); hint != "" {
-			lines = append(lines, "Smalltalk style hint: "+hint)
+			lines = append(lines, "일상대화 스타일 힌트: "+hint)
 		}
 	}
 
 	switch intent {
 	case aiIntentSmalltalk:
 		lines = append(lines,
-			"Persona for smalltalk:",
-			"- Be kind, warm, and encouraging.",
-			"- Match the user's speaking style naturally (polite/casual, sentence length, emoji usage).",
-			"- Do not start with statistics unless user explicitly asks for numbers or records.",
-			"- Keep responses short and human, like a supportive caregiver friend.",
-			"- If useful, add one gentle practical tip related to childcare.",
+			"일상대화 페르소나:",
+			"- 보호자의 감정, 피로, 일상 상태에 초점을 둔다.",
+			"- 친절하지만 과장되지 않은 안정된 톤을 유지한다.",
+			"- 설명문/강의체보다 자연스러운 대화체를 사용한다.",
+			"- 사용자 말투(존댓말/캐주얼, 문장 길이, 이모지 정도)를 자연스럽게 맞춘다.",
+			"- 세션 내 핵심 맥락과 분위기를 기억해 짧게 연결한다.",
+			"- 기본은 짧게 답하고, 필요 시 가벼운 후속 질문 1개로 대화를 이어간다.",
+			"- 사용자가 불안하거나 지쳐 보이면 먼저 짧게 안정감을 주는 한마디를 건넨다.",
+			"- 사용자가 요청하기 전에는 해결책/셀프케어 팁을 먼저 제안하지 않는다.",
 		)
 	case aiIntentMedicalRelated:
 		lines = append(lines,
-			"Persona for medical conversation:",
-			"- Be calm, precise, and safety-focused.",
-			"- Use the user's recorded data to explain the current situation.",
-			"- Never diagnose definitively; present possibilities only.",
-			"- Start with a clear record-based summary table when data is available.",
-			"- Then use `---` and provide cause analysis and practical medical guidance below it.",
-			"- Cover: current summary, possible explanations, what to do now, where to go, and red flags.",
+			"의료 대화 페르소나:",
+			"- 침착하고 정확하며 안전 중심으로 답한다.",
+			"- 이전 턴 맥락을 짧게 이어 보호자가 이미 공유한 내용을 반영한다.",
+			"- 즉시 행동이 필요한 상황이면 첫 줄에 바로 해야 할 행동 1가지를 먼저 제시한다.",
+			"- 확정 진단처럼 단정하지 않고 가능성 중심으로 설명한다.",
+			"- 문단은 1~3개의 짧은 문장으로 유지해 모바일에서 읽기 쉽게 만든다.",
+			"- 중요한 행동은 줄을 분리해 제시하고, 순서가 필요하면 1., 2., 3. 형식을 사용한다.",
+			"- 설명보다 현재 해야 할 행동, 관찰 포인트, 병원/응급실 기준을 우선한다.",
+			"- 마지막에는 필요 시 짧은 확인 질문 1개를 둔다.",
 		)
 	case aiIntentDataQuery:
 		lines = append(lines,
-			"Persona for data-based conversation:",
-			"- Be exact and evidence-based using only user-entered records.",
-			"- Give concrete numbers with clear period labels.",
-			"- If details are missing (for example dose ml), say so plainly.",
-			"- Present the record summary in a compact Markdown table for readability.",
-			"- If interpretation is needed, add `---` and place analysis/next action below the table.",
-			"- Use concise Markdown formatting and natural, helpful emojis when appropriate.",
+			"기록 분석 페르소나:",
+			"- 사용자 입력 기록만 근거로 정확하게 답한다.",
+			"- 매 턴 같은 기초 요약을 반복하지 말고 이전 대화 맥락을 이어간다.",
+			"- 차가운 리포트 문체보다 친절한 코치 톤을 유지한다.",
+			"- 기간 라벨과 수치를 명확히 제시하되 문장은 짧고 자연스럽게 유지한다.",
+			"- 가장 중요한 요점은 첫 줄 1문장으로 먼저 제시한다.",
+			"- 요약은 `횟수`, `시간`, `ml 용량` 중심으로 먼저 제시한다.",
+			"- 항목별로 총횟수, 마지막 시각(또는 시간 범위), 총 ml(또는 회당 ml)를 우선 정리한다.",
+			"- 문단은 1~3개의 짧은 문장으로 유지해 모바일 가독성을 높인다.",
+			"- 데이터 항목이 많거나 비교가 필요한 경우 표를 우선 사용하고, 2열(`항목`, `요약`)만 유지한다.",
+			"- 메모/원문 노트는 사용자가 요청할 때만 제공한다.",
+			"- 핵심 행동은 줄을 분리하고 순서가 필요하면 1., 2., 3. 형식을 사용한다.",
+			"- 값이 비어 있으면 한 줄로 명확히 부족 정보를 알린다.",
+			"- 마지막에 현실적인 다음 단계 1가지를 제안한다.",
 		)
 	case aiIntentCareRoutine:
 		lines = append(lines,
-			"Persona for routine coaching:",
-			"- Friendly and practical.",
-			"- Combine recent pattern observation with next-step suggestions.",
-			"- Keep guidance actionable and easy to follow.",
+			"루틴 코칭 페르소나:",
+			"- 친근하고 실용적으로 안내한다.",
+			"- 최근 패턴 관찰과 다음 행동 제안을 함께 제시한다.",
+			"- 바로 실행 가능한 짧은 단계 위주로 설명한다.",
+			"- 모바일에서 빠르게 읽히도록 간결한 블록 구조를 유지한다.",
 		)
 	default:
-		lines = append(lines, "If records are insufficient, ask one focused follow-up question.")
+		lines = append(lines, "기록이 부족하면 초점이 분명한 후속 질문 1개를 한다.")
 	}
 
 	return strings.Join(lines, "\n")
@@ -1898,6 +2268,132 @@ func truncateRunes(value string, max int) string {
 	return strings.TrimSpace(string(runes[:max])) + "..."
 }
 
+func sanitizeUserFacingAnswer(answer string) string {
+	normalized := strings.TrimSpace(answer)
+	if normalized == "" {
+		return ""
+	}
+
+	normalized = htmlBreakTagPattern.ReplaceAllString(normalized, "\n")
+	normalized = normalizeUserFacingDateTimes(normalized)
+	normalized = timeWithZSuffixPattern.ReplaceAllString(normalized, "$1")
+
+	normalized = strings.ReplaceAll(normalized, "시간(UTC)", "시간")
+	normalized = strings.ReplaceAll(normalized, "기간(UTC)", "기간")
+	normalized = strings.ReplaceAll(normalized, "날짜(UTC)", "날짜")
+	normalized = strings.ReplaceAll(normalized, "(UTC):", ":")
+	normalized = strings.ReplaceAll(normalized, "(utc):", ":")
+	normalized = strings.ReplaceAll(normalized, "(UTC)", "")
+	normalized = strings.ReplaceAll(normalized, "(utc)", "")
+	normalized = utcWordPattern.ReplaceAllString(normalized, "")
+	normalized = strings.ReplaceAll(normalized, "()", "")
+	normalized = utcParenPattern.ReplaceAllString(normalized, "")
+	normalized = strings.ReplaceAll(normalized, "UTC:", "")
+	normalized = strings.ReplaceAll(normalized, "utc:", "")
+	normalized = strings.ReplaceAll(normalized, "UTC 기준", "")
+	normalized = strings.ReplaceAll(normalized, "utc 기준", "")
+	normalized = strings.ReplaceAll(normalized, "( )", "")
+
+	for strings.Contains(normalized, "  ") {
+		normalized = strings.ReplaceAll(normalized, "  ", " ")
+	}
+	normalized = strings.ReplaceAll(normalized, " / / ", " / ")
+	normalized = strings.ReplaceAll(normalized, " : ", ": ")
+	return strings.TrimSpace(normalized)
+}
+
+func normalizeUserFacingDateTimes(input string) string {
+	return rfc3339DateTimePattern.ReplaceAllStringFunc(input, func(raw string) string {
+		if parsed, ok := parseRFC3339DateTime(raw); ok {
+			return parsed.Format("2006-01-02 15:04")
+		}
+		return raw
+	})
+}
+
+func parseRFC3339DateTime(raw string) (time.Time, bool) {
+	candidate := strings.TrimSpace(raw)
+	if candidate == "" {
+		return time.Time{}, false
+	}
+	layouts := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02T15:04:05Z07:00",
+		"2006-01-02T15:04Z07:00",
+	}
+	for _, layout := range layouts {
+		parsed, err := time.Parse(layout, candidate)
+		if err == nil {
+			return parsed, true
+		}
+	}
+	return time.Time{}, false
+}
+
+func sanitizeSmalltalkAnswer(answer string) string {
+	trimmed := strings.TrimSpace(answer)
+	if trimmed == "" {
+		return ""
+	}
+
+	lines := splitNonEmptyLines(trimmed)
+	cleaned := make([]string, 0, len(lines))
+	for _, line := range lines {
+		item := strings.TrimSpace(line)
+		if item == "" || item == "---" {
+			continue
+		}
+		item = strings.TrimSpace(strings.TrimLeft(item, "#"))
+		item = stripSmalltalkListPrefix(item)
+		item = strings.TrimSpace(strings.Trim(item, "`"))
+		if item == "" {
+			continue
+		}
+		cleaned = append(cleaned, item)
+	}
+
+	merged := strings.Join(cleaned, " ")
+	merged = strings.Join(strings.Fields(strings.TrimSpace(merged)), " ")
+	if merged == "" {
+		merged = strings.Join(strings.Fields(trimmed), " ")
+	}
+	return truncateRunes(merged, smalltalkReplyRuneMax)
+}
+
+func stripSmalltalkListPrefix(line string) string {
+	trimmed := strings.TrimSpace(line)
+	prefixes := []string{
+		"- [ ] ",
+		"- [x] ",
+		"- ",
+		"* ",
+		"+ ",
+	}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(trimmed, prefix) {
+			return strings.TrimSpace(trimmed[len(prefix):])
+		}
+	}
+
+	digitEnd := 0
+	for digitEnd < len(trimmed) {
+		ch := trimmed[digitEnd]
+		if ch < '0' || ch > '9' {
+			break
+		}
+		digitEnd++
+	}
+	if digitEnd > 0 && digitEnd+1 < len(trimmed) {
+		marker := trimmed[digitEnd]
+		next := trimmed[digitEnd+1]
+		if (marker == '.' || marker == ')') && next == ' ' {
+			return strings.TrimSpace(trimmed[digitEnd+2:])
+		}
+	}
+	return trimmed
+}
+
 func deriveSmalltalkStyleHint(turns []ChatTurn, latestQuestion string) string {
 	samples := collectUserToneSamples(turns, latestQuestion, 8)
 	if len(samples) == 0 {
@@ -1944,29 +2440,29 @@ func deriveSmalltalkStyleHint(turns []ChatTurn, latestQuestion string) string {
 	}
 
 	hints := []string{
-		"Mirror the user's speaking style naturally and keep it warm.",
+		"사용자 말투를 자연스럽게 맞추고 따뜻한 톤을 유지하세요.",
 	}
 	if hasHangul {
 		switch {
 		case formalScore >= casualScore+1:
-			hints = append(hints, "Use polite Korean endings.")
+			hints = append(hints, "존댓말 어미를 안정적으로 사용하세요.")
 		case casualScore >= formalScore+1:
-			hints = append(hints, "Use conversational Korean similar to the user while staying respectful.")
+			hints = append(hints, "사용자와 비슷한 구어체 한국어를 쓰되 예의는 유지하세요.")
 		default:
-			hints = append(hints, "Use friendly everyday Korean with balanced politeness.")
+			hints = append(hints, "친근하지만 균형 잡힌 한국어 톤을 사용하세요.")
 		}
 	} else {
 		if formalScore >= casualScore+1 {
-			hints = append(hints, "Keep wording polite and considerate.")
+			hints = append(hints, "정중하고 배려 있는 표현을 사용하세요.")
 		} else {
-			hints = append(hints, "Keep wording casual and friendly.")
+			hints = append(hints, "가볍고 친근한 표현을 사용하세요.")
 		}
 	}
 	if avgLen > 0 && avgLen <= 30 {
-		hints = append(hints, "Prefer short sentences.")
+		hints = append(hints, "짧은 문장을 우선하세요.")
 	}
 	if emojiLike > 0 {
-		hints = append(hints, "A light emoji can be used when it fits.")
+		hints = append(hints, "맥락에 맞으면 이모지는 가볍게만 사용하세요.")
 	}
 	return strings.Join(hints, " ")
 }

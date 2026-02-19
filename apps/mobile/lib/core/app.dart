@@ -1,16 +1,12 @@
 import "dart:async";
 import "dart:convert";
-import "dart:ui" as ui;
 
 import "package:flutter/material.dart";
-import "package:flutter/services.dart";
 
 import "assistant/assistant_intent_bridge.dart";
-import "assistant/assistant_query_router.dart";
 import "../features/chat/chat_page.dart";
 import "../features/community/community_page.dart";
 import "../features/market/market_page.dart";
-import "../features/photos/photos_page.dart";
 import "../features/recording/recording_page.dart";
 import "../features/report/report_page.dart";
 import "../features/settings/child_profile_page.dart";
@@ -19,6 +15,7 @@ import "config/session_store.dart";
 import "i18n/app_i18n.dart";
 import "network/babyai_api.dart";
 import "theme/app_theme_controller.dart";
+import "widgets/app_svg_icon.dart";
 
 class BabyAIApp extends StatefulWidget {
   const BabyAIApp({super.key});
@@ -79,10 +76,25 @@ class _BabyAIAppState extends State<BabyAIApp> {
 
   ThemeData _buildTheme({required Brightness brightness}) {
     final String mainFontFamily = _themeController.mainFontFamily;
-    final ColorScheme colorScheme = ColorScheme.fromSeed(
-      seedColor: _themeController.seedColorFor(brightness),
-      brightness: brightness,
-    );
+    final ColorScheme colorScheme = brightness == Brightness.light
+        ? const ColorScheme(
+            brightness: Brightness.light,
+            primary: Color(0xFFE4B347),
+            onPrimary: Color(0xFFFFFFFF),
+            secondary: Color(0xFF8A7B66),
+            onSecondary: Color(0xFFFFFFFF),
+            error: Color(0xFFB3261E),
+            onError: Color(0xFFFFFFFF),
+            surface: Color(0xFFF7F4EF),
+            onSurface: Color(0xFF2D2924),
+            surfaceContainerHighest: Color(0xFFEFE8DE),
+            onSurfaceVariant: Color(0xFF7F7467),
+            outline: Color(0xFFD8CFC4),
+          )
+        : ColorScheme.fromSeed(
+            seedColor: _themeController.seedColorFor(brightness),
+            brightness: brightness,
+          );
     final ThemeData base = ThemeData(
       useMaterial3: true,
       colorScheme: colorScheme,
@@ -98,12 +110,37 @@ class _BabyAIAppState extends State<BabyAIApp> {
       cardTheme: CardThemeData(
         color: brightness == Brightness.dark
             ? const Color(0xFF151922)
-            : colorScheme.surface,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            : const Color(0xFFFFFFFF),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
       ),
       scaffoldBackgroundColor: brightness == Brightness.dark
           ? const Color(0xFF090B10)
-          : colorScheme.surface,
+          : const Color(0xFFF1F1F1),
+      navigationBarTheme: NavigationBarThemeData(
+        height: 66,
+        backgroundColor: brightness == Brightness.dark
+            ? colorScheme.surface
+            : const Color(0xFFF9F8F6),
+        indicatorColor: colorScheme.primary.withValues(alpha: 0.2),
+        iconTheme: WidgetStateProperty.resolveWith<IconThemeData>(
+          (Set<WidgetState> states) => IconThemeData(
+            color: states.contains(WidgetState.selected)
+                ? colorScheme.primary
+                : colorScheme.onSurfaceVariant,
+          ),
+        ),
+        labelTextStyle: WidgetStateProperty.resolveWith<TextStyle>(
+          (Set<WidgetState> states) => TextStyle(
+            fontSize: 12,
+            fontWeight: states.contains(WidgetState.selected)
+                ? FontWeight.w700
+                : FontWeight.w500,
+            color: states.contains(WidgetState.selected)
+                ? colorScheme.primary
+                : colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ),
     );
   }
 
@@ -176,19 +213,19 @@ class _HomeShellState extends State<_HomeShell> {
   final GlobalKey<ChatPageState> _chatPageKey = GlobalKey<ChatPageState>();
   final GlobalKey<ReportPageState> _reportPageKey =
       GlobalKey<ReportPageState>();
-  final GlobalKey<PhotosPageState> _photosPageKey =
-      GlobalKey<PhotosPageState>();
   StreamSubscription<AssistantActionPayload>? _assistantSubscription;
   AssistantActionPayload? _pendingAssistantAction;
-  String? _pendingChatPrompt;
 
   int _index = 0;
   bool _isGoogleLoggedIn = false;
   String _accountName = "Google account";
   String _accountEmail = "Not connected";
+  bool _chatHistoryLoading = false;
+  String? _chatHistoryError;
+  List<_ChatHistoryItem> _chatHistory = <_ChatHistoryItem>[];
+  String? _selectedChatSessionId;
 
   RecordRange _recordRange = RecordRange.week;
-  PhotosViewMode _photosViewMode = PhotosViewMode.tiles;
   MarketSection _marketSection = MarketSection.used;
   CommunitySection _communitySection = CommunitySection.free;
 
@@ -197,6 +234,9 @@ class _HomeShellState extends State<_HomeShell> {
     super.initState();
     _bootstrapAccountFromToken();
     _initializeAssistantBridge();
+    if (BabyAIApi.activeBabyId.isNotEmpty) {
+      unawaited(_loadChatHistory());
+    }
   }
 
   @override
@@ -206,10 +246,10 @@ class _HomeShellState extends State<_HomeShell> {
   }
 
   Future<void> _initializeAssistantBridge() async {
+    await AssistantIntentBridge.initialize();
     _assistantSubscription = AssistantIntentBridge.stream.listen(
       _handleAssistantAction,
     );
-    await AssistantIntentBridge.initialize();
   }
 
   void _handleAssistantAction(AssistantActionPayload payload) {
@@ -335,65 +375,6 @@ class _HomeShellState extends State<_HomeShell> {
     ]);
   }
 
-  bool _looksLikeQuestion(String? query) {
-    if (query == null) {
-      return false;
-    }
-    final String text = query.trim().toLowerCase();
-    if (text.isEmpty) {
-      return false;
-    }
-    if (text.contains("?")) {
-      return true;
-    }
-    return _containsAny(text, <String>[
-      "when",
-      "what",
-      "how much",
-      "how long",
-      "tell me",
-      "show me",
-      "언제",
-      "뭐",
-      "무엇",
-      "알려",
-      "보여",
-      "요약",
-      "최근",
-      "마지막",
-    ]);
-  }
-
-  String? _queryForReadFeature(String feature) {
-    switch (feature) {
-      case "last_feeding":
-      case "last-feeding":
-        return "last feeding";
-      case "recent_sleep":
-      case "recent-sleep":
-        return "recent sleep";
-      case "last_diaper":
-      case "last-diaper":
-        return "last diaper";
-      case "last_medication":
-      case "last-medication":
-        return "last medication";
-      case "today_summary":
-      case "today-summary":
-        return "today summary";
-      case "last_poo":
-      case "last-poo":
-      case "last_poo_time":
-      case "last-poo-time":
-        return "last poo time";
-      case "next_feeding_eta":
-      case "next-feeding-eta":
-        return "next feeding eta";
-      default:
-        return null;
-    }
-  }
-
   int? _extractAmountMlFromText(String? text) {
     if (text == null || text.trim().isEmpty) {
       return null;
@@ -446,53 +427,8 @@ class _HomeShellState extends State<_HomeShell> {
     final String queryLower = normalizedQuery?.toLowerCase() ?? "";
     final Map<String, dynamic> prefill =
         Map<String, dynamic>.from(payload.asPrefillMap());
-    final bool asksStartAction = _containsAny(queryLower, <String>[
-      "시작",
-      "start",
-      "begin",
-      "재우기",
-      "잠들",
-    ]);
-    final bool asksEndAction = _containsAny(queryLower, <String>[
-      "종료",
-      "완료",
-      "끝",
-      "종료해",
-      "마침",
-      "end",
-      "stop",
-      "complete",
-      "finished",
-      "wake",
-      "woke",
-      "기상",
-      "깼",
-    ]);
-    if (asksStartAction && !asksEndAction) {
-      prefill["entry_action"] = "start";
-    } else if (asksEndAction) {
-      prefill["entry_action"] = "end";
-    }
 
     if (normalizedFeature == "chat") {
-      return _AssistantRecordAction(
-        routeToChat: true,
-        chatPrompt: normalizedQuery,
-      );
-    }
-
-    final String? readFeatureQuery = _queryForReadFeature(normalizedFeature);
-    if (readFeatureQuery != null) {
-      return _AssistantRecordAction(
-        routeToChat: true,
-        chatPrompt: normalizedQuery ?? readFeatureQuery,
-      );
-    }
-
-    final AssistantQuickRoute quickRoute =
-        AssistantQueryRouter.resolve(normalizedQuery ?? "");
-    if (quickRoute != AssistantQuickRoute.none &&
-        !_hasRecordIntent(normalizedQuery)) {
       return _AssistantRecordAction(
         routeToChat: true,
         chatPrompt: normalizedQuery,
@@ -514,9 +450,7 @@ class _HomeShellState extends State<_HomeShell> {
       final bool looksLikeRecordCommand = _hasRecordIntent(normalizedQuery) ||
           (normalizedQuery?.toLowerCase().contains("ml") ?? false);
       return _AssistantRecordAction(
-        routeToChat: looksLikeRecordCommand
-            ? false
-            : normalizedQuery != null || _looksLikeQuestion(normalizedQuery),
+        routeToChat: looksLikeRecordCommand ? false : normalizedQuery != null,
         chatPrompt: normalizedQuery,
       );
     }
@@ -577,14 +511,7 @@ class _HomeShellState extends State<_HomeShell> {
 
     bool autoSubmit =
         normalizedFeature.isNotEmpty || _hasRecordIntent(normalizedQuery);
-    final String entryAction =
-        (prefill["entry_action"] ?? "").toString().trim().toLowerCase();
-    final bool isStartCommand = entryAction == "start";
-    final bool isEndCommand = entryAction == "end" || entryAction == "complete";
-
-    if (tile == HomeTileType.formula &&
-        !prefill.containsKey("amount_ml") &&
-        !isStartCommand) {
+    if (tile == HomeTileType.formula && !prefill.containsKey("amount_ml")) {
       autoSubmit = false;
     }
     if (tile == HomeTileType.diaper && !prefill.containsKey("diaper_type")) {
@@ -592,22 +519,7 @@ class _HomeShellState extends State<_HomeShell> {
     }
     if (tile == HomeTileType.sleep &&
         !prefill.containsKey("sleep_action") &&
-        !prefill.containsKey("duration_min") &&
-        !isStartCommand &&
-        !isEndCommand) {
-      autoSubmit = false;
-    }
-    if (tile == HomeTileType.breastfeed &&
-        !prefill.containsKey("duration_min") &&
-        !isStartCommand &&
-        !isEndCommand) {
-      autoSubmit = false;
-    }
-    if (tile == HomeTileType.weaning &&
-        !prefill.containsKey("memo") &&
-        !prefill.containsKey("grams") &&
-        !isStartCommand &&
-        !isEndCommand) {
+        !prefill.containsKey("duration_min")) {
       autoSubmit = false;
     }
     if (tile == HomeTileType.medication) {
@@ -617,12 +529,10 @@ class _HomeShellState extends State<_HomeShell> {
               "")
           .toString()
           .trim();
-      if (medicationName.isEmpty && !isStartCommand) {
+      if (medicationName.isEmpty) {
         autoSubmit = false;
       } else {
-        if (medicationName.isNotEmpty) {
-          prefill["medication_name"] = medicationName;
-        }
+        prefill["medication_name"] = medicationName;
       }
     }
 
@@ -653,10 +563,9 @@ class _HomeShellState extends State<_HomeShell> {
     if (action.routeToChat) {
       setState(() => _index = _chatPage);
       if (action.chatPrompt != null && action.chatPrompt!.trim().isNotEmpty) {
-        _pendingChatPrompt = action.chatPrompt!.trim();
-        WidgetsBinding.instance.addPostFrameCallback(
-          (_) => _flushPendingChatPrompt(),
-        );
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _chatPageKey.currentState?.sendAssistantPrompt(action.chatPrompt!);
+        });
       }
       return;
     }
@@ -676,30 +585,7 @@ class _HomeShellState extends State<_HomeShell> {
     });
   }
 
-  void _flushPendingChatPrompt({int attempt = 0}) {
-    if (!mounted) {
-      return;
-    }
-    final String? prompt = _pendingChatPrompt;
-    if (prompt == null || prompt.isEmpty) {
-      return;
-    }
-
-    final ChatPageState? chatState = _chatPageKey.currentState;
-    if (chatState == null) {
-      if (attempt >= 8) {
-        return;
-      }
-      Future<void>.delayed(const Duration(milliseconds: 120), () {
-        _flushPendingChatPrompt(attempt: attempt + 1);
-      });
-      return;
-    }
-
-    _pendingChatPrompt = null;
-    unawaited(chatState.sendAssistantPrompt(prompt));
-  }
-
+  // ignore: unused_element
   String _labelForIndex(BuildContext context, int index) {
     switch (index) {
       case _homePage:
@@ -719,47 +605,181 @@ class _HomeShellState extends State<_HomeShell> {
     }
   }
 
+  // ignore: unused_element
   void _selectIndex(int next) {
     if (Navigator.of(context).canPop()) {
       Navigator.of(context).pop();
     }
+    _setIndex(next);
+  }
+
+  void _setIndex(int next) {
     setState(() => _index = next);
+    if (next == _homePage) {
+      unawaited(_recordPageKey.currentState?.refreshData());
+    }
+  }
+
+  Future<void> _loadChatHistory() async {
+    if (BabyAIApi.activeBabyId.isEmpty) {
+      return;
+    }
+    if (mounted) {
+      setState(() {
+        _chatHistoryLoading = true;
+        _chatHistoryError = null;
+      });
+    }
+
+    try {
+      final Map<String, dynamic> payload = await BabyAIApi.instance
+          .getChatSessions(childId: BabyAIApi.activeBabyId, limit: 50);
+      final List<dynamic> rawSessions =
+          (payload["sessions"] as List<dynamic>? ?? <dynamic>[]);
+      final List<_ChatHistoryItem> parsed = <_ChatHistoryItem>[];
+      for (final dynamic item in rawSessions) {
+        if (item is! Map<String, dynamic>) {
+          continue;
+        }
+        final String sessionId = (item["session_id"] ?? "").toString().trim();
+        if (sessionId.isEmpty) {
+          continue;
+        }
+        final String title = (item["title"] ?? "").toString().trim();
+        final String preview = (item["preview"] ?? "").toString().trim();
+        final DateTime updatedAt = DateTime.tryParse(
+              (item["updated_at"] ?? DateTime.now().toIso8601String())
+                  .toString(),
+            ) ??
+            DateTime.now();
+        parsed.add(
+          _ChatHistoryItem(
+            sessionId: sessionId,
+            title: title.isEmpty ? "New conversation" : title,
+            preview: preview,
+            updatedAt: updatedAt,
+          ),
+        );
+      }
+      if (!mounted) {
+        return;
+      }
+      setState(() => _chatHistory = parsed);
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _chatHistoryError = error.toString());
+    } finally {
+      if (mounted) {
+        setState(() => _chatHistoryLoading = false);
+      }
+    }
+  }
+
+  String _formatChatHistoryTime(DateTime value) {
+    final DateTime local = value.toLocal();
+    final DateTime now = DateTime.now();
+    final DateTime today = DateTime(now.year, now.month, now.day);
+    final DateTime day = DateTime(local.year, local.month, local.day);
+    final String minute = local.minute.toString().padLeft(2, "0");
+    if (day == today) {
+      return "${local.hour.toString().padLeft(2, "0")}:$minute";
+    }
+    return "${local.month}/${local.day}";
+  }
+
+  void _openChatHistoryDrawer() {
+    _scaffoldKey.currentState?.openDrawer();
+    unawaited(_loadChatHistory());
+  }
+
+  Future<void> _openChatSessionFromDrawer(String sessionId) async {
+    if (Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
+    setState(() {
+      _index = _chatPage;
+      _selectedChatSessionId = sessionId;
+    });
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    final ChatPageState? chatState = _chatPageKey.currentState;
+    if (chatState != null) {
+      await chatState.openSessionById(sessionId);
+      return;
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 90));
+    await _chatPageKey.currentState?.openSessionById(sessionId);
+  }
+
+  Future<void> _createNewChatFromDrawer() async {
+    if (Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
+    setState(() {
+      _index = _chatPage;
+      _selectedChatSessionId = null;
+    });
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    final ChatPageState? chatState = _chatPageKey.currentState;
+    if (chatState != null) {
+      await chatState.createNewConversation();
+      unawaited(_loadChatHistory());
+      return;
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 90));
+    await _chatPageKey.currentState?.createNewConversation();
+    unawaited(_loadChatHistory());
+  }
+
+  void _onChatHistoryChanged() {
+    unawaited(_loadChatHistory());
   }
 
   List<_BottomMenuTab> _buildBottomTabs() {
     final List<_BottomMenuTab> tabs = <_BottomMenuTab>[
       const _BottomMenuTab(
-          pageIndex: _homePage, icon: Icons.home_outlined, label: "home"),
+        pageIndex: _homePage,
+        iconData: Icons.home_outlined,
+        selectedIconData: Icons.home_rounded,
+        label: "home",
+      ),
     ];
-    if (widget.themeController.isBottomMenuEnabled(AppBottomMenu.statistics)) {
-      tabs.add(const _BottomMenuTab(
-          pageIndex: _statisticsPage,
-          icon: Icons.insert_chart_outlined,
-          label: "statistics"));
-    }
     if (widget.themeController.isBottomMenuEnabled(AppBottomMenu.chat)) {
       tabs.add(const _BottomMenuTab(
-          pageIndex: _chatPage,
-          icon: Icons.chat_bubble_outline,
-          label: "chat"));
+        pageIndex: _chatPage,
+        iconAsset: AppSvgAsset.aiChatSparkles,
+        label: "chat",
+      ));
+    }
+    if (widget.themeController.isBottomMenuEnabled(AppBottomMenu.statistics)) {
+      tabs.add(const _BottomMenuTab(
+        pageIndex: _statisticsPage,
+        iconAsset: AppSvgAsset.stats,
+        label: "statistics",
+      ));
     }
     if (widget.themeController.isBottomMenuEnabled(AppBottomMenu.photos)) {
       tabs.add(const _BottomMenuTab(
-          pageIndex: _photosPage,
-          icon: Icons.photo_library_outlined,
-          label: "photos"));
+        pageIndex: _photosPage,
+        iconData: Icons.settings_outlined,
+        selectedIconData: Icons.settings_rounded,
+        label: "settings",
+      ));
     }
     if (widget.themeController.isBottomMenuEnabled(AppBottomMenu.market)) {
       tabs.add(const _BottomMenuTab(
-          pageIndex: _marketPage,
-          icon: Icons.storefront_outlined,
-          label: "market"));
+        pageIndex: _marketPage,
+        iconAsset: AppSvgAsset.playCar,
+        label: "market",
+      ));
     }
     if (widget.themeController.isBottomMenuEnabled(AppBottomMenu.community)) {
       tabs.add(const _BottomMenuTab(
-          pageIndex: _communityPage,
-          icon: Icons.groups_outlined,
-          label: "community"));
+        pageIndex: _communityPage,
+        iconAsset: AppSvgAsset.profile,
+        label: "community",
+      ));
     }
     return tabs;
   }
@@ -769,11 +789,22 @@ class _HomeShellState extends State<_HomeShell> {
       case _homePage:
         return RecordingPage(key: _recordPageKey, range: _recordRange);
       case _chatPage:
-        return ChatPage(key: _chatPageKey);
+        return ChatPage(
+          key: _chatPageKey,
+          onHistoryChanged: _onChatHistoryChanged,
+        );
       case _statisticsPage:
-        return ReportPage(key: _reportPageKey, range: _recordRange);
+        return ReportPage(key: _reportPageKey);
       case _photosPage:
-        return PhotosPage(key: _photosPageKey, viewMode: _photosViewMode);
+        return SettingsPage(
+          themeController: widget.themeController,
+          isGoogleLoggedIn: _isGoogleLoggedIn,
+          accountName: _accountName,
+          accountEmail: _accountEmail,
+          onGoogleLogin: _loginWithGoogleToken,
+          onGoogleLogout: _logout,
+          onManageChildProfile: _openChildProfileFromSettings,
+        );
       case _marketPage:
         return MarketPage(section: _marketSection);
       case _communityPage:
@@ -783,6 +814,7 @@ class _HomeShellState extends State<_HomeShell> {
     }
   }
 
+  // ignore: unused_element
   Future<void> _openSettings() async {
     if (Navigator.of(context).canPop()) {
       Navigator.of(context).pop();
@@ -823,6 +855,7 @@ class _HomeShellState extends State<_HomeShell> {
     );
     await AppSessionStore.persistRuntimeState();
     _bootstrapAccountFromToken();
+    unawaited(_loadChatHistory());
     _flushPendingAssistantActionIfAny();
   }
 
@@ -864,6 +897,16 @@ class _HomeShellState extends State<_HomeShell> {
       _accountName = name.trim().isEmpty ? "Google User" : name.trim();
       _accountEmail = email.trim().isEmpty ? "Connected" : email.trim();
     });
+  }
+
+  void _clearLinkedProfileState() {
+    BabyAIApi.setRuntimeIds(
+      babyId: "",
+      householdId: "",
+      albumId: "",
+    );
+    _selectedChatSessionId = null;
+    _chatHistory = <_ChatHistoryItem>[];
   }
 
   Future<void> _loginWithGoogleToken() async {
@@ -924,8 +967,13 @@ class _HomeShellState extends State<_HomeShell> {
             FilledButton(
               onPressed: () {
                 final String token = tokenController.text.trim();
+                final String previousToken =
+                    BabyAIApi.currentBearerToken.trim();
                 if (token.isNotEmpty) {
                   BabyAIApi.setBearerToken(token);
+                  if (token != previousToken) {
+                    _clearLinkedProfileState();
+                  }
                 }
                 final String name = nameController.text.trim();
                 final String email = emailController.text.trim();
@@ -963,6 +1011,7 @@ class _HomeShellState extends State<_HomeShell> {
 
   void _logout() {
     BabyAIApi.setBearerToken("");
+    _clearLinkedProfileState();
     setState(() {
       _isGoogleLoggedIn = false;
       _accountName = "Google account";
@@ -972,161 +1021,36 @@ class _HomeShellState extends State<_HomeShell> {
   }
 
   void _onTopRefreshPressed() {
-    if (_index == _homePage) {
-      _recordPageKey.currentState?.refreshData();
-      return;
-    }
     if (_index == _statisticsPage) {
       _reportPageKey.currentState?.refreshData();
     }
   }
 
-  String _recordRangeLabel(BuildContext context, RecordRange range) {
-    switch (range) {
-      case RecordRange.day:
-        return tr(context, ko: "일", en: "Day", es: "Dia");
-      case RecordRange.week:
-        return tr(context, ko: "주", en: "Week", es: "Semana");
-      case RecordRange.month:
-        return tr(context, ko: "월", en: "Month", es: "Mes");
-    }
-  }
-
-  bool _showRangeTopActions() {
-    return _index == _homePage || _index == _statisticsPage;
-  }
-
-  String _recordRangeDateLabel() {
-    final DateTime now = DateTime.now();
-    switch (_recordRange) {
-      case RecordRange.day:
-        return "${now.year}-${now.month.toString().padLeft(2, "0")}-${now.day.toString().padLeft(2, "0")}";
-      case RecordRange.week:
-        final DateTime monday = now.subtract(Duration(days: now.weekday - 1));
-        final DateTime sunday = monday.add(const Duration(days: 6));
-        return "${monday.month}/${monday.day}-${sunday.month}/${sunday.day}";
-      case RecordRange.month:
-        return "${now.year}-${now.month.toString().padLeft(2, "0")}";
-    }
-  }
-
-  Widget _buildTopRangeDateChip(BuildContext context) {
-    final ColorScheme color = Theme.of(context).colorScheme;
-    return Container(
-      height: 40,
-      padding: const EdgeInsets.symmetric(horizontal: 10),
-      decoration: BoxDecoration(
-        color: color.surfaceContainerHighest.withValues(alpha: 0.55),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          const Icon(Icons.calendar_month_outlined, size: 16),
-          const SizedBox(width: 6),
-          Text(
-            _recordRangeDateLabel(),
-            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _openRecordRangeMenu(BuildContext anchorContext) async {
-    final List<RecordRange> candidates = RecordRange.values
-        .where((RecordRange item) => item != _recordRange)
-        .toList();
-    if (candidates.isEmpty) {
-      return;
-    }
-
-    final RenderBox button = anchorContext.findRenderObject()! as RenderBox;
-    final RenderBox overlay =
-        Overlay.of(anchorContext).context.findRenderObject()! as RenderBox;
-    final RelativeRect position = RelativeRect.fromRect(
-      Rect.fromPoints(
-        button.localToGlobal(Offset.zero, ancestor: overlay),
-        button.localToGlobal(button.size.bottomRight(Offset.zero),
-            ancestor: overlay),
-      ),
-      Offset.zero & overlay.size,
-    );
-
-    final RecordRange? selected = await showMenu<RecordRange>(
-      context: anchorContext,
-      position: position,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      constraints: const BoxConstraints(minWidth: 72, maxWidth: 116),
-      items: candidates
-          .map(
-            (RecordRange value) => PopupMenuItem<RecordRange>(
-              value: value,
-              height: 34,
-              child: Text(_recordRangeLabel(anchorContext, value)),
-            ),
-          )
-          .toList(),
-    );
-
-    if (selected != null && mounted) {
-      setState(() => _recordRange = selected);
-    }
-  }
-
-  Widget _buildRecordRangeDropdown(BuildContext context) {
-    final ColorScheme color = Theme.of(context).colorScheme;
-    return Builder(
-      builder: (BuildContext anchorContext) {
-        return Material(
-          color: color.surfaceContainerHighest.withValues(alpha: 0.45),
-          shape: const StadiumBorder(),
-          clipBehavior: Clip.antiAlias,
-          child: InkWell(
-            customBorder: const StadiumBorder(),
-            onTap: () => _openRecordRangeMenu(anchorContext),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  Text(
-                    _recordRangeLabel(context, _recordRange),
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(width: 3),
-                  const Icon(Icons.arrow_drop_down, size: 16),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
   Widget _buildHeaderControls(BuildContext context) {
     switch (_index) {
       case _homePage:
-        return _buildRecordRangeDropdown(context);
-      case _photosPage:
         return Wrap(
           spacing: 8,
           children: <Widget>[
             _HeaderChoice(
-              selected: _photosViewMode == PhotosViewMode.tiles,
-              label: tr(context, ko: "타일", en: "Tiles", es: "Mosaico"),
-              onTap: () =>
-                  setState(() => _photosViewMode = PhotosViewMode.tiles),
+              selected: _recordRange == RecordRange.day,
+              label: tr(context, ko: "일", en: "Day", es: "Dia"),
+              onTap: () => setState(() => _recordRange = RecordRange.day),
             ),
             _HeaderChoice(
-              selected: _photosViewMode == PhotosViewMode.albums,
-              label: tr(context, ko: "앨범", en: "Albums", es: "Albumes"),
-              onTap: () =>
-                  setState(() => _photosViewMode = PhotosViewMode.albums),
+              selected: _recordRange == RecordRange.week,
+              label: tr(context, ko: "주", en: "Week", es: "Semana"),
+              onTap: () => setState(() => _recordRange = RecordRange.week),
+            ),
+            _HeaderChoice(
+              selected: _recordRange == RecordRange.month,
+              label: tr(context, ko: "월", en: "Month", es: "Mes"),
+              onTap: () => setState(() => _recordRange = RecordRange.month),
             ),
           ],
         );
+      case _photosPage:
+        return const _HeaderHint(label: "Settings");
       case _marketPage:
         return Wrap(
           spacing: 8,
@@ -1193,7 +1117,9 @@ class _HomeShellState extends State<_HomeShell> {
           ),
         );
       case _statisticsPage:
-        return _buildRecordRangeDropdown(context);
+        return _HeaderHint(
+            label: tr(context,
+                ko: "일간 + 주간", en: "Daily + Weekly", es: "Diario + Semanal"));
       case _chatPage:
       default:
         return _HeaderHint(
@@ -1204,84 +1130,63 @@ class _HomeShellState extends State<_HomeShell> {
 
   PreferredSizeWidget _buildTopBar(BuildContext context) {
     final ColorScheme color = Theme.of(context).colorScheme;
-    final bool isIOS = Theme.of(context).platform == TargetPlatform.iOS;
-    final bool isDark = Theme.of(context).brightness == Brightness.dark;
-    final SystemUiOverlayStyle overlayStyle =
-        (isDark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark)
-            .copyWith(statusBarColor: Colors.transparent);
-    final double safeTopInset = MediaQuery.paddingOf(context).top;
-    final double iosTitleOffset = isIOS
-        ? (safeTopInset >= 54
-            ? 6
-            : safeTopInset >= 44
-                ? 3
-                : 0)
-        : 0;
     return AppBar(
       automaticallyImplyLeading: false,
-      toolbarHeight: isIOS ? 58 + iosTitleOffset : 72,
+      toolbarHeight: 72,
       elevation: 0,
       scrolledUnderElevation: 0,
-      systemOverlayStyle: overlayStyle,
-      forceMaterialTransparency: true,
       backgroundColor: Colors.transparent,
       surfaceTintColor: Colors.transparent,
-      clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(
-          bottom: Radius.circular(isIOS ? 16 : 24),
-        ),
+        borderRadius: const BorderRadius.vertical(bottom: Radius.circular(24)),
         side: BorderSide(color: color.outlineVariant.withValues(alpha: 0.28)),
       ),
-      flexibleSpace: ClipRRect(
-        borderRadius: BorderRadius.vertical(
-          bottom: Radius.circular(isIOS ? 16 : 24),
-        ),
-        child: BackdropFilter(
-          filter: ui.ImageFilter.blur(sigmaX: 14, sigmaY: 14),
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: <Color>[
-                  color.surface.withValues(alpha: isIOS ? 0.62 : 0.78),
-                  color.surface.withValues(alpha: isIOS ? 0.42 : 0.58),
-                ],
-              ),
-            ),
+      flexibleSpace: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: <Color>[
+              color.surface.withValues(alpha: 0.98),
+              color.surface.withValues(alpha: 0.82),
+            ],
           ),
         ),
       ),
-      titleSpacing: isIOS ? 12 : 12,
-      title: Padding(
-        padding: EdgeInsets.only(top: iosTitleOffset),
-        child: Row(
-          children: <Widget>[
-            _RoundTopButton(
-                icon: Icons.menu,
-                onTap: () => _scaffoldKey.currentState?.openDrawer()),
+      titleSpacing: 12,
+      title: Row(
+        children: <Widget>[
+          _RoundTopButton(icon: Icons.menu, onTap: _openChatHistoryDrawer),
+          const SizedBox(width: 8),
+          Expanded(child: _buildHeaderControls(context)),
+          if (_index == _statisticsPage) ...<Widget>[
             const SizedBox(width: 8),
-            if (_index == _homePage || _index == _statisticsPage)
-              Flexible(
-                fit: FlexFit.loose,
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: _buildHeaderControls(context),
-                ),
-              )
-            else
-              Expanded(child: _buildHeaderControls(context)),
-            if (_showRangeTopActions()) ...<Widget>[
-              const SizedBox(width: 8),
-              _buildTopRangeDateChip(context),
-              const SizedBox(width: 8),
-              _RoundTopButton(icon: Icons.refresh, onTap: _onTopRefreshPressed),
-            ],
+            _RoundTopButton(icon: Icons.refresh, onTap: _onTopRefreshPressed),
           ],
-        ),
+        ],
       ),
     );
+  }
+
+  Widget _buildBottomTabIcon(
+    _BottomMenuTab tab, {
+    required Color color,
+    required bool selected,
+  }) {
+    final String? iconAsset = tab.iconAsset;
+    if (iconAsset != null) {
+      return AppSvgIcon(
+        iconAsset,
+        size: 22,
+        color: color,
+      );
+    }
+
+    final IconData? fallbackIcon = tab.iconData;
+    final IconData icon = selected
+        ? (tab.selectedIconData ?? fallbackIcon ?? Icons.circle_outlined)
+        : (fallbackIcon ?? Icons.circle_outlined);
+    return Icon(icon, size: 22, color: color);
   }
 
   @override
@@ -1312,150 +1217,150 @@ class _HomeShellState extends State<_HomeShell> {
         child: SafeArea(
           child: Column(
             children: <Widget>[
-              Expanded(
-                child: ListView(
-                  padding: EdgeInsets.zero,
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 10, 12, 6),
+                child: Row(
                   children: <Widget>[
-                    const Padding(
-                      padding: EdgeInsets.fromLTRB(16, 6, 16, 8),
-                      child: Text("BabyAI",
-                          style: TextStyle(
-                              fontSize: 24, fontWeight: FontWeight.w700)),
+                    const AppSvgIcon(AppSvgAsset.aiChatSparkles, size: 24),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        "Previous chats",
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
                     ),
-                    ListTile(
-                      leading: const Icon(Icons.home_outlined),
-                      title: Text(_labelForIndex(context, _homePage)),
-                      selected: _index == _homePage,
-                      onTap: () => _selectIndex(_homePage),
-                    ),
-                    ListTile(
-                      leading: const Icon(Icons.insert_chart_outlined),
-                      title: Text(_labelForIndex(context, _statisticsPage)),
-                      selected: _index == _statisticsPage,
-                      onTap: () => _selectIndex(_statisticsPage),
-                    ),
-                    ListTile(
-                      leading: const Icon(Icons.chat_bubble_outline),
-                      title: Text(_labelForIndex(context, _chatPage)),
-                      selected: _index == _chatPage,
-                      onTap: () => _selectIndex(_chatPage),
-                    ),
-                    ListTile(
-                      leading: const Icon(Icons.photo_library_outlined),
-                      title: Text(_labelForIndex(context, _photosPage)),
-                      selected: _index == _photosPage,
-                      onTap: () => _selectIndex(_photosPage),
-                    ),
-                    ListTile(
-                      leading: const Icon(Icons.storefront_outlined),
-                      title: Text(_labelForIndex(context, _marketPage)),
-                      selected: _index == _marketPage,
-                      onTap: () => _selectIndex(_marketPage),
-                    ),
-                    ListTile(
-                      leading: const Icon(Icons.groups_outlined),
-                      title: Text(_labelForIndex(context, _communityPage)),
-                      selected: _index == _communityPage,
-                      onTap: () => _selectIndex(_communityPage),
-                    ),
-                    const Divider(),
-                    ListTile(
-                      leading: const Icon(Icons.settings_outlined),
-                      title: Text(
-                          tr(context, ko: "설정", en: "Settings", es: "Ajustes")),
-                      onTap: _openSettings,
+                    IconButton(
+                      onPressed: _chatHistoryLoading
+                          ? null
+                          : () => unawaited(_loadChatHistory()),
+                      icon: const Icon(Icons.refresh_rounded),
+                      tooltip: "Refresh history",
                     ),
                   ],
                 ),
               ),
-              Container(
-                padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-                decoration: BoxDecoration(
-                  color: color.surfaceContainerHighest.withValues(alpha: 0.45),
-                  border: Border(
-                      top: BorderSide(
-                          color: color.outlineVariant.withValues(alpha: 0.5))),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: () => unawaited(_createNewChatFromDrawer()),
+                    icon: const Icon(Icons.add_comment_outlined),
+                    label: const Text("New conversation"),
+                  ),
                 ),
-                child: Column(
-                  children: <Widget>[
-                    Row(
-                      children: <Widget>[
-                        CircleAvatar(
-                          radius: 18,
-                          backgroundColor: color.primaryContainer,
-                          child: const Icon(Icons.account_circle_outlined),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: <Widget>[
-                              Text(_accountName,
+              ),
+              if (_chatHistoryError != null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  child: Text(
+                    _chatHistoryError!,
+                    style: TextStyle(
+                      color: color.error,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              Expanded(
+                child: _chatHistoryLoading && _chatHistory.isEmpty
+                    ? const Center(child: CircularProgressIndicator())
+                    : _chatHistory.isEmpty
+                        ? Center(
+                            child: Text(
+                              "No previous chats yet.",
+                              style: TextStyle(
+                                color: color.onSurfaceVariant,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          )
+                        : ListView.separated(
+                            padding: const EdgeInsets.fromLTRB(8, 4, 8, 12),
+                            itemCount: _chatHistory.length,
+                            separatorBuilder: (_, __) =>
+                                const SizedBox(height: 2),
+                            itemBuilder: (BuildContext context, int index) {
+                              final _ChatHistoryItem item = _chatHistory[index];
+                              final bool selected =
+                                  item.sessionId == _selectedChatSessionId;
+                              return ListTile(
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                selected: selected,
+                                selectedTileColor: color.primaryContainer
+                                    .withValues(alpha: 0.35),
+                                onTap: () => unawaited(
+                                  _openChatSessionFromDrawer(item.sessionId),
+                                ),
+                                leading: CircleAvatar(
+                                  radius: 16,
+                                  backgroundColor:
+                                      color.surfaceContainerHighest,
+                                  child: AppSvgIcon(
+                                    AppSvgAsset.aiChatSparkles,
+                                    size: 15,
+                                    color: selected
+                                        ? color.primary
+                                        : color.onSurfaceVariant,
+                                  ),
+                                ),
+                                title: Text(
+                                  item.title,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
                                   style: const TextStyle(
-                                      fontWeight: FontWeight.w700)),
-                              Text(_accountEmail,
-                                  overflow: TextOverflow.ellipsis),
-                            ],
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                subtitle: Text(
+                                  item.preview.isEmpty
+                                      ? "No preview"
+                                      : item.preview,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                trailing: Text(
+                                  _formatChatHistoryTime(item.updatedAt),
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: color.onSurfaceVariant,
+                                  ),
+                                ),
+                              );
+                            },
                           ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: <Widget>[
-                        Expanded(
-                          child: FilledButton.tonalIcon(
-                            onPressed: _isGoogleLoggedIn
-                                ? null
-                                : _loginWithGoogleToken,
-                            icon: const Icon(Icons.login),
-                            label: Text(tr(context,
-                                ko: "로그인", en: "Login", es: "Entrar")),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed: _isGoogleLoggedIn ? _logout : null,
-                            icon: const Icon(Icons.logout),
-                            label: Text(tr(context,
-                                ko: "로그아웃", en: "Logout", es: "Salir")),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
               ),
             ],
           ),
         ),
       ),
-      floatingActionButton: _index == _photosPage
-          ? FloatingActionButton.extended(
-              onPressed: () {
-                unawaited(
-                    _photosPageKey.currentState?.pickAndUploadFromGallery());
-              },
-              icon: const Icon(Icons.add_a_photo_outlined),
-              label: Text(
-                tr(context, ko: "사진 업로드", en: "Upload", es: "Subir"),
-              ),
-            )
-          : null,
       body: SafeArea(child: _buildCurrentPage()),
       bottomNavigationBar: showBottomNav
           ? NavigationBar(
-              height: 58,
               labelBehavior: NavigationDestinationLabelBehavior.alwaysHide,
               selectedIndex: selectedBottomIndex,
               onDestinationSelected: (int i) {
-                setState(() => _index = bottomTabs[i].pageIndex);
+                _setIndex(bottomTabs[i].pageIndex);
               },
               destinations: bottomTabs
                   .map(
                     (_BottomMenuTab tab) => NavigationDestination(
-                        icon: Icon(tab.icon), label: tab.label),
+                      icon: _buildBottomTabIcon(
+                        tab,
+                        color: color.onSurfaceVariant,
+                        selected: false,
+                      ),
+                      selectedIcon: _buildBottomTabIcon(
+                        tab,
+                        color: color.primary,
+                        selected: true,
+                      ),
+                      label: tab.label,
+                    ),
                   )
                   .toList(),
             )
@@ -1465,12 +1370,33 @@ class _HomeShellState extends State<_HomeShell> {
 }
 
 class _BottomMenuTab {
-  const _BottomMenuTab(
-      {required this.pageIndex, required this.icon, required this.label});
+  const _BottomMenuTab({
+    required this.pageIndex,
+    required this.label,
+    this.iconAsset,
+    this.iconData,
+    this.selectedIconData,
+  }) : assert(iconAsset != null || iconData != null);
 
   final int pageIndex;
-  final IconData icon;
+  final String? iconAsset;
+  final IconData? iconData;
+  final IconData? selectedIconData;
   final String label;
+}
+
+class _ChatHistoryItem {
+  const _ChatHistoryItem({
+    required this.sessionId,
+    required this.title,
+    required this.preview,
+    required this.updatedAt,
+  });
+
+  final String sessionId;
+  final String title;
+  final String preview;
+  final DateTime updatedAt;
 }
 
 class _AssistantRecordAction {
@@ -1526,7 +1452,6 @@ class _HeaderChoice extends StatelessWidget {
           ? color.primaryContainer.withValues(alpha: 0.92)
           : color.surfaceContainerHighest.withValues(alpha: 0.45),
       borderRadius: BorderRadius.circular(999),
-      clipBehavior: Clip.antiAlias,
       child: InkWell(
         borderRadius: BorderRadius.circular(999),
         onTap: onTap,

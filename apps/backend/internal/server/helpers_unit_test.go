@@ -143,8 +143,15 @@ func TestCalculateNextFeedingETA(t *testing.T) {
 
 	lateNow := time.Date(2026, 2, 15, 14, 0, 0, 0, time.UTC)
 	lateResult := calculateNextFeedingETA(feedings, lateNow)
-	if lateResult.ETAMinutes == nil || *lateResult.ETAMinutes != 0 {
-		t.Fatalf("expected ETA clamp to 0, got %+v", lateResult.ETAMinutes)
+	if lateResult.ETAMinutes == nil || *lateResult.ETAMinutes != 120 {
+		t.Fatalf("expected ETA 120 for next cycle projection, got %+v", lateResult.ETAMinutes)
+	}
+
+	withFuture := append([]time.Time{}, feedings...)
+	withFuture = append(withFuture, time.Date(2026, 2, 15, 16, 0, 0, 0, time.UTC))
+	futureIgnored := calculateNextFeedingETA(withFuture, now)
+	if futureIgnored.ETAMinutes == nil || *futureIgnored.ETAMinutes != 60 {
+		t.Fatalf("expected future feeding to be ignored, got %+v", futureIgnored.ETAMinutes)
 	}
 
 	unstable := calculateNextFeedingETA([]time.Time{feedings[0]}, now)
@@ -174,5 +181,25 @@ func TestTrendString(t *testing.T) {
 	}
 	if got := trendString(50, 100); got != "-49%" {
 		t.Fatalf("expected -49%% based on current rounding behavior, got %q", got)
+	}
+}
+
+func TestAgeMonthsFromBirthDate(t *testing.T) {
+	birth := time.Date(2024, 1, 15, 10, 30, 0, 0, time.FixedZone("KST", 9*60*60))
+
+	if got := ageMonthsFromBirthDate(birth, time.Date(2024, 2, 14, 23, 0, 0, 0, time.UTC)); got != 0 {
+		t.Fatalf("expected 0 months before month boundary, got %d", got)
+	}
+	if got := ageMonthsFromBirthDate(birth, time.Date(2024, 2, 15, 0, 0, 0, 0, time.UTC)); got != 1 {
+		t.Fatalf("expected 1 month on month boundary, got %d", got)
+	}
+	if got := ageMonthsFromBirthDate(birth, time.Date(2024, 3, 20, 0, 0, 0, 0, time.UTC)); got != 2 {
+		t.Fatalf("expected 2 months, got %d", got)
+	}
+	if got := ageMonthsFromBirthDate(birth, time.Date(2023, 12, 31, 0, 0, 0, 0, time.UTC)); got != 0 {
+		t.Fatalf("expected 0 months for pre-birth date, got %d", got)
+	}
+	if got := ageMonthsFromBirthDate(time.Time{}, time.Now().UTC()); got != 0 {
+		t.Fatalf("expected 0 months for zero birth date, got %d", got)
 	}
 }

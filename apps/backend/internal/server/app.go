@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"sort"
 	"strings"
@@ -590,18 +591,35 @@ type etaCalculation struct {
 }
 
 func calculateNextFeedingETA(feedings []time.Time, now time.Time) etaCalculation {
-	if len(feedings) < 2 {
+	normalizedNow := now.UTC()
+	// Ignore future feedings so ETA is always anchored to "current" time.
+	candidates := make([]time.Time, 0, len(feedings))
+	for _, feedingAt := range feedings {
+		ts := feedingAt.UTC()
+		if ts.After(normalizedNow) {
+			continue
+		}
+		candidates = append(candidates, ts)
+	}
+	if len(candidates) < 2 {
 		return etaCalculation{Unstable: true}
 	}
-	ordered := make([]time.Time, len(feedings))
-	copy(ordered, feedings)
+	ordered := make([]time.Time, len(candidates))
+	copy(ordered, candidates)
 	sort.Slice(ordered, func(i, j int) bool {
 		return ordered[i].Before(ordered[j])
 	})
 
 	intervals := make([]float64, 0, len(ordered)-1)
 	for idx := 1; idx < len(ordered); idx++ {
-		intervals = append(intervals, ordered[idx].Sub(ordered[idx-1]).Minutes())
+		gapMinutes := ordered[idx].Sub(ordered[idx-1]).Minutes()
+		if gapMinutes <= 0 {
+			continue
+		}
+		intervals = append(intervals, gapMinutes)
+	}
+	if len(intervals) == 0 {
+		return etaCalculation{Unstable: true}
 	}
 
 	if len(intervals) >= 5 {
@@ -623,9 +641,21 @@ func calculateNextFeedingETA(feedings []time.Time, now time.Time) etaCalculation
 	for _, interval := range intervals {
 		total += interval
 	}
-	avg := int(total / float64(len(intervals)))
-	expected := ordered[len(ordered)-1].Add(time.Duration(avg) * time.Minute)
-	eta := int(expected.Sub(now.UTC()).Minutes())
+	avg := int(math.Round(total / float64(len(intervals))))
+	if avg <= 0 {
+		return etaCalculation{Unstable: true}
+	}
+
+	lastFeeding := ordered[len(ordered)-1]
+	expected := lastFeeding.Add(time.Duration(avg) * time.Minute)
+	// Keep projecting by average interval until expected is in the future.
+	if expected.Before(normalizedNow) {
+		overdueMinutes := normalizedNow.Sub(expected).Minutes()
+		cycles := int(overdueMinutes/float64(avg)) + 1
+		expected = expected.Add(time.Duration(cycles*avg) * time.Minute)
+	}
+
+	eta := int(math.Ceil(expected.Sub(normalizedNow).Minutes()))
 	if eta < 0 {
 		eta = 0
 	}

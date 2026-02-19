@@ -10,6 +10,28 @@ class AppSessionStore {
   static DateTime? _pendingSleepStart;
   static DateTime? _pendingFormulaStart;
 
+  static String _jwtSubject(String token) {
+    final String normalizedToken = token.trim();
+    if (normalizedToken.isEmpty) {
+      return "";
+    }
+    try {
+      final List<String> parts = normalizedToken.split(".");
+      if (parts.length < 2) {
+        return "";
+      }
+      final String payloadPart = base64Url.normalize(parts[1]);
+      final Object? payload =
+          jsonDecode(utf8.decode(base64Url.decode(payloadPart)));
+      if (payload is! Map<String, dynamic>) {
+        return "";
+      }
+      return (payload["sub"] ?? "").toString().trim();
+    } catch (_) {
+      return "";
+    }
+  }
+
   static File _sessionFile() {
     final String home = Platform.environment["USERPROFILE"] ??
         Platform.environment["HOME"] ??
@@ -33,23 +55,39 @@ class AppSessionStore {
         return;
       }
 
+      final String storedToken = (parsed["token"] ?? "").toString().trim();
+      final String defineToken = AppEnv.apiBearerToken.trim();
       final bool hasDefineBabyId = AppEnv.babyId.trim().isNotEmpty;
       final bool hasDefineHouseholdId = AppEnv.householdId.trim().isNotEmpty;
       final bool hasDefineAlbumId = AppEnv.albumId.trim().isNotEmpty;
-      final bool hasDefineToken = AppEnv.apiBearerToken.trim().isNotEmpty;
+      final bool hasDefineToken = defineToken.isNotEmpty;
+
+      // Avoid restoring stale IDs when a different token is injected by
+      // --dart-define (common in local/dev account switching).
+      bool restoreIdsFromSession = true;
+      if (hasDefineToken && storedToken != defineToken) {
+        final String storedSub = _jwtSubject(storedToken);
+        final String defineSub = _jwtSubject(defineToken);
+        restoreIdsFromSession =
+            storedSub.isNotEmpty && defineSub.isNotEmpty && storedSub == defineSub;
+      }
 
       BabyAIApi.setRuntimeIds(
-        babyId: hasDefineBabyId ? null : (parsed["baby_id"] ?? "").toString(),
+        babyId: hasDefineBabyId
+            ? null
+            : (restoreIdsFromSession ? (parsed["baby_id"] ?? "").toString() : ""),
         householdId: hasDefineHouseholdId
             ? null
-            : (parsed["household_id"] ?? "").toString(),
-        albumId:
-            hasDefineAlbumId ? null : (parsed["album_id"] ?? "").toString(),
+            : (restoreIdsFromSession
+                ? (parsed["household_id"] ?? "").toString()
+                : ""),
+        albumId: hasDefineAlbumId
+            ? null
+            : (restoreIdsFromSession ? (parsed["album_id"] ?? "").toString() : ""),
       );
 
-      final String token = (parsed["token"] ?? "").toString().trim();
-      if (!hasDefineToken && token.isNotEmpty) {
-        BabyAIApi.setBearerToken(token);
+      if (!hasDefineToken && storedToken.isNotEmpty) {
+        BabyAIApi.setBearerToken(storedToken);
       }
 
       final String pendingSleepRaw =

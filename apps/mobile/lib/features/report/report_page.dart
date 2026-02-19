@@ -1,21 +1,32 @@
+import "dart:async";
 import "dart:math" as math;
 
 import "package:flutter/material.dart";
 
 import "../../core/i18n/app_i18n.dart";
 import "../../core/network/babyai_api.dart";
-import "../../core/theme/app_theme_controller.dart";
 import "../../core/widgets/simple_donut_chart.dart";
-import "../recording/recording_page.dart";
-import "../recording/record_entry_sheet.dart";
+import "../../core/widgets/simple_line_chart.dart";
+import "../../core/widgets/app_svg_icon.dart";
+
+const Duration _kTabAnimationDuration = Duration(milliseconds: 220);
+const int _minutesPerDay = 24 * 60;
+
+class _SemanticColors {
+  static const Color sleep = Color(0xFF9B7AD8);
+  static const Color feed = Color(0xFF2D9CDB);
+  static const Color diaper = Color(0xFF1CA79A);
+  static const Color play = Color(0xFFF09819);
+  static const Color medication = Color(0xFFE84076);
+  static const Color hospital = Color(0xFF8E44AD);
+  static const Color memo = Color(0xFFA546C9);
+  static const Color other = Color(0xFF9AA4B2);
+}
+
+enum _StatsRange { daily, weekly, monthly }
 
 class ReportPage extends StatefulWidget {
-  const ReportPage({
-    super.key,
-    required this.range,
-  });
-
-  final RecordRange range;
+  const ReportPage({super.key});
 
   @override
   State<ReportPage> createState() => ReportPageState();
@@ -24,62 +35,27 @@ class ReportPage extends StatefulWidget {
 class ReportPageState extends State<ReportPage> {
   bool _loading = false;
   String? _error;
-  Map<String, dynamic>? _daily;
-  Map<String, dynamic>? _weekly;
-  List<Map<String, dynamic>> _weeklyDailyReports = <Map<String, dynamic>>[];
-  List<Map<String, dynamic>> _monthDailyReports = <Map<String, dynamic>>[];
-  DateTime? _weekStartUtc;
-  DateTime? _monthStartUtc;
 
-  static const Map<String, Color> _categoryColors = <String, Color>{
-    "sleep": Color(0xFF8C8ED4),
-    "breastfeed": Color(0xFFE05A67),
-    "formula": Color(0xFFE0B44C),
-    "pee": Color(0xFF6FA8DC),
-    "poo": Color(0xFF8A6A5A),
-    "medication": Color(0xFF72B37E),
-  };
-  static const List<String> _timelineCategoryOrder = <String>[
-    "sleep",
-    "breastfeed",
-    "formula",
-    "poo",
-    "pee",
-    "medication",
-  ];
+  _StatsRange _selected = _StatsRange.daily;
+  DateTime _todayUtc = _utcDate(DateTime.now().toUtc());
+  DateTime _weekStartUtc = _toWeekStart(_utcDate(DateTime.now().toUtc()));
+  DateTime _monthStartUtc = DateTime.utc(
+    DateTime.now().toUtc().year,
+    DateTime.now().toUtc().month,
+    1,
+  );
+
+  Map<DateTime, _DayStats> _statsByDay = <DateTime, _DayStats>{};
+  Map<String, dynamic>? _weeklyReport;
 
   @override
   void initState() {
     super.initState();
-    _loadReports();
-  }
-
-  @override
-  void didUpdateWidget(covariant ReportPage oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.range != widget.range) {
-      _loadReports();
-    }
+    unawaited(_loadReports());
   }
 
   Future<void> refreshData() async {
     await _loadReports();
-  }
-
-  DateTime _toWeekStart(DateTime day) {
-    final DateTime utc = DateTime.utc(day.year, day.month, day.day);
-    return utc.subtract(Duration(days: utc.weekday - DateTime.monday));
-  }
-
-  Future<Map<String, dynamic>> _loadDailySafe(DateTime day) async {
-    try {
-      return await BabyAIApi.instance.dailyReport(day);
-    } catch (_) {
-      return <String, dynamic>{
-        "date": day.toIso8601String().split("T").first,
-        "summary": <String>[],
-      };
-    }
   }
 
   Future<void> _loadReports() async {
@@ -88,48 +64,60 @@ class ReportPageState extends State<ReportPage> {
       _error = null;
     });
 
-    final DateTime now = DateTime.now().toUtc();
-    final DateTime weekStart = _toWeekStart(now);
-    final DateTime monthStart = DateTime.utc(now.year, now.month, 1);
-    final int daysInMonth = DateTime.utc(now.year, now.month + 1, 0).day;
-    try {
-      final Future<Map<String, dynamic>> dailyFuture =
-          BabyAIApi.instance.dailyReport(now);
-      final Future<Map<String, dynamic>> weeklyFuture =
-          BabyAIApi.instance.weeklyReport(weekStart);
-      final List<Future<Map<String, dynamic>>> dayFutures =
-          List<Future<Map<String, dynamic>>>.generate(
-        7,
-        (int index) => _loadDailySafe(weekStart.add(Duration(days: index))),
-      );
-      final Future<List<Map<String, dynamic>>>? monthDailyFuture =
-          widget.range == RecordRange.month
-              ? Future.wait(
-                  List<Future<Map<String, dynamic>>>.generate(
-                    daysInMonth,
-                    (int index) =>
-                        _loadDailySafe(monthStart.add(Duration(days: index))),
-                  ),
-                )
-              : null;
+    final DateTime nowUtc = _utcDate(DateTime.now().toUtc());
+    final DateTime weekStartUtc = _toWeekStart(nowUtc);
+    final DateTime monthStartUtc = DateTime.utc(nowUtc.year, nowUtc.month, 1);
 
-      final Map<String, dynamic> daily = await dailyFuture;
-      final Map<String, dynamic> weekly = await weeklyFuture;
-      final List<Map<String, dynamic>> weeklyDaily =
-          await Future.wait(dayFutures);
-      final List<Map<String, dynamic>> monthDaily = monthDailyFuture == null
-          ? _monthDailyReports
-          : await monthDailyFuture;
+    final List<DateTime> weekDays = List<DateTime>.generate(
+      7,
+      (int i) => weekStartUtc.add(Duration(days: i)),
+    );
+    final List<DateTime> monthDays = List<DateTime>.generate(
+      nowUtc.day,
+      (int i) => monthStartUtc.add(Duration(days: i)),
+    );
+
+    final Map<String, DateTime> uniqueDays = <String, DateTime>{
+      for (final DateTime day in monthDays) _dayKey(day): day,
+      for (final DateTime day in weekDays) _dayKey(day): day,
+      _dayKey(nowUtc): nowUtc,
+    };
+
+    try {
+      final Future<Map<String, dynamic>> weeklyFuture =
+          _loadWeeklySafe(weekStartUtc);
+      final Map<String, _DayStats> parsed = <String, _DayStats>{};
+
+      await Future.wait(uniqueDays.entries.map(
+        (MapEntry<String, DateTime> entry) async {
+          final Map<String, dynamic> report = await _loadDailySafe(entry.value);
+          parsed[entry.key] = _DayStats.fromReport(entry.value, report);
+        },
+      ));
+
+      if (!mounted) {
+        return;
+      }
 
       setState(() {
-        _daily = daily;
-        _weekly = weekly;
-        _weeklyDailyReports = weeklyDaily;
-        _weekStartUtc = weekStart;
-        _monthDailyReports = monthDaily;
-        _monthStartUtc = monthDailyFuture == null ? _monthStartUtc : monthStart;
+        _todayUtc = nowUtc;
+        _weekStartUtc = weekStartUtc;
+        _monthStartUtc = monthStartUtc;
+        _statsByDay = <DateTime, _DayStats>{
+          for (final MapEntry<String, DateTime> entry in uniqueDays.entries)
+            entry.value: parsed[entry.key] ?? _DayStats.empty(entry.value),
+        };
       });
+
+      final Map<String, dynamic> weekly = await weeklyFuture;
+      if (!mounted) {
+        return;
+      }
+      setState(() => _weeklyReport = weekly);
     } catch (error) {
+      if (!mounted) {
+        return;
+      }
       setState(() => _error = error.toString());
     } finally {
       if (mounted) {
@@ -138,1270 +126,2987 @@ class ReportPageState extends State<ReportPage> {
     }
   }
 
-  int _firstInt(String line) {
-    final RegExpMatch? match = RegExp(r"\d+").firstMatch(line);
-    if (match == null) {
-      return 0;
-    }
-    return int.tryParse(match.group(0) ?? "0") ?? 0;
-  }
-
-  _DayMetrics _parseDaily(Map<String, dynamic>? report) {
-    final List<String> summary =
-        ((report?["summary"] as List<dynamic>?) ?? <dynamic>[])
-            .map((dynamic item) => item.toString())
-            .toList();
-
-    int feedings = 0;
-    int breastfeedEvents = 0;
-    int formulaML = 0;
-    int sleepMinutes = 0;
-    int peeCount = 0;
-    int pooCount = 0;
-    int medicationCount = 0;
-
-    for (final String line in summary) {
-      final String lower = line.toLowerCase();
-      if (lower.contains("feeding events") || lower.startsWith("feedings")) {
-        feedings = _firstInt(line);
-      } else if (lower.contains("breastfeed")) {
-        breastfeedEvents = _firstInt(line);
-      } else if (lower.contains("formula total")) {
-        formulaML = _firstInt(line);
-      } else if (lower.contains("sleep total") ||
-          lower.contains("sleep logged")) {
-        sleepMinutes = _firstInt(line);
-      } else if (lower.contains("diaper")) {
-        final RegExpMatch? pee = RegExp(r"pee\s*(\d+)").firstMatch(lower);
-        final RegExpMatch? poo = RegExp(r"poo\s*(\d+)").firstMatch(lower);
-        peeCount = int.tryParse(pee?.group(1) ?? "0") ?? 0;
-        pooCount = int.tryParse(poo?.group(1) ?? "0") ?? 0;
-      } else if (lower.contains("medication")) {
-        medicationCount = _firstInt(line);
-      }
-    }
-
-    return _DayMetrics(
-      feedings: feedings,
-      breastfeedEvents: breastfeedEvents,
-      formulaML: formulaML,
-      sleepMinutes: sleepMinutes,
-      peeCount: peeCount,
-      pooCount: pooCount,
-      medicationCount: medicationCount,
-    );
-  }
-
-  Map<String, double> _toEstimatedMinutes(_DayMetrics metrics) {
-    final int estimatedFormulaSessions = metrics.formulaML <= 0
-        ? 0
-        : (metrics.formulaML / 120).round().clamp(1, 12);
-    final int inferredBreastfeedSessions = metrics.breastfeedEvents > 0
-        ? metrics.breastfeedEvents
-        : (metrics.feedings - estimatedFormulaSessions).clamp(0, 12);
-    final int estimatedFormulaMinutes = metrics.feedings > 0
-        ? estimatedFormulaSessions * 15
-        : (metrics.formulaML <= 0 ? 0 : (metrics.formulaML / 30).round());
-
-    return <String, double>{
-      "sleep": metrics.sleepMinutes.toDouble(),
-      "breastfeed": (inferredBreastfeedSessions * 18).toDouble(),
-      "formula": estimatedFormulaMinutes.toDouble(),
-      "pee": (metrics.peeCount * 5).toDouble(),
-      "poo": (metrics.pooCount * 7).toDouble(),
-      "medication": (metrics.medicationCount * 4).toDouble(),
-    };
-  }
-
-  String _weekLabel() {
-    final DateTime? start = _weekStartUtc;
-    if (start == null) {
-      return "-";
-    }
-    final DateTime end = start.add(const Duration(days: 6));
-    return "${start.month}/${start.day} - ${end.month}/${end.day}";
-  }
-
-  String _activeDateLabel() {
-    final DateTime now = DateTime.now();
-    switch (widget.range) {
-      case RecordRange.day:
-        return "${now.year}-${now.month.toString().padLeft(2, "0")}-${now.day.toString().padLeft(2, "0")}";
-      case RecordRange.week:
-        return _weekLabel();
-      case RecordRange.month:
-        final DateTime monthBase = _monthStartUtc ?? now;
-        return "${monthBase.year}-${monthBase.month.toString().padLeft(2, "0")}";
-    }
-  }
-
-  String _activeRangeName(BuildContext context) {
-    switch (widget.range) {
-      case RecordRange.day:
-        return tr(context, ko: "일", en: "Day", es: "Dia");
-      case RecordRange.week:
-        return tr(context, ko: "주", en: "Week", es: "Semana");
-      case RecordRange.month:
-        return tr(context, ko: "월", en: "Month", es: "Mes");
-    }
-  }
-
-  String _dayLabel(BuildContext context, DateTime day) {
-    switch (day.weekday) {
-      case DateTime.monday:
-        return tr(context, ko: "월", en: "Mon", es: "Lun");
-      case DateTime.tuesday:
-        return tr(context, ko: "화", en: "Tue", es: "Mar");
-      case DateTime.wednesday:
-        return tr(context, ko: "수", en: "Wed", es: "Mie");
-      case DateTime.thursday:
-        return tr(context, ko: "목", en: "Thu", es: "Jue");
-      case DateTime.friday:
-        return tr(context, ko: "금", en: "Fri", es: "Vie");
-      case DateTime.saturday:
-        return tr(context, ko: "토", en: "Sat", es: "Sab");
-      case DateTime.sunday:
-      default:
-        return tr(context, ko: "일", en: "Sun", es: "Dom");
-    }
-  }
-
-  DateTime? _parseDateTime(Object? raw) {
-    if (raw == null) {
-      return null;
-    }
-    final String text = raw.toString().trim();
-    if (text.isEmpty) {
-      return null;
-    }
+  Future<Map<String, dynamic>> _loadDailySafe(DateTime dayUtc) async {
     try {
-      return DateTime.parse(text).toLocal();
+      return await BabyAIApi.instance.dailyReport(dayUtc);
     } catch (_) {
-      return null;
+      return <String, dynamic>{"summary": <String>[], "events": <dynamic>[]};
     }
   }
 
-  Map<String, dynamic> _asMap(Object? raw) {
-    if (raw is Map<String, dynamic>) {
-      return raw;
-    }
-    if (raw is Map) {
-      return raw.map(
-        (dynamic key, dynamic value) =>
-            MapEntry<String, dynamic>(key.toString(), value),
-      );
-    }
-    return <String, dynamic>{};
-  }
-
-  List<_DailyEventItem> _parseDailyEvents(Map<String, dynamic>? report) {
-    final List<dynamic> raw =
-        (report?["events"] as List<dynamic>?) ?? <dynamic>[];
-    final List<_DailyEventItem> items = <_DailyEventItem>[];
-    for (final dynamic item in raw) {
-      if (item is! Map) {
-        continue;
-      }
-      final Map<String, dynamic> map = _asMap(item);
-      final String eventId = (map["event_id"] ?? "").toString().trim();
-      final String type = (map["type"] ?? "").toString().trim().toUpperCase();
-      final DateTime? start = _parseDateTime(map["start_time"]);
-      if (eventId.isEmpty || type.isEmpty || start == null) {
-        continue;
-      }
-      items.add(
-        _DailyEventItem(
-          eventId: eventId,
-          type: type,
-          startTime: start,
-          endTime: _parseDateTime(map["end_time"]),
-          value: _asMap(map["value"]),
-          metadata: _asMap(map["metadata"]),
-        ),
-      );
-    }
-    return items;
-  }
-
-  bool _isWeaningEvent(_DailyEventItem event) {
-    final List<String> candidates = <String>[
-      (event.value["category"] ?? "").toString(),
-      (event.value["entry_kind"] ?? "").toString(),
-      (event.metadata["category"] ?? "").toString(),
-      (event.metadata["entry_kind"] ?? "").toString(),
-    ];
-    return candidates.any(
-      (String item) => item.trim().toUpperCase() == "WEANING",
-    );
-  }
-
-  HomeTileType? _tileForEvent(_DailyEventItem event) {
-    switch (event.type) {
-      case "FORMULA":
-        return HomeTileType.formula;
-      case "BREASTFEED":
-        return HomeTileType.breastfeed;
-      case "SLEEP":
-        return HomeTileType.sleep;
-      case "PEE":
-      case "POO":
-        return HomeTileType.diaper;
-      case "MEDICATION":
-        return HomeTileType.medication;
-      case "MEMO":
-        if (_isWeaningEvent(event)) {
-          return HomeTileType.weaning;
-        }
-        return null;
-      default:
-        return null;
-    }
-  }
-
-  String _eventTypeLabel(BuildContext context, String type) {
-    switch (type) {
-      case "FORMULA":
-        return tr(context, ko: "분유", en: "Formula", es: "Formula");
-      case "BREASTFEED":
-        return tr(context, ko: "모유", en: "Breastfeed", es: "Lactancia");
-      case "SLEEP":
-        return tr(context, ko: "수면", en: "Sleep", es: "Sueno");
-      case "PEE":
-        return tr(context,
-            ko: "기저귀(소변)", en: "Diaper (pee)", es: "Panal (orina)");
-      case "POO":
-        return tr(context,
-            ko: "기저귀(대변)", en: "Diaper (poo)", es: "Panal (heces)");
-      case "MEDICATION":
-        return tr(context, ko: "투약", en: "Medication", es: "Medicacion");
-      case "MEMO":
-        return tr(context, ko: "메모", en: "Memo", es: "Memo");
-      default:
-        return type;
-    }
-  }
-
-  String _timeLabel(DateTime value) {
-    final String hour = value.hour.toString().padLeft(2, "0");
-    final String minute = value.minute.toString().padLeft(2, "0");
-    return "$hour:$minute";
-  }
-
-  int? _asInt(dynamic value) {
-    if (value is int) {
-      return value;
-    }
-    if (value is double) {
-      return value.round();
-    }
-    if (value is String) {
-      return int.tryParse(value.trim());
-    }
-    return null;
-  }
-
-  int _durationForEvent(_DailyEventItem event) {
-    final int? fromValue = _asInt(event.value["duration_min"]) ??
-        _asInt(event.value["duration_minutes"]);
-    if (fromValue != null && fromValue >= 0) {
-      return fromValue;
-    }
-    if (event.endTime == null) {
-      return 0;
-    }
-    final int minutes = event.endTime!.difference(event.startTime).inMinutes;
-    return minutes < 0 ? 0 : minutes;
-  }
-
-  String? _categoryKeyForEvent(_DailyEventItem event) {
-    switch (event.type) {
-      case "SLEEP":
-        return "sleep";
-      case "BREASTFEED":
-        return "breastfeed";
-      case "FORMULA":
-        return "formula";
-      case "PEE":
-        return "pee";
-      case "POO":
-        return "poo";
-      case "MEDICATION":
-        return "medication";
-      default:
-        return null;
-    }
-  }
-
-  int _defaultMinutesForEventType(String type) {
-    switch (type) {
-      case "FORMULA":
-        return 15;
-      case "BREASTFEED":
-        return 18;
-      case "SLEEP":
-        return 30;
-      case "POO":
-        return 7;
-      case "PEE":
-        return 5;
-      case "MEDICATION":
-        return 8;
-      default:
-        return 5;
-    }
-  }
-
-  DateTime _effectiveEndTime(_DailyEventItem event) {
-    final DateTime? end = event.endTime;
-    if (end != null && end.isAfter(event.startTime)) {
-      return end;
-    }
-    final int durationFromValue = _durationForEvent(event);
-    final int minutes = durationFromValue > 0
-        ? durationFromValue
-        : _defaultMinutesForEventType(event.type);
-    return event.startTime.add(Duration(minutes: minutes));
-  }
-
-  Map<String, double> _eventBasedDailyMinutes(List<_DailyEventItem> events) {
-    final Map<String, double> totals = <String, double>{
-      for (final String key in _categoryColors.keys) key: 0,
-    };
-    for (final _DailyEventItem event in events) {
-      final String? category = _categoryKeyForEvent(event);
-      if (category == null) {
-        continue;
-      }
-      final DateTime dayStart = DateTime(
-        event.startTime.year,
-        event.startTime.month,
-        event.startTime.day,
-      );
-      final DateTime dayEnd = dayStart.add(const Duration(days: 1));
-      final DateTime start = event.startTime.isBefore(dayStart)
-          ? dayStart
-          : event.startTime;
-      final DateTime end = _effectiveEndTime(event).isAfter(dayEnd)
-          ? dayEnd
-          : _effectiveEndTime(event);
-      int minutes = end.difference(start).inMinutes;
-      if (minutes <= 0) {
-        minutes = _defaultMinutesForEventType(event.type);
-      }
-      totals[category] = (totals[category] ?? 0) + minutes.toDouble();
-    }
-    return totals;
-  }
-
-  List<Map<String, double>> _emptyHourBuckets() {
-    return List<Map<String, double>>.generate(
-      24,
-      (_) => <String, double>{
-        for (final String key in _categoryColors.keys) key: 0,
-      },
-    );
-  }
-
-  void _accumulateEventHourBuckets(
-    _DailyEventItem event,
-    List<Map<String, double>> hourBuckets, {
-    double weight = 1,
-  }) {
-    final String? category = _categoryKeyForEvent(event);
-    if (category == null) {
-      return;
-    }
-
-    final DateTime dayStart = DateTime(
-      event.startTime.year,
-      event.startTime.month,
-      event.startTime.day,
-    );
-    final DateTime dayEnd = dayStart.add(const Duration(days: 1));
-    final DateTime rawEnd = _effectiveEndTime(event);
-    final DateTime start =
-        event.startTime.isBefore(dayStart) ? dayStart : event.startTime;
-    final DateTime end = rawEnd.isAfter(dayEnd) ? dayEnd : rawEnd;
-    if (!end.isAfter(start)) {
-      return;
-    }
-
-    DateTime cursor = start;
-    while (cursor.isBefore(end)) {
-      final DateTime hourStart = DateTime(
-        cursor.year,
-        cursor.month,
-        cursor.day,
-        cursor.hour,
-      );
-      final DateTime hourEnd = hourStart.add(const Duration(hours: 1));
-      final DateTime chunkEnd = hourEnd.isBefore(end) ? hourEnd : end;
-      final double minutes = chunkEnd.difference(cursor).inSeconds / 60;
-      if (minutes > 0) {
-        final int hourIndex = hourStart.hour.clamp(0, 23);
-        hourBuckets[hourIndex][category] =
-            (hourBuckets[hourIndex][category] ?? 0) + (minutes * weight);
-      }
-      cursor = chunkEnd;
-    }
-  }
-
-  List<Map<String, double>> _hourBucketsForReport(Map<String, dynamic>? report) {
-    final List<Map<String, double>> buckets = _emptyHourBuckets();
-    final List<_DailyEventItem> events = _parseDailyEvents(report);
-    for (final _DailyEventItem event in events) {
-      _accumulateEventHourBuckets(event, buckets);
-    }
-    return buckets;
-  }
-
-  List<_TimeColumnSegment> _segmentsFromHourBuckets(
-    List<Map<String, double>> buckets, {
-    required bool averageMode,
-  }) {
-    final List<_TimeColumnSegment> segments = <_TimeColumnSegment>[];
-    for (int hour = 0; hour < buckets.length; hour++) {
-      final Map<String, double> bucket = buckets[hour];
-      String? dominant;
-      double dominantMinutes = 0;
-      for (final String key in _timelineCategoryOrder) {
-        final double minutes = bucket[key] ?? 0;
-        if (minutes > dominantMinutes) {
-          dominant = key;
-          dominantMinutes = minutes;
-        }
-      }
-      if (dominant == null || dominantMinutes <= 0) {
-        continue;
-      }
-
-      final Color baseColor =
-          _categoryColors[dominant] ?? const Color(0xFF9E9E9E);
-      final double occupancy = (dominantMinutes / 60).clamp(0.08, 1);
-      final double alpha = averageMode
-          ? (0.24 + occupancy * 0.6).clamp(0.24, 0.86)
-          : (0.36 + occupancy * 0.56).clamp(0.36, 0.92);
-      segments.add(
-        _TimeColumnSegment(
-          startHour: hour.toDouble(),
-          endHour: hour + 1,
-          color: baseColor.withValues(alpha: alpha),
-        ),
-      );
-    }
-    return segments;
-  }
-
-  List<_TimeColumnBarData> _buildWeeklyTimeBars(BuildContext context) {
-    final DateTime base = _weekStartUtc ?? _toWeekStart(DateTime.now().toUtc());
-    return List<_TimeColumnBarData>.generate(7, (int index) {
-      final Map<String, dynamic>? report =
-          index < _weeklyDailyReports.length ? _weeklyDailyReports[index] : null;
-      final List<Map<String, double>> buckets = _hourBucketsForReport(report);
-      return _TimeColumnBarData(
-        label: _dayLabel(context, base.add(Duration(days: index))),
-        segments: _segmentsFromHourBuckets(
-          buckets,
-          averageMode: false,
-        ),
-      );
-    });
-  }
-
-  List<_TimeColumnBarData> _buildMonthlyWeekAverageBars(BuildContext context) {
-    if (_monthDailyReports.isEmpty) {
-      return <_TimeColumnBarData>[];
-    }
-    final Map<int, List<Map<String, dynamic>>> grouped =
-        <int, List<Map<String, dynamic>>>{};
-    for (final Map<String, dynamic> report in _monthDailyReports) {
-      final String rawDate = (report["date"] ?? "").toString().trim();
-      final DateTime? date = DateTime.tryParse(rawDate);
-      if (date == null) {
-        continue;
-      }
-      final int weekIndex = ((date.day - 1) ~/ 7).clamp(0, 4);
-      grouped.putIfAbsent(weekIndex, () => <Map<String, dynamic>>[]).add(report);
-    }
-    final List<int> keys = grouped.keys.toList()..sort();
-    return keys.map((int weekIdx) {
-      final List<Map<String, dynamic>> reports =
-          grouped[weekIdx] ?? <Map<String, dynamic>>[];
-      final List<Map<String, double>> buckets = _emptyHourBuckets();
-      for (final Map<String, dynamic> report in reports) {
-        final List<_DailyEventItem> events = _parseDailyEvents(report);
-        for (final _DailyEventItem event in events) {
-          _accumulateEventHourBuckets(event, buckets);
-        }
-      }
-      final double divisor = math.max(1, reports.length).toDouble();
-      for (final Map<String, double> bucket in buckets) {
-        for (final String key in _categoryColors.keys) {
-          bucket[key] = (bucket[key] ?? 0) / divisor;
-        }
-      }
-      return _TimeColumnBarData(
-        label: tr(context,
-            ko: "${weekIdx + 1}주", en: "W${weekIdx + 1}", es: "S${weekIdx + 1}"),
-        segments: _segmentsFromHourBuckets(
-          buckets,
-          averageMode: true,
-        ),
-      );
-    }).toList();
-  }
-
-  List<_TimeColumnBarData> _buildRangeTimeBars(BuildContext context) {
-    switch (widget.range) {
-      case RecordRange.day:
-        return <_TimeColumnBarData>[
-          _TimeColumnBarData(
-            label: tr(context, ko: "오늘", en: "Today", es: "Hoy"),
-            segments: _segmentsFromHourBuckets(
-              _hourBucketsForReport(_daily),
-              averageMode: false,
-            ),
-          ),
-        ];
-      case RecordRange.week:
-        return _buildWeeklyTimeBars(context);
-      case RecordRange.month:
-        return _buildMonthlyWeekAverageBars(context);
-    }
-  }
-
-  String _rangeTimelineTitle(BuildContext context) {
-    switch (widget.range) {
-      case RecordRange.day:
-        return tr(context,
-            ko: "1일 활동 막대(시간대별 24시간)",
-            en: "Daily timeline bars (24h)",
-            es: "Barras diarias (24h)");
-      case RecordRange.week:
-        return tr(context,
-            ko: "1주 활동 막대(시간대별 24시간)",
-            en: "Weekly timeline bars (24h)",
-            es: "Barras semanales (24h)");
-      case RecordRange.month:
-        return tr(context,
-            ko: "월 주차별 평균 활동 막대(시간대별 24시간)",
-            en: "Monthly week-average bars (24h)",
-            es: "Barras mensuales promedio por semana (24h)");
-    }
-  }
-
-  String _eventSubtitle(BuildContext context, _DailyEventItem event) {
-    switch (event.type) {
-      case "FORMULA":
-        final int amount = _asInt(event.value["ml"]) ??
-            _asInt(event.value["amount_ml"]) ??
-            _asInt(event.value["volume_ml"]) ??
-            0;
-        return "$amount ml";
-      case "BREASTFEED":
-      case "SLEEP":
-        final int duration = _durationForEvent(event);
-        return "${duration}m";
-      case "MEDICATION":
-        final String name =
-            (event.value["name"] ?? event.value["medication_type"] ?? "")
-                .toString()
-                .trim();
-        final int? dose = _asInt(event.value["dose"]);
-        final String doseLabel = dose == null ? "" : " · $dose";
-        if (name.isEmpty) {
-          return doseLabel.isEmpty ? "-" : doseLabel.replaceFirst(" · ", "");
-        }
-        return "$name$doseLabel";
-      default:
-        final String memo = (event.value["memo"] ?? event.value["note"] ?? "")
-            .toString()
-            .trim();
-        return memo.isEmpty ? "-" : memo;
-    }
-  }
-
-  Map<String, dynamic> _prefillForDailyEvent(
-    _DailyEventItem event,
-    HomeTileType tile,
-  ) {
-    final Map<String, dynamic> prefill = <String, dynamic>{
-      "start_time": event.startTime.toIso8601String(),
-      if (event.endTime != null) "end_time": event.endTime!.toIso8601String(),
-      "memo": (event.value["memo"] ?? event.value["note"] ?? "").toString(),
-    };
-    switch (tile) {
-      case HomeTileType.formula:
-        final int amount = _asInt(event.value["ml"]) ??
-            _asInt(event.value["amount_ml"]) ??
-            _asInt(event.value["volume_ml"]) ??
-            0;
-        if (amount > 0) {
-          prefill["amount_ml"] = amount;
-        }
-        break;
-      case HomeTileType.breastfeed:
-      case HomeTileType.sleep:
-        prefill["duration_min"] = _durationForEvent(event);
-        break;
-      case HomeTileType.diaper:
-        prefill["diaper_type"] = event.type == "POO" ? "POO" : "PEE";
-        break;
-      case HomeTileType.weaning:
-        prefill["weaning_type"] =
-            (event.value["weaning_type"] ?? "meal").toString().trim();
-        final int grams = _asInt(event.value["grams"]) ?? 0;
-        if (grams > 0) {
-          prefill["grams"] = grams;
-        }
-        break;
-      case HomeTileType.medication:
-        final String name =
-            (event.value["name"] ?? event.value["medication_type"] ?? "")
-                .toString()
-                .trim();
-        if (name.isNotEmpty) {
-          prefill["medication_name"] = name;
-        }
-        final int dose = _asInt(event.value["dose"]) ?? 0;
-        if (dose > 0) {
-          prefill["dose"] = dose;
-        }
-        break;
-      case HomeTileType.memo:
-        break;
-    }
-    return prefill;
-  }
-
-  Future<void> _editDailyEvent(_DailyEventItem event) async {
-    final HomeTileType? tile = _tileForEvent(event);
-    if (tile == null || !mounted) {
-      return;
-    }
-
-    final RecordEntryInput? input = await showRecordEntrySheet(
-      context: context,
-      tile: tile,
-      prefill: _prefillForDailyEvent(event, tile),
-      lockClosedLifecycle: true,
-    );
-    if (!mounted || input == null) {
-      return;
-    }
-
-    final DateTime? resolvedEnd = input.endTime ?? event.endTime;
-    if (resolvedEnd == null || !resolvedEnd.isAfter(input.startTime)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            tr(
-              context,
-              ko: "종료 시각은 시작 시각보다 뒤여야 합니다.",
-              en: "End time must be after start time.",
-              es: "La hora de fin debe ser posterior al inicio.",
-            ),
-          ),
-        ),
-      );
-      return;
-    }
-
+  Future<Map<String, dynamic>> _loadWeeklySafe(DateTime weekStartUtc) async {
     try {
-      await BabyAIApi.instance.updateManualEvent(
-        eventId: event.eventId,
-        type: input.type,
-        startTime: input.startTime,
-        endTime: resolvedEnd,
-        value: input.value,
-        metadata: input.metadata,
-      );
-      await _loadReports();
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            tr(
-              context,
-              ko: "기록을 수정했습니다.",
-              en: "Record updated.",
-              es: "Registro actualizado.",
-            ),
-          ),
-        ),
-      );
-    } catch (error) {
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(error.toString())),
-      );
+      return await BabyAIApi.instance.weeklyReport(weekStartUtc);
+    } catch (_) {
+      return <String, dynamic>{
+        "trend": <String, dynamic>{},
+        "suggestions": <String>[]
+      };
     }
+  }
+
+  _DayStats _stats(DateTime dayUtc) {
+    return _statsByDay[dayUtc] ?? _DayStats.empty(dayUtc);
   }
 
   @override
   Widget build(BuildContext context) {
-    final List<_DailyEventItem> dayEvents = _parseDailyEvents(_daily);
-    final Map<String, double> eventBasedMinutes = _eventBasedDailyMinutes(
-      dayEvents,
+    final List<_DayStats> weekDays = List<_DayStats>.generate(
+      7,
+      (int i) => _stats(_weekStartUtc.add(Duration(days: i))),
+      growable: false,
     );
-    final bool hasEventBasedMinutes = eventBasedMinutes.values
-            .fold<double>(0, (double a, double b) => a + b) >
-        0;
-    final _DayMetrics dailyMetrics = _parseDaily(_daily);
-    final Map<String, double> dailyMinutes =
-        hasEventBasedMinutes ? eventBasedMinutes : _toEstimatedMinutes(dailyMetrics);
-    final double dailyTotal =
-        dailyMinutes.values.fold<double>(0, (double a, double b) => a + b);
+    final List<_DayStats> monthDays = List<_DayStats>.generate(
+      _todayUtc.day,
+      (int i) => _stats(_monthStartUtc.add(Duration(days: i))),
+      growable: false,
+    );
 
-    final List<DonutSliceData> pieSlices = <DonutSliceData>[
-      DonutSliceData(
-        label: tr(context, ko: "수면", en: "Sleep", es: "Sueno"),
-        value: dailyMinutes["sleep"] ?? 0,
-        color: _categoryColors["sleep"]!,
-      ),
-      DonutSliceData(
-        label: tr(context, ko: "모유수유", en: "Breastfeed", es: "Lactancia"),
-        value: dailyMinutes["breastfeed"] ?? 0,
-        color: _categoryColors["breastfeed"]!,
-      ),
-      DonutSliceData(
-        label: tr(context, ko: "분유수유", en: "Formula", es: "Formula"),
-        value: dailyMinutes["formula"] ?? 0,
-        color: _categoryColors["formula"]!,
-      ),
-      DonutSliceData(
-        label:
-            tr(context, ko: "기저귀(소변)", en: "Diaper (pee)", es: "Panal (orina)"),
-        value: dailyMinutes["pee"] ?? 0,
-        color: _categoryColors["pee"]!,
-      ),
-      DonutSliceData(
-        label:
-            tr(context, ko: "기저귀(대변)", en: "Diaper (poo)", es: "Panal (heces)"),
-        value: dailyMinutes["poo"] ?? 0,
-        color: _categoryColors["poo"]!,
-      ),
-      DonutSliceData(
-        label: tr(context, ko: "투약", en: "Medication", es: "Medicacion"),
-        value: dailyMinutes["medication"] ?? 0,
-        color: _categoryColors["medication"]!,
-      ),
-    ];
-
-    final List<_TimeColumnBarData> rangeTimeBars = _buildRangeTimeBars(context);
-
-    final Map<dynamic, dynamic> trend =
-        (_weekly?["trend"] as Map<dynamic, dynamic>?) ?? <dynamic, dynamic>{};
+    final Map<dynamic, dynamic> weeklyTrend =
+        (_weeklyReport?["trend"] as Map<dynamic, dynamic>?) ??
+            <dynamic, dynamic>{};
     final List<String> suggestions =
-        ((_weekly?["suggestions"] as List<dynamic>?) ?? <dynamic>[])
+        ((_weeklyReport?["suggestions"] as List<dynamic>?) ?? <dynamic>[])
             .map((dynamic item) => item.toString())
-            .toList();
-    const List<String> typeOrder = <String>[
-      "FORMULA",
-      "BREASTFEED",
-      "SLEEP",
-      "PEE",
-      "POO",
-      "MEDICATION",
-      "MEMO",
-    ];
-    final Map<String, List<_DailyEventItem>> dayEventGroups =
-        <String, List<_DailyEventItem>>{};
-    for (final _DailyEventItem item in dayEvents) {
-      dayEventGroups
-          .putIfAbsent(item.type, () => <_DailyEventItem>[])
-          .add(item);
-    }
+            .toList(growable: false);
+    final DateTime nowUtc = DateTime.now().toUtc();
+    final List<_EventDetail> knownEvents = _statsByDay.values
+        .expand((_DayStats day) => day.events)
+        .toList(growable: false);
 
     return RefreshIndicator(
       onRefresh: _loadReports,
       child: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         children: <Widget>[
-          Text(
-            "${_activeRangeName(context)}: ${_activeDateLabel()}",
-            style: TextStyle(
-                color: Theme.of(context).colorScheme.onSurfaceVariant),
-          ),
-          Text(
-            tr(
-              context,
-              ko: "색상 매핑: 보라=수면, 빨강=모유수유, 노랑=분유수유",
-              en: "Color mapping: Purple=Sleep, Red=Breastfeed, Yellow=Formula",
-              es: "Color: Morado=Sueno, Rojo=Lactancia, Amarillo=Formula",
-            ),
-            style: TextStyle(
-                color: Theme.of(context).colorScheme.onSurfaceVariant),
+          _SegmentControl(
+            selected: _selected,
+            onChanged: (_StatsRange next) {
+              if (_selected == next) {
+                return;
+              }
+              setState(() => _selected = next);
+            },
           ),
           if (_loading) ...<Widget>[
             const SizedBox(height: 10),
-            const LinearProgressIndicator(),
+            const LinearProgressIndicator(minHeight: 3),
           ],
           if (_error != null) ...<Widget>[
             const SizedBox(height: 10),
             Text(
               _error!,
               style: TextStyle(
-                  color: Theme.of(context).colorScheme.error,
-                  fontWeight: FontWeight.w600),
-            ),
-          ],
-          const SizedBox(height: 12),
-          if (widget.range == RecordRange.day)
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                      tr(
-                        context,
-                        ko: "일간 기록 (종류별, 탭하면 수정)",
-                        en: "Daily records (by type, tap to edit)",
-                        es: "Registros diarios (por tipo, toque para editar)",
-                      ),
-                      style: const TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                    const SizedBox(height: 8),
-                    if (dayEvents.isEmpty)
-                      Text(
-                        tr(
-                          context,
-                          ko: "해당 일자 기록이 없습니다.",
-                          en: "No records for this day.",
-                          es: "No hay registros para este dia.",
-                        ),
-                      ),
-                    ...typeOrder.map((String type) {
-                      final List<_DailyEventItem> items =
-                          dayEventGroups[type] ?? <_DailyEventItem>[];
-                      if (items.isEmpty) {
-                        return const SizedBox.shrink();
-                      }
-                      return Padding(
-                        padding: const EdgeInsets.only(top: 4, bottom: 4),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: <Widget>[
-                            Padding(
-                              padding: const EdgeInsets.only(top: 6, bottom: 4),
-                              child: Text(
-                                _eventTypeLabel(context, type),
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .onSurfaceVariant,
-                                ),
-                              ),
-                            ),
-                            ...items.map(
-                              (_DailyEventItem item) => ListTile(
-                                dense: true,
-                                contentPadding: EdgeInsets.zero,
-                                title: Text(
-                                  item.endTime == null
-                                      ? _timeLabel(item.startTime)
-                                      : "${_timeLabel(item.startTime)} - ${_timeLabel(item.endTime!)}",
-                                ),
-                                subtitle: Text(_eventSubtitle(context, item)),
-                                trailing:
-                                    const Icon(Icons.edit_outlined, size: 18),
-                                onTap: () => _editDailyEvent(item),
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    }),
-                  ],
-                ),
-              ),
-            ),
-          if (widget.range == RecordRange.day) const SizedBox(height: 12),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(
-                    tr(context,
-                        ko: "1일 활동 비중(기록 기반)",
-                        en: "Daily activity share (record-based)",
-                        es: "Participacion diaria (segun registros)"),
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 8),
-                  SizedBox(
-                    height: 220,
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: <Widget>[
-                        SimpleDonutChart(slices: pieSlices),
-                        Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: <Widget>[
-                            Text(tr(context, ko: "오늘", en: "Today", es: "Hoy"),
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.w700)),
-                            Text("${dailyTotal.toStringAsFixed(0)} min"),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: pieSlices
-                        .map(
-                          (DonutSliceData item) => _LegendChip(
-                            color: item.color,
-                            label: item.label,
-                            value: "${item.value.round()}m",
-                          ),
-                        )
-                        .toList(),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(
-                    _rangeTimelineTitle(context),
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 8),
-                  SizedBox(
-                    height: 260,
-                    child: _VerticalTimeBarChart(
-                      bars: rangeTimeBars,
-                      emptyText: tr(context,
-                          ko: "표시할 시간대 기록이 없습니다.",
-                          en: "No timeline records to show.",
-                          es: "No hay datos para la linea de tiempo."),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          if (widget.range == RecordRange.week) ...<Widget>[
-            const SizedBox(height: 12),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                        tr(context,
-                            ko: "주간 추세",
-                            en: "Weekly trend",
-                            es: "Tendencia semanal"),
-                        style: const TextStyle(fontWeight: FontWeight.w700)),
-                    const SizedBox(height: 8),
-                    Text("Formula total: ${trend["feeding_total_ml"] ?? "n/a"}"),
-                    Text("Sleep total: ${trend["sleep_total_min"] ?? "n/a"}"),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                        tr(context,
-                            ko: "제안", en: "Suggestions", es: "Sugerencias"),
-                        style: const TextStyle(fontWeight: FontWeight.w700)),
-                    const SizedBox(height: 8),
-                    if (suggestions.isEmpty)
-                      Text(tr(context,
-                          ko: "제안 데이터가 없습니다.",
-                          en: "No suggestions available.",
-                          es: "No hay sugerencias.")),
-                    ...suggestions.map(
-                      (String item) => Padding(
-                        padding: const EdgeInsets.only(bottom: 6),
-                        child: Text("- $item"),
-                      ),
-                    ),
-                  ],
-                ),
+                color: Theme.of(context).colorScheme.error,
+                fontWeight: FontWeight.w600,
               ),
             ),
           ],
+          const SizedBox(height: 12),
+          AnimatedSwitcher(
+            duration: _kTabAnimationDuration,
+            switchInCurve: Curves.easeOut,
+            switchOutCurve: Curves.easeOut,
+            transitionBuilder: (Widget child, Animation<double> animation) {
+              final Animation<Offset> slide = Tween<Offset>(
+                begin: const Offset(0.015, 0),
+                end: Offset.zero,
+              ).animate(animation);
+              return FadeTransition(
+                opacity: animation,
+                child: SlideTransition(position: slide, child: child),
+              );
+            },
+            child: _buildBody(
+              context,
+              today: _stats(_todayUtc),
+              weekDays: weekDays,
+              monthDays: monthDays,
+              weeklyTrend: weeklyTrend,
+              suggestions: suggestions,
+              nowUtc: nowUtc,
+              knownEvents: knownEvents,
+            ),
+          ),
         ],
       ),
     );
   }
+
+  Widget _buildBody(
+    BuildContext context, {
+    required _DayStats today,
+    required List<_DayStats> weekDays,
+    required List<_DayStats> monthDays,
+    required Map<dynamic, dynamic> weeklyTrend,
+    required List<String> suggestions,
+    required DateTime nowUtc,
+    required List<_EventDetail> knownEvents,
+  }) {
+    switch (_selected) {
+      case _StatsRange.daily:
+        return _DailyView(
+          key: const ValueKey<String>("daily"),
+          day: today,
+          nowUtc: nowUtc,
+          history: knownEvents,
+        );
+      case _StatsRange.weekly:
+        return _WeeklyView(
+          key: const ValueKey<String>("weekly"),
+          days: weekDays,
+          weeklyTrend: weeklyTrend,
+          suggestions: suggestions,
+        );
+      case _StatsRange.monthly:
+        return _MonthlyView(
+          key: const ValueKey<String>("monthly"),
+          days: monthDays,
+        );
+    }
+  }
 }
 
-class _DailyEventItem {
-  const _DailyEventItem({
-    required this.eventId,
-    required this.type,
-    required this.startTime,
-    required this.endTime,
-    required this.value,
-    required this.metadata,
-  });
-
-  final String eventId;
-  final String type;
-  final DateTime startTime;
-  final DateTime? endTime;
-  final Map<String, dynamic> value;
-  final Map<String, dynamic> metadata;
+DateTime _utcDate(DateTime value) {
+  return DateTime.utc(value.year, value.month, value.day);
 }
 
-class _LegendChip extends StatelessWidget {
-  const _LegendChip(
-      {required this.color, required this.label, required this.value});
+DateTime _toWeekStart(DateTime dayUtc) {
+  return dayUtc.subtract(Duration(days: dayUtc.weekday - DateTime.monday));
+}
 
-  final Color color;
-  final String label;
-  final String value;
+String _dayKey(DateTime dayUtc) {
+  final String y = dayUtc.year.toString().padLeft(4, "0");
+  final String m = dayUtc.month.toString().padLeft(2, "0");
+  final String d = dayUtc.day.toString().padLeft(2, "0");
+  return "$y-$m-$d";
+}
+
+class _SegmentControl extends StatelessWidget {
+  const _SegmentControl({required this.selected, required this.onChanged});
+
+  final _StatsRange selected;
+  final ValueChanged<_StatsRange> onChanged;
 
   @override
   Widget build(BuildContext context) {
+    final ColorScheme color = Theme.of(context).colorScheme;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(
-        color: Theme.of(context)
-            .colorScheme
-            .surfaceContainerHighest
-            .withValues(alpha: 0.45),
-        borderRadius: BorderRadius.circular(10),
+        color: color.surfaceContainerHighest.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(999),
       ),
       child: Row(
-        mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          Container(
-              width: 10,
-              height: 10,
-              decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
-          const SizedBox(width: 6),
-          Text("$label $value"),
+          _item(
+            context,
+            value: _StatsRange.daily,
+            label: tr(context, ko: "Daily", en: "Daily", es: "Diario"),
+          ),
+          _item(
+            context,
+            value: _StatsRange.weekly,
+            label: tr(context, ko: "Weekly", en: "Weekly", es: "Semanal"),
+          ),
+          _item(
+            context,
+            value: _StatsRange.monthly,
+            label: tr(context, ko: "Monthly", en: "Monthly", es: "Mensual"),
+          ),
         ],
+      ),
+    );
+  }
+
+  Widget _item(
+    BuildContext context, {
+    required _StatsRange value,
+    required String label,
+  }) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    final bool active = selected == value;
+
+    return Expanded(
+      child: Material(
+        color: active
+            ? color.primaryContainer.withValues(alpha: 0.92)
+            : Colors.transparent,
+        borderRadius: BorderRadius.circular(999),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(999),
+          onTap: () => onChanged(value),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 9),
+            child: Text(
+              label,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
 }
 
-class _TimeColumnSegment {
-  const _TimeColumnSegment({
-    required this.startHour,
-    required this.endHour,
-    required this.color,
+class _DailyView extends StatelessWidget {
+  const _DailyView({
+    super.key,
+    required this.day,
+    required this.nowUtc,
+    required this.history,
   });
 
-  final double startHour;
-  final double endHour;
-  final Color color;
-}
-
-class _TimeColumnBarData {
-  const _TimeColumnBarData({
-    required this.label,
-    required this.segments,
-  });
-
-  final String label;
-  final List<_TimeColumnSegment> segments;
-}
-
-class _VerticalTimeBarChart extends StatelessWidget {
-  const _VerticalTimeBarChart({
-    required this.bars,
-    required this.emptyText,
-  });
-
-  final List<_TimeColumnBarData> bars;
-  final String emptyText;
+  final _DayStats day;
+  final DateTime nowUtc;
+  final List<_EventDetail> history;
 
   @override
   Widget build(BuildContext context) {
-    final bool hasData = bars.any((_TimeColumnBarData item) => item.segments.isNotEmpty);
-    if (!hasData) {
-      return Center(
-        child: Text(
-          emptyText,
-          style: TextStyle(
-            color: Theme.of(context).colorScheme.onSurfaceVariant,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-      );
-    }
-    final ColorScheme color = Theme.of(context).colorScheme;
+    final List<_DonutCategory> ringSegments =
+        _buildDailyClockSegments(context, day);
+    final List<DonutSliceData> ring =
+        ringSegments.map((_DonutCategory item) => item.slice).toList();
+    final List<DonutSliceData> legendSlices = _buildDonutCategories(
+      context,
+      day,
+    ).map((_DonutCategory item) => item.slice).toList();
+    final int totalEvents = day.events.length;
+    final _RecentEventHighlights highlights =
+        _buildRecentEventHighlights(history, nowUtc);
+
     return Column(
       children: <Widget>[
-        Expanded(
-          child: CustomPaint(
-            painter: _VerticalTimeBarPainter(
-              bars: bars,
-              gridColor: color.outlineVariant.withValues(alpha: 0.35),
-              labelColor: color.onSurfaceVariant,
-            ),
-            child: const SizedBox.expand(),
-          ),
-        ),
-        const SizedBox(height: 6),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: bars
-              .map(
-                (_TimeColumnBarData bar) => Expanded(
-                  child: Text(
-                    bar.label,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: color.onSurfaceVariant,
-                    ),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+            child: Row(
+              children: <Widget>[
+                Expanded(
+                  child: _DailyHighlightTile(
+                    title: "Since last feed",
+                    elapsed:
+                        _formatElapsedSince(highlights.lastFeedUtc, nowUtc),
+                    timestamp: _formatHighlightStamp(highlights.lastFeedUtc),
+                    accent: _SemanticColors.feed,
+                    iconAsset: AppSvgAsset.feeding,
                   ),
                 ),
-              )
-              .toList(),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _DailyHighlightTile(
+                    title: "Since sleep ended",
+                    elapsed: _formatElapsedSince(
+                      highlights.lastSleepEndUtc,
+                      nowUtc,
+                    ),
+                    timestamp:
+                        _formatHighlightStamp(highlights.lastSleepEndUtc),
+                    accent: _SemanticColors.sleep,
+                    iconAsset: AppSvgAsset.sleepCrescentPurple,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  tr(context,
+                      ko: "Daily Activity",
+                      en: "Daily Activity",
+                      es: "Actividad diaria"),
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  height: 280,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: <Widget>[
+                      SimpleDonutChart(
+                        slices: ring,
+                        strokeWidth: 30,
+                        onSliceTap: (int index) {
+                          if (index < 0 || index >= ringSegments.length) {
+                            return;
+                          }
+                          final _DonutCategory selected = ringSegments[index];
+                          if (selected.events.isEmpty) {
+                            return;
+                          }
+                          _showEventDetailsSheet(
+                            context,
+                            title: selected.slice.label,
+                            events: selected.events,
+                          );
+                        },
+                      ),
+                      const _DailyClockDialLabels(),
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: <Widget>[
+                          Text(
+                            "$totalEvents",
+                            style: const TextStyle(
+                              fontSize: 34,
+                              fontWeight: FontWeight.w700,
+                              height: 1,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            tr(context,
+                                ko: "Total Events",
+                                en: "Total Events",
+                                es: "Eventos totales"),
+                            style: TextStyle(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                _LegendRow(slices: legendSlices),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  tr(context,
+                      ko: "Timeline", en: "Timeline", es: "Linea de tiempo"),
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 12),
+                const _TimelineAxisLabels(),
+                const SizedBox(height: 8),
+                _TimelineBand(
+                  blocks: day.sleepBlocks,
+                  feed: day.feedMarks,
+                  diaper: day.diaperMarks,
+                  health: day.healthMarks,
+                  notes: day.noteMarks,
+                  dense: false,
+                  onEventTap: (_EventDetail event) {
+                    _showEventDetailsSheet(
+                      context,
+                      title: _eventTypeLabel(context, event.displayType),
+                      events: <_EventDetail>[event],
+                    );
+                  },
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: <Widget>[
+                    _InfoPill(label: "Feeds", value: "${day.feedCount}"),
+                    _InfoPill(label: "Formula", value: "${day.formulaMl} ml"),
+                    _InfoPill(label: "Pee", value: "${day.peeCount}"),
+                    _InfoPill(label: "Poo", value: "${day.pooCount}"),
+                    _InfoPill(
+                        label: "Medication", value: "${day.medicationCount}"),
+                    _InfoPill(label: "Clinic", value: "${day.clinicVisits}"),
+                    _InfoPill(label: "Memo", value: "${day.memoCount}"),
+                  ],
+                ),
+              ],
+            ),
+          ),
         ),
       ],
     );
   }
 }
 
-class _VerticalTimeBarPainter extends CustomPainter {
-  _VerticalTimeBarPainter({
-    required this.bars,
-    required this.gridColor,
-    required this.labelColor,
+class _WeeklyView extends StatelessWidget {
+  const _WeeklyView({
+    super.key,
+    required this.days,
+    required this.weeklyTrend,
+    required this.suggestions,
   });
 
-  final List<_TimeColumnBarData> bars;
-  final Color gridColor;
-  final Color labelColor;
+  final List<_DayStats> days;
+  final Map<dynamic, dynamic> weeklyTrend;
+  final List<String> suggestions;
 
   @override
-  void paint(Canvas canvas, Size size) {
-    if (bars.isEmpty) {
-      return;
-    }
-    const double leftAxisWidth = 28;
-    const double topPadding = 6;
-    const double bottomPadding = 6;
-    final Rect chartRect = Rect.fromLTWH(
-      leftAxisWidth,
-      topPadding,
-      math.max(0, size.width - leftAxisWidth),
-      math.max(0, size.height - topPadding - bottomPadding),
+  Widget build(BuildContext context) {
+    final int avgSleep = days.isEmpty
+        ? 0
+        : (days.fold<int>(0, (int s, _DayStats d) => s + d.sleepMinutes) /
+                days.length)
+            .round();
+    final int feedingCount =
+        days.fold<int>(0, (int s, _DayStats d) => s + d.feedCount);
+    final String insight = suggestions.isNotEmpty
+        ? suggestions.first
+        : "Feed trend: ${weeklyTrend["feeding_total_ml"] ?? "-"}. "
+            "Sleep trend: ${weeklyTrend["sleep_total_min"] ?? "-"}.";
+
+    return Column(
+      children: <Widget>[
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: _StatsCard(
+                title: "Avg Sleep",
+                value: _formatHour(avgSleep / 60),
+                iconAsset: AppSvgAsset.sleepCrescentPurple,
+                accent: _SemanticColors.sleep,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _StatsCard(
+                title: "Feeding Count",
+                value: "$feedingCount",
+                iconAsset: AppSvgAsset.feeding,
+                accent: _SemanticColors.feed,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                const Text("Weekly Timeline",
+                    style: TextStyle(fontWeight: FontWeight.w700)),
+                const SizedBox(height: 12),
+                const _TimelineAxisLabels(),
+                const SizedBox(height: 8),
+                ...days.map(
+                  (_DayStats day) => Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 5),
+                    child: Row(
+                      children: <Widget>[
+                        SizedBox(
+                          width: 58,
+                          child: Text(
+                            "${_weekday(day.dayUtc)} ${day.dayUtc.day}",
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                        Expanded(
+                          child: _TimelineBand(
+                            blocks: day.sleepBlocks,
+                            feed: day.feedMarks,
+                            diaper: day.diaperMarks,
+                            health: day.healthMarks,
+                            notes: day.noteMarks,
+                            dense: true,
+                            onEventTap: (_EventDetail event) {
+                              _showEventDetailsSheet(
+                                context,
+                                title: _eventTypeLabel(
+                                  context,
+                                  event.displayType,
+                                ),
+                                events: <_EventDetail>[event],
+                              );
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        SizedBox(
+                          width: 48,
+                          child: Text(
+                            _formatHour(day.sleepMinutes / 60),
+                            textAlign: TextAlign.right,
+                            style: TextStyle(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                const Text("Weekly Insight",
+                    style: TextStyle(fontWeight: FontWeight.w700)),
+                const SizedBox(height: 8),
+                Text(
+                  insight,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
-    if (chartRect.width <= 0 || chartRect.height <= 0) {
-      return;
-    }
+  }
+}
 
-    final Paint gridPaint = Paint()
-      ..color = gridColor
-      ..strokeWidth = 1;
+class _MonthlyView extends StatelessWidget {
+  const _MonthlyView({super.key, required this.days});
 
-    for (int hour = 0; hour <= 24; hour += 6) {
-      final double y = chartRect.top + (hour / 24) * chartRect.height;
-      canvas.drawLine(
-        Offset(chartRect.left, y),
-        Offset(chartRect.right, y),
-        gridPaint,
-      );
-      final TextPainter tp = TextPainter(
-        text: TextSpan(
-          text: hour.toString().padLeft(2, "0"),
-          style: TextStyle(
-            color: labelColor,
-            fontSize: 10,
-            fontWeight: FontWeight.w600,
+  final List<_DayStats> days;
+
+  @override
+  Widget build(BuildContext context) {
+    final int dayCount = days.isEmpty ? 1 : days.length;
+    final int avgSleep =
+        (days.fold<int>(0, (int s, _DayStats d) => s + d.sleepMinutes) /
+                dayCount)
+            .round();
+    final double avgFeed =
+        days.fold<int>(0, (int s, _DayStats d) => s + d.feedCount) / dayCount;
+    final int clinicVisits =
+        days.fold<int>(0, (int s, _DayStats d) => s + d.clinicVisits);
+
+    final List<double> points =
+        days.map((_DayStats d) => d.sleepMinutes / 60).toList(growable: false);
+    final double trendDelta = _sleepTrendDelta(days);
+    final List<_WeekBreakdown> breakdown = _buildWeeklyBreakdown(days);
+    final _MonthlyInsights insights = _buildMonthlyInsights(days);
+    final String sleepPattern = _monthlySleepPatternText(insights);
+    final String feedPattern = _monthlyFeedPatternText(insights);
+
+    return Column(
+      children: <Widget>[
+        LayoutBuilder(
+          builder: (BuildContext context, BoxConstraints constraints) {
+            final double width = (constraints.maxWidth - 16) / 3;
+            return Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: <Widget>[
+                SizedBox(
+                  width: width,
+                  child: _StatsCard(
+                    title: "Avg Sleep",
+                    value: _formatHour(avgSleep / 60),
+                    iconAsset: AppSvgAsset.sleepCrescentPurple,
+                    accent: _SemanticColors.sleep,
+                  ),
+                ),
+                SizedBox(
+                  width: width,
+                  child: _StatsCard(
+                    title: "Avg Feedings/Day",
+                    value: _formatCount(avgFeed),
+                    iconAsset: AppSvgAsset.feeding,
+                    accent: _SemanticColors.feed,
+                  ),
+                ),
+                SizedBox(
+                  width: width,
+                  child: _StatsCard(
+                    title: "Clinic Visits",
+                    value: "$clinicVisits",
+                    iconAsset: AppSvgAsset.clinicStethoscope,
+                    accent: _SemanticColors.hospital,
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Row(
+                  children: <Widget>[
+                    const Text("Sleep Trend",
+                        style: TextStyle(fontWeight: FontWeight.w700)),
+                    const Spacer(),
+                    _TrendBadge(delta: trendDelta),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  height: 188,
+                  child: SimpleLineChart(
+                    points: points,
+                    lineColor: Theme.of(context).colorScheme.primary,
+                    fillColor: Theme.of(context)
+                        .colorScheme
+                        .primary
+                        .withValues(alpha: 0.16),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                _MonthAxis(lastDay: days.isEmpty ? 1 : days.last.dayUtc.day),
+              ],
+            ),
           ),
         ),
-        textDirection: TextDirection.ltr,
-      )..layout(minWidth: 0, maxWidth: leftAxisWidth - 6);
-      tp.paint(canvas, Offset(leftAxisWidth - tp.width - 4, y - tp.height / 2));
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                const Text(
+                  "Monthly Insights",
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: <Widget>[
+                    _InfoPill(
+                      label: "Avg Bedtime",
+                      value: _formatMinuteOfDay(insights.avgBedtimeMinute),
+                    ),
+                    _InfoPill(
+                      label: "Avg Wake-up",
+                      value: _formatMinuteOfDay(insights.avgWakeMinute),
+                    ),
+                    _InfoPill(
+                      label: "Longest Sleep",
+                      value:
+                          _formatDurationMinutes(insights.longestSleepMinutes),
+                    ),
+                    _InfoPill(
+                      label: "Avg Feed Gap",
+                      value: _formatDurationMinutes(
+                        insights.avgFeedIntervalMinutes,
+                      ),
+                    ),
+                    _InfoPill(
+                      label: "Peak Feed",
+                      value: _formatFeedWindow(insights.peakFeedHour),
+                    ),
+                    _InfoPill(
+                      label: "Formula Total",
+                      value: "${insights.totalFormulaMl} ml",
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  "Sleep pattern: $sleepPattern",
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    height: 1.35,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  "Feed pattern: $feedPattern",
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    height: 1.35,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        const Align(
+          alignment: Alignment.centerLeft,
+          child: Text(
+            "Weekly Breakdown",
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+          ),
+        ),
+        const SizedBox(height: 8),
+        if (breakdown.isEmpty)
+          const Card(
+            child: Padding(
+              padding: EdgeInsets.all(16),
+              child: Text("No weekly records."),
+            ),
+          )
+        else
+          ...breakdown.map(
+            (_WeekBreakdown item) => Card(
+              child: ListTile(
+                leading: CircleAvatar(
+                  backgroundColor: Theme.of(context)
+                      .colorScheme
+                      .surfaceContainerHighest
+                      .withValues(alpha: 0.55),
+                  child: Center(
+                    child: AppSvgIcon(
+                      AppSvgAsset.stats,
+                      size: 16,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                  ),
+                ),
+                title: Text(item.title,
+                    style: const TextStyle(fontWeight: FontWeight.w700)),
+                subtitle: Text(item.range),
+                trailing: Text(
+                  _formatHour(item.avgSleepMinutes / 60),
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _StatsCard extends StatelessWidget {
+  const _StatsCard({
+    required this.title,
+    required this.value,
+    required this.iconAsset,
+    required this.accent,
+  });
+
+  final String title;
+  final String value;
+  final String iconAsset;
+  final Color accent;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: accent.withValues(alpha: 0.16),
+                shape: BoxShape.circle,
+              ),
+              child: Center(
+                child: AppSvgIcon(iconAsset, size: 16, color: accent),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              value,
+              style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DailyHighlightTile extends StatelessWidget {
+  const _DailyHighlightTile({
+    required this.title,
+    required this.elapsed,
+    required this.timestamp,
+    required this.accent,
+    required this.iconAsset,
+  });
+
+  final String title;
+  final String elapsed;
+  final String timestamp;
+  final Color accent;
+  final String iconAsset;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 10, 10, 9),
+      decoration: BoxDecoration(
+        color: accent.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: accent.withValues(alpha: 0.36)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              AppSvgIcon(iconAsset, size: 15, color: accent),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: color.onSurfaceVariant,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            elapsed,
+            style: TextStyle(
+              color: accent,
+              fontSize: 15,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            timestamp,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: color.onSurfaceVariant,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LegendRow extends StatelessWidget {
+  const _LegendRow({required this.slices});
+
+  final List<DonutSliceData> slices;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 12,
+      runSpacing: 8,
+      children: slices
+          .where((DonutSliceData item) => item.value > 0)
+          .map(
+            (DonutSliceData item) =>
+                _Legend(color: item.color, label: item.label),
+          )
+          .toList(growable: false),
+    );
+  }
+}
+
+class _Legend extends StatelessWidget {
+  const _Legend({required this.color, required this.label});
+
+  final Color color;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 6),
+        Text(label),
+      ],
+    );
+  }
+}
+
+class _DailyClockDialLabels extends StatelessWidget {
+  const _DailyClockDialLabels();
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    final TextStyle style = TextStyle(
+      color: color.onSurfaceVariant,
+      fontSize: 11,
+      fontWeight: FontWeight.w700,
+    );
+
+    Widget label(String value) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: color.surface.withValues(alpha: 0.9),
+          borderRadius: BorderRadius.circular(999),
+          border:
+              Border.all(color: color.outlineVariant.withValues(alpha: 0.5)),
+        ),
+        child: Text(value, style: style),
+      );
     }
 
-    final double slotWidth = chartRect.width / bars.length;
-    final double barWidth = math.max(10, math.min(24, slotWidth * 0.58));
-    final Paint barBg = Paint()..color = gridColor.withValues(alpha: 0.2);
+    return IgnorePointer(
+      child: LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+          final double dialSize =
+              math.min(constraints.maxWidth, constraints.maxHeight);
+          return Center(
+            child: SizedBox(
+              width: dialSize,
+              height: dialSize,
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Stack(
+                  children: <Widget>[
+                    Align(
+                        alignment: Alignment.topCenter, child: label("00:00")),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: label("06:00"),
+                    ),
+                    Align(
+                      alignment: Alignment.bottomCenter,
+                      child: label("12:00"),
+                    ),
+                    Align(
+                        alignment: Alignment.centerLeft, child: label("18:00")),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
 
-    for (int i = 0; i < bars.length; i++) {
-      final _TimeColumnBarData bar = bars[i];
-      final double x =
-          chartRect.left + (slotWidth * i) + ((slotWidth - barWidth) / 2);
+class _TimelineAxisLabels extends StatelessWidget {
+  const _TimelineAxisLabels();
 
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromLTWH(x, chartRect.top, barWidth, chartRect.height),
-          const Radius.circular(5),
+  @override
+  Widget build(BuildContext context) {
+    final TextStyle style = TextStyle(
+      color: Theme.of(context).colorScheme.onSurfaceVariant,
+      fontSize: 11,
+      fontWeight: FontWeight.w600,
+    );
+
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: <Widget>[
+        Text("00:00", style: style),
+        Text("06:00", style: style),
+        Text("12:00", style: style),
+        Text("18:00", style: style),
+        Text("24:00", style: style),
+      ],
+    );
+  }
+}
+
+class _TimelineBand extends StatelessWidget {
+  const _TimelineBand({
+    required this.blocks,
+    required this.feed,
+    required this.diaper,
+    required this.health,
+    required this.notes,
+    required this.dense,
+    this.onEventTap,
+  });
+
+  final List<_Block> blocks;
+  final List<_Mark> feed;
+  final List<_Mark> diaper;
+  final List<_Mark> health;
+  final List<_Mark> notes;
+  final bool dense;
+  final ValueChanged<_EventDetail>? onEventTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    final double top = dense ? 10 : 12;
+    final double bottom = dense ? 10 : 12;
+    final int maxIcons = dense ? 4 : 9;
+
+    return SizedBox(
+      height: dense ? 38 : 48,
+      child: LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+          final double width = constraints.maxWidth;
+
+          return Stack(
+            clipBehavior: Clip.none,
+            children: <Widget>[
+              Positioned(
+                left: 0,
+                right: 0,
+                top: top,
+                bottom: bottom,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: color.surfaceContainerHighest
+                        .withValues(alpha: dense ? 0.48 : 0.42),
+                    borderRadius: BorderRadius.circular(dense ? 6 : 8),
+                    border: Border.all(
+                      color: color.outlineVariant.withValues(alpha: 0.45),
+                    ),
+                  ),
+                ),
+              ),
+              ...List<Widget>.generate(5, (int i) {
+                final double x = width * (i / 4);
+                return Positioned(
+                  left: _clampD(x - 0.5, 0, width - 1),
+                  top: top,
+                  bottom: bottom,
+                  child: Container(
+                    width: 1,
+                    color: color.outlineVariant.withValues(alpha: 0.25),
+                  ),
+                );
+              }),
+              ...blocks.map((_Block b) {
+                final double left = width * (b.start / _minutesPerDay);
+                final double raw = width * ((b.end - b.start) / _minutesPerDay);
+                Widget child = Container(
+                  decoration: BoxDecoration(
+                    color: _SemanticColors.sleep
+                        .withValues(alpha: dense ? 0.9 : 0.82),
+                    borderRadius: BorderRadius.circular(dense ? 4 : 6),
+                    border: Border.all(
+                      color: color.surface.withValues(alpha: 0.82),
+                      width: dense ? 0.5 : 0.8,
+                    ),
+                  ),
+                );
+                if (onEventTap != null && b.event != null) {
+                  child = GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => onEventTap!(b.event!),
+                    child: child,
+                  );
+                }
+                return Positioned(
+                  left: _clampD(left, 0, width),
+                  width: math.max(raw, dense ? 3 : 5),
+                  top: top + 1,
+                  bottom: bottom + 1,
+                  child: child,
+                );
+              }),
+              ...feed.map((_Mark mark) {
+                final double x = width * (mark.minute / _minutesPerDay);
+                final double hitWidth = dense ? 10 : 12;
+                Widget child = Center(
+                  child: Container(
+                    width: dense ? 3 : 4,
+                    height: dense ? 12 : 16,
+                    decoration: BoxDecoration(
+                      color: _SemanticColors.feed,
+                      borderRadius: BorderRadius.circular(2),
+                      border: Border.all(
+                        color: color.surface.withValues(alpha: 0.9),
+                        width: dense ? 0.45 : 0.7,
+                      ),
+                    ),
+                  ),
+                );
+                if (onEventTap != null && mark.event != null) {
+                  child = GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => onEventTap!(mark.event!),
+                    child: child,
+                  );
+                }
+                return Positioned(
+                  left: _clampD(x - (hitWidth / 2), 0, width - hitWidth),
+                  width: hitWidth,
+                  top: top + 1,
+                  bottom: bottom + 1,
+                  child: child,
+                );
+              }),
+              ...diaper.map((_Mark mark) {
+                final double x = width * (mark.minute / _minutesPerDay);
+                final double hitWidth = dense ? 10 : 12;
+                Widget child = Center(
+                  child: Container(
+                    width: dense ? 3 : 4,
+                    height: dense ? 10 : 14,
+                    decoration: BoxDecoration(
+                      color: _SemanticColors.diaper,
+                      borderRadius: BorderRadius.circular(2),
+                      border: Border.all(
+                        color: color.surface.withValues(alpha: 0.9),
+                        width: dense ? 0.45 : 0.7,
+                      ),
+                    ),
+                  ),
+                );
+                if (onEventTap != null && mark.event != null) {
+                  child = GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => onEventTap!(mark.event!),
+                    child: child,
+                  );
+                }
+                return Positioned(
+                  left: _clampD(x - (hitWidth / 2), 0, width - hitWidth),
+                  width: hitWidth,
+                  top: top + 2,
+                  bottom: bottom + 2,
+                  child: child,
+                );
+              }),
+              ...health.take(maxIcons).map((_Mark mark) {
+                final double x = width * (mark.minute / _minutesPerDay);
+                final double size = dense ? 15 : 18;
+                final _EventVisualStyle style = _eventVisualStyle(mark.type);
+                Widget child = Container(
+                  width: size,
+                  height: size,
+                  decoration: BoxDecoration(
+                    color: style.color.withValues(alpha: dense ? 0.22 : 0.26),
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: style.color.withValues(alpha: 0.92),
+                      width: dense ? 1 : 1.2,
+                    ),
+                    boxShadow: <BoxShadow>[
+                      BoxShadow(
+                        color:
+                            style.color.withValues(alpha: dense ? 0.22 : 0.3),
+                        blurRadius: dense ? 3 : 5,
+                        offset: const Offset(0, 1),
+                      ),
+                    ],
+                  ),
+                  child: Center(
+                    child: AppSvgIcon(
+                      style.iconAsset,
+                      size: dense ? 9 : 11,
+                      color: style.color,
+                    ),
+                  ),
+                );
+                if (onEventTap != null && mark.event != null) {
+                  child = GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => onEventTap!(mark.event!),
+                    child: child,
+                  );
+                }
+                return Positioned(
+                  left: _clampD(x - (size / 2), 0, width - size),
+                  top: dense ? -4 : -7,
+                  child: child,
+                );
+              }),
+              ...notes.take(maxIcons).map((_Mark mark) {
+                final double x = width * (mark.minute / _minutesPerDay);
+                final double size = dense ? 15 : 18;
+                final _EventVisualStyle style = _eventVisualStyle(mark.type);
+                Widget child = Container(
+                  width: size,
+                  height: size,
+                  decoration: BoxDecoration(
+                    color: style.color.withValues(alpha: dense ? 0.22 : 0.26),
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: style.color.withValues(alpha: 0.92),
+                      width: dense ? 1 : 1.2,
+                    ),
+                    boxShadow: <BoxShadow>[
+                      BoxShadow(
+                        color:
+                            style.color.withValues(alpha: dense ? 0.22 : 0.3),
+                        blurRadius: dense ? 3 : 5,
+                        offset: const Offset(0, 1),
+                      ),
+                    ],
+                  ),
+                  child: Center(
+                    child: AppSvgIcon(
+                      style.iconAsset,
+                      size: dense ? 9 : 11,
+                      color: style.color,
+                    ),
+                  ),
+                );
+                if (onEventTap != null && mark.event != null) {
+                  child = GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => onEventTap!(mark.event!),
+                    child: child,
+                  );
+                }
+                return Positioned(
+                  left: _clampD(x - (size / 2), 0, width - size),
+                  bottom: dense ? -4 : -7,
+                  child: child,
+                );
+              }),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _InfoPill extends StatelessWidget {
+  const _InfoPill({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: color.surfaceContainerHighest.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        "$label $value",
+        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
+      ),
+    );
+  }
+}
+
+class _TrendBadge extends StatelessWidget {
+  const _TrendBadge({required this.delta});
+
+  final double delta;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    final bool up = delta >= 0;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: (up ? color.primaryContainer : color.errorContainer)
+            .withValues(alpha: 0.72),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        _formatTrend(delta),
+        style: TextStyle(
+          color: up ? color.primary : color.error,
+          fontWeight: FontWeight.w700,
         ),
-        barBg,
-      );
+      ),
+    );
+  }
+}
 
-      for (final _TimeColumnSegment segment in bar.segments) {
-        final double startHour = segment.startHour.clamp(0, 24);
-        final double endHour = segment.endHour.clamp(0, 24);
-        if (endHour <= startHour) {
-          continue;
-        }
-        final double y1 = chartRect.top + (startHour / 24) * chartRect.height;
-        final double y2 = chartRect.top + (endHour / 24) * chartRect.height;
-        canvas.drawRRect(
-          RRect.fromRectAndRadius(
-            Rect.fromLTWH(x, y1, barWidth, math.max(1, y2 - y1)),
-            const Radius.circular(3),
-          ),
-          Paint()..color = segment.color,
-        );
+class _MonthAxis extends StatelessWidget {
+  const _MonthAxis({required this.lastDay});
+
+  final int lastDay;
+
+  @override
+  Widget build(BuildContext context) {
+    final TextStyle style = TextStyle(
+      color: Theme.of(context).colorScheme.onSurfaceVariant,
+      fontSize: 11,
+      fontWeight: FontWeight.w600,
+    );
+
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: <Widget>[
+        Text("1", style: style),
+        Text("${math.min(7, lastDay)}", style: style),
+        Text("${math.min(14, lastDay)}", style: style),
+        Text("${math.min(21, lastDay)}", style: style),
+        Text("$lastDay", style: style),
+      ],
+    );
+  }
+}
+
+class _DonutCategory {
+  const _DonutCategory({
+    required this.slice,
+    required this.events,
+  });
+
+  final DonutSliceData slice;
+  final List<_EventDetail> events;
+}
+
+class _ClockPaintSpan {
+  const _ClockPaintSpan({
+    required this.startMinute,
+    required this.endMinute,
+    required this.category,
+    required this.event,
+  });
+
+  final int startMinute;
+  final int endMinute;
+  final String category;
+  final _EventDetail event;
+}
+
+class _EventDetail {
+  const _EventDetail({
+    required this.type,
+    required this.displayType,
+    required this.category,
+    required this.startUtc,
+    required this.endUtc,
+    required this.value,
+  });
+
+  final String type;
+  final String displayType;
+  final String category;
+  final DateTime startUtc;
+  final DateTime? endUtc;
+  final Map<String, dynamic> value;
+}
+
+class _DayStats {
+  const _DayStats({
+    required this.dayUtc,
+    required this.sleepMinutes,
+    required this.feedEstimatedMinutes,
+    required this.feedCount,
+    required this.breastfeedCount,
+    required this.formulaMl,
+    required this.peeCount,
+    required this.pooCount,
+    required this.medicationCount,
+    required this.clinicVisits,
+    required this.memoCount,
+    required this.otherCount,
+    required this.sleepBlocks,
+    required this.feedMarks,
+    required this.diaperMarks,
+    required this.healthMarks,
+    required this.noteMarks,
+    required this.events,
+    required this.summary,
+  });
+
+  final DateTime dayUtc;
+  final int sleepMinutes;
+  final int feedEstimatedMinutes;
+  final int feedCount;
+  final int breastfeedCount;
+  final int formulaMl;
+  final int peeCount;
+  final int pooCount;
+  final int medicationCount;
+  final int clinicVisits;
+  final int memoCount;
+  final int otherCount;
+  final List<_Block> sleepBlocks;
+  final List<_Mark> feedMarks;
+  final List<_Mark> diaperMarks;
+  final List<_Mark> healthMarks;
+  final List<_Mark> noteMarks;
+  final List<_EventDetail> events;
+  final List<String> summary;
+
+  factory _DayStats.empty(DateTime dayUtc) {
+    return _DayStats(
+      dayUtc: dayUtc,
+      sleepMinutes: 0,
+      feedEstimatedMinutes: 0,
+      feedCount: 0,
+      breastfeedCount: 0,
+      formulaMl: 0,
+      peeCount: 0,
+      pooCount: 0,
+      medicationCount: 0,
+      clinicVisits: 0,
+      memoCount: 0,
+      otherCount: 0,
+      sleepBlocks: const <_Block>[],
+      feedMarks: const <_Mark>[],
+      diaperMarks: const <_Mark>[],
+      healthMarks: const <_Mark>[],
+      noteMarks: const <_Mark>[],
+      events: const <_EventDetail>[],
+      summary: const <String>[],
+    );
+  }
+
+  factory _DayStats.fromReport(DateTime dayUtc, Map<String, dynamic>? report) {
+    final List<String> summary =
+        ((report?["summary"] as List<dynamic>?) ?? <dynamic>[])
+            .map((dynamic e) => e.toString())
+            .toList(growable: false);
+
+    final List<Map<String, dynamic>> events =
+        ((report?["events"] as List<dynamic>?) ?? <dynamic>[])
+            .whereType<Map<dynamic, dynamic>>()
+            .map((Map<dynamic, dynamic> e) => <String, dynamic>{
+                  for (final MapEntry<dynamic, dynamic> entry in e.entries)
+                    entry.key.toString(): entry.value,
+                })
+            .toList(growable: false);
+
+    int sleepMinutes = 0;
+    int feedEstimatedMinutes = 0;
+    int feedCount = 0;
+    int breastfeedCount = 0;
+    int formulaMl = 0;
+    int peeCount = 0;
+    int pooCount = 0;
+    int medicationCount = 0;
+    int clinicVisits = 0;
+    int memoCount = 0;
+    int otherCount = 0;
+
+    final List<_Block> sleepBlocks = <_Block>[];
+    final List<_Mark> feedMarks = <_Mark>[];
+    final List<_Mark> diaperMarks = <_Mark>[];
+    final List<_Mark> healthMarks = <_Mark>[];
+    final List<_Mark> noteMarks = <_Mark>[];
+    final List<_EventDetail> parsedEvents = <_EventDetail>[];
+
+    for (final Map<String, dynamic> event in events) {
+      final String type = (event["type"] ?? "").toString().trim().toUpperCase();
+      final DateTime? start = _parseUtc(event["start_time"]);
+      if (type.isEmpty || start == null) {
+        continue;
+      }
+
+      final int startMinute = _clampI(
+        _minuteInDisplayLocalDay(start, dayUtc),
+        0,
+        _minutesPerDay - 1,
+      );
+      final DateTime? end = _parseUtc(event["end_time"]);
+      final Map<String, dynamic> value = _normalizeValueMap(event["value"]);
+      final bool clinicMemo = type == "MEMO" && _isClinicMemo(value);
+      final String displayType = clinicMemo ? "CLINIC" : type;
+      final _EventDetail detail = _EventDetail(
+        type: type,
+        displayType: displayType,
+        category: _eventCategory(type, clinicMemo: clinicMemo),
+        startUtc: start,
+        endUtc: end,
+        value: value,
+      );
+      parsedEvents.add(detail);
+
+      switch (type) {
+        case "SLEEP":
+          if (end == null) {
+            break;
+          }
+          final int endMinute = _clampI(
+            _minuteInDisplayLocalDay(end, dayUtc),
+            0,
+            _minutesPerDay,
+          );
+          if (endMinute > startMinute) {
+            sleepMinutes += endMinute - startMinute;
+            sleepBlocks.add(
+              _Block(start: startMinute, end: endMinute, event: detail),
+            );
+          }
+          break;
+        case "FORMULA":
+          feedCount += 1;
+          feedEstimatedMinutes += 15;
+          formulaMl += _extractMl(value);
+          feedMarks.add(_Mark(type: type, minute: startMinute, event: detail));
+          break;
+        case "BREASTFEED":
+          feedCount += 1;
+          breastfeedCount += 1;
+          feedEstimatedMinutes +=
+              (end == null) ? 18 : math.max(1, end.difference(start).inMinutes);
+          feedMarks.add(_Mark(type: type, minute: startMinute, event: detail));
+          break;
+        case "MEDICATION":
+          medicationCount += 1;
+          healthMarks
+              .add(_Mark(type: type, minute: startMinute, event: detail));
+          break;
+        case "SYMPTOM":
+        case "GROWTH":
+          clinicVisits += 1;
+          healthMarks
+              .add(_Mark(type: type, minute: startMinute, event: detail));
+          break;
+        case "MEMO":
+          memoCount += 1;
+          if (clinicMemo) {
+            clinicVisits += 1;
+            healthMarks.add(
+              _Mark(type: "CLINIC", minute: startMinute, event: detail),
+            );
+          } else {
+            noteMarks
+                .add(_Mark(type: "MEMO", minute: startMinute, event: detail));
+          }
+          break;
+        case "PEE":
+          peeCount += _extractCount(value);
+          diaperMarks
+              .add(_Mark(type: "PEE", minute: startMinute, event: detail));
+          break;
+        case "POO":
+          pooCount += _extractCount(value);
+          diaperMarks
+              .add(_Mark(type: "POO", minute: startMinute, event: detail));
+          break;
+        default:
+          otherCount += 1;
+          noteMarks.add(_Mark(type: type, minute: startMinute, event: detail));
+          break;
+      }
+    }
+
+    if (sleepMinutes == 0) {
+      sleepMinutes =
+          _summaryInt(summary, <String>["sleep total", "sleep logged"]);
+    }
+    if (feedCount == 0) {
+      feedCount = _summaryInt(summary, <String>["feeding events", "feedings"]);
+    }
+    if (formulaMl == 0) {
+      formulaMl = _summaryInt(summary, <String>["formula total"]);
+    }
+    if (peeCount == 0) {
+      peeCount = _summaryDiaperCount(summary, "pee");
+    }
+    if (pooCount == 0) {
+      pooCount = _summaryDiaperCount(summary, "poo");
+    }
+    if (feedEstimatedMinutes == 0 && feedCount > 0) {
+      feedEstimatedMinutes = feedCount * 16;
+    }
+
+    final List<_Block> blocks = sleepBlocks.isEmpty && sleepMinutes > 0
+        ? _estimatedSleepBlocks(sleepMinutes)
+        : sleepBlocks;
+    final List<_Mark> feeds = feedMarks.isEmpty && feedCount > 0
+        ? _estimatedFeedMarks(feedCount)
+        : feedMarks;
+    final int diaperTotal = peeCount + pooCount;
+    final List<_Mark> diapers = diaperMarks.isEmpty && diaperTotal > 0
+        ? _estimatedDiaperMarks(diaperTotal)
+        : diaperMarks;
+    final int healthFallbackCount = medicationCount + clinicVisits;
+    final List<_Mark> health = healthMarks.isEmpty && healthFallbackCount > 0
+        ? _estimatedHealthMarks(healthFallbackCount)
+        : healthMarks;
+    final List<_Mark> notes = noteMarks.isEmpty && (memoCount + otherCount) > 0
+        ? _estimatedNoteMarks(memoCount + otherCount)
+        : noteMarks;
+    final List<_EventDetail> sortedEvents =
+        List<_EventDetail>.from(parsedEvents)
+          ..sort(
+            (_EventDetail a, _EventDetail b) =>
+                a.startUtc.compareTo(b.startUtc),
+          );
+
+    return _DayStats(
+      dayUtc: dayUtc,
+      sleepMinutes: sleepMinutes,
+      feedEstimatedMinutes: feedEstimatedMinutes,
+      feedCount: feedCount,
+      breastfeedCount: breastfeedCount,
+      formulaMl: formulaMl,
+      peeCount: peeCount,
+      pooCount: pooCount,
+      medicationCount: medicationCount,
+      clinicVisits: clinicVisits,
+      memoCount: memoCount,
+      otherCount: otherCount,
+      sleepBlocks: blocks,
+      feedMarks: feeds,
+      diaperMarks: diapers,
+      healthMarks: health,
+      noteMarks: notes,
+      events: sortedEvents,
+      summary: summary,
+    );
+  }
+}
+
+class _Block {
+  const _Block({required this.start, required this.end, this.event});
+
+  final int start;
+  final int end;
+  final _EventDetail? event;
+}
+
+class _Mark {
+  const _Mark({required this.type, required this.minute, this.event});
+
+  final String type;
+  final int minute;
+  final _EventDetail? event;
+}
+
+class _EventVisualStyle {
+  const _EventVisualStyle({
+    required this.iconAsset,
+    required this.color,
+  });
+
+  final String iconAsset;
+  final Color color;
+}
+
+class _WeekBreakdown {
+  const _WeekBreakdown(
+      {required this.title,
+      required this.range,
+      required this.avgSleepMinutes});
+
+  final String title;
+  final String range;
+  final int avgSleepMinutes;
+}
+
+class _RecentEventHighlights {
+  const _RecentEventHighlights({
+    required this.lastFeedUtc,
+    required this.lastSleepEndUtc,
+  });
+
+  final DateTime? lastFeedUtc;
+  final DateTime? lastSleepEndUtc;
+}
+
+class _MonthlyInsights {
+  const _MonthlyInsights({
+    required this.avgBedtimeMinute,
+    required this.avgWakeMinute,
+    required this.longestSleepMinutes,
+    required this.avgFeedIntervalMinutes,
+    required this.peakFeedHour,
+    required this.totalFormulaMl,
+    required this.feedEvents,
+  });
+
+  final int? avgBedtimeMinute;
+  final int? avgWakeMinute;
+  final int longestSleepMinutes;
+  final int? avgFeedIntervalMinutes;
+  final int? peakFeedHour;
+  final int totalFormulaMl;
+  final int feedEvents;
+}
+
+DateTime? _parseUtc(dynamic raw) {
+  if (raw == null) {
+    return null;
+  }
+  final String text = raw.toString().trim();
+  if (text.isEmpty) {
+    return null;
+  }
+  try {
+    return DateTime.parse(text).toUtc();
+  } catch (_) {
+    return null;
+  }
+}
+
+Map<String, dynamic> _normalizeValueMap(dynamic value) {
+  if (value is! Map<dynamic, dynamic>) {
+    return <String, dynamic>{};
+  }
+  return <String, dynamic>{
+    for (final MapEntry<dynamic, dynamic> entry in value.entries)
+      entry.key.toString(): entry.value,
+  };
+}
+
+String _eventCategory(String type, {required bool clinicMemo}) {
+  switch (type) {
+    case "SLEEP":
+      return "sleep";
+    case "FORMULA":
+    case "BREASTFEED":
+      return "feed";
+    case "PEE":
+    case "POO":
+      return "diaper";
+    case "MEDICATION":
+      return "medication";
+    case "SYMPTOM":
+    case "GROWTH":
+      return "hospital";
+    case "MEMO":
+      return clinicMemo ? "hospital" : "memo";
+    default:
+      return "other";
+  }
+}
+
+_EventVisualStyle _eventVisualStyle(String type) {
+  switch (type) {
+    case "SLEEP":
+      return const _EventVisualStyle(
+        iconAsset: AppSvgAsset.sleepCrescentPurple,
+        color: _SemanticColors.sleep,
+      );
+    case "FORMULA":
+    case "BREASTFEED":
+      return const _EventVisualStyle(
+        iconAsset: AppSvgAsset.feeding,
+        color: _SemanticColors.feed,
+      );
+    case "PEE":
+    case "POO":
+      return const _EventVisualStyle(
+        iconAsset: AppSvgAsset.diaper,
+        color: _SemanticColors.diaper,
+      );
+    case "MEDICATION":
+      return const _EventVisualStyle(
+        iconAsset: AppSvgAsset.medicine,
+        color: _SemanticColors.medication,
+      );
+    case "MEMO":
+      return const _EventVisualStyle(
+        iconAsset: AppSvgAsset.memoLucide,
+        color: _SemanticColors.memo,
+      );
+    case "GROWTH":
+      return const _EventVisualStyle(
+        iconAsset: AppSvgAsset.stats,
+        color: _SemanticColors.play,
+      );
+    case "CLINIC":
+    case "SYMPTOM":
+      return const _EventVisualStyle(
+        iconAsset: AppSvgAsset.clinicStethoscope,
+        color: _SemanticColors.hospital,
+      );
+    default:
+      return const _EventVisualStyle(
+        iconAsset: AppSvgAsset.stats,
+        color: _SemanticColors.other,
+      );
+  }
+}
+
+int _extractMl(dynamic value) {
+  if (value is! Map<dynamic, dynamic>) {
+    return 0;
+  }
+  for (final String key in <String>["ml", "amount_ml", "volume_ml"]) {
+    final dynamic raw = value[key];
+    if (raw is int) {
+      return raw;
+    }
+    if (raw is double) {
+      return raw.round();
+    }
+    if (raw is String) {
+      final int? parsed = int.tryParse(raw.trim());
+      if (parsed != null) {
+        return parsed;
+      }
+    }
+  }
+  return 0;
+}
+
+int _extractCount(dynamic value) {
+  if (value is! Map<dynamic, dynamic>) {
+    return 1;
+  }
+  for (final String key in <String>["count", "times", "qty", "quantity"]) {
+    final dynamic raw = value[key];
+    if (raw is int && raw > 0) {
+      return raw;
+    }
+    if (raw is double && raw > 0) {
+      return raw.round();
+    }
+    if (raw is String) {
+      final int? parsed = int.tryParse(raw.trim());
+      if (parsed != null && parsed > 0) {
+        return parsed;
+      }
+    }
+  }
+  return 1;
+}
+
+bool _isClinicMemo(dynamic value) {
+  if (value is! Map<dynamic, dynamic>) {
+    return false;
+  }
+  final String raw = <String>[
+    (value["memo"] ?? "").toString(),
+    (value["note"] ?? "").toString(),
+    (value["text"] ?? "").toString(),
+    (value["content"] ?? "").toString(),
+    (value["message"] ?? "").toString(),
+  ].join(" ");
+  if (raw.trim().isEmpty) {
+    return false;
+  }
+  final String lower = raw.toLowerCase();
+  return lower.contains("clinic") ||
+      lower.contains("hospital") ||
+      lower.contains("pediatric") ||
+      lower.contains("doctor") ||
+      lower.contains("소아과") ||
+      lower.contains("병원") ||
+      lower.contains("진료");
+}
+
+int _summaryInt(List<String> summary, List<String> keys) {
+  for (final String line in summary) {
+    final String lower = line.toLowerCase();
+    if (keys.any(lower.contains)) {
+      final RegExpMatch? match = RegExp(r"\d+").firstMatch(line);
+      return int.tryParse(match?.group(0) ?? "0") ?? 0;
+    }
+  }
+  return 0;
+}
+
+int _summaryDiaperCount(List<String> summary, String diaperType) {
+  final RegExp reg = RegExp("$diaperType\\s*(\\d+)", caseSensitive: false);
+  for (final String line in summary) {
+    final RegExpMatch? match = reg.firstMatch(line);
+    final int parsed = int.tryParse(match?.group(1) ?? "0") ?? 0;
+    if (parsed > 0) {
+      return parsed;
+    }
+  }
+  return 0;
+}
+
+List<_Block> _estimatedSleepBlocks(int total) {
+  final int a = (total * 0.42).round();
+  final int b = (total * 0.33).round();
+  final int c = math.max(0, total - a - b);
+  final List<int> starts = <int>[40, 520, 980];
+  final List<int> durations = <int>[a, b, c];
+
+  final List<_Block> blocks = <_Block>[];
+  for (int i = 0; i < starts.length; i++) {
+    final int dur = durations[i];
+    if (dur <= 0) {
+      continue;
+    }
+    final int start = _clampI(starts[i], 0, _minutesPerDay - 1);
+    final int end = _clampI(start + dur, start + 20, _minutesPerDay);
+    blocks.add(_Block(start: start, end: end));
+  }
+  return blocks;
+}
+
+List<_Mark> _estimatedFeedMarks(int count) {
+  if (count <= 0) {
+    return <_Mark>[];
+  }
+  if (count == 1) {
+    return const <_Mark>[_Mark(type: "FORMULA", minute: 12 * 60)];
+  }
+
+  const int startMinute = 4 * 60;
+  const int span = 16 * 60;
+  final double step = span / (count - 1);
+
+  return List<_Mark>.generate(count, (int i) {
+    final int minute = _clampI(
+      (startMinute + (step * i)).round(),
+      0,
+      _minutesPerDay - 1,
+    );
+    return _Mark(type: "FORMULA", minute: minute);
+  });
+}
+
+List<_Mark> _estimatedDiaperMarks(int count) {
+  if (count <= 0) {
+    return <_Mark>[];
+  }
+  const List<int> base = <int>[6 * 60, 10 * 60, 14 * 60, 18 * 60, 22 * 60];
+  return List<_Mark>.generate(count, (int index) {
+    final int minute = base[index % base.length];
+    final String type = index.isEven ? "PEE" : "POO";
+    return _Mark(type: type, minute: minute);
+  });
+}
+
+List<_Mark> _estimatedHealthMarks(int count) {
+  if (count <= 0) {
+    return <_Mark>[];
+  }
+  const List<int> base = <int>[9 * 60, 13 * 60, 17 * 60, 21 * 60];
+  return List<_Mark>.generate(count, (int index) {
+    final int minute = base[index % base.length];
+    return _Mark(type: "CLINIC", minute: minute);
+  });
+}
+
+List<_Mark> _estimatedNoteMarks(int count) {
+  if (count <= 0) {
+    return <_Mark>[];
+  }
+  const List<int> base = <int>[8 * 60, 12 * 60, 16 * 60, 20 * 60];
+  return List<_Mark>.generate(count, (int index) {
+    final int minute = base[index % base.length];
+    return _Mark(type: "MEMO", minute: minute);
+  });
+}
+
+double _sleepTrendDelta(List<_DayStats> days) {
+  if (days.length < 2) {
+    return 0;
+  }
+  final List<_DayStats> sorted = List<_DayStats>.from(days)
+    ..sort((_DayStats a, _DayStats b) => a.dayUtc.compareTo(b.dayUtc));
+
+  final int split = sorted.length ~/ 2;
+  if (split == 0 || split >= sorted.length) {
+    return 0;
+  }
+
+  final double first = sorted
+          .take(split)
+          .fold<int>(0, (int s, _DayStats d) => s + d.sleepMinutes) /
+      split;
+  final double second = sorted
+          .skip(split)
+          .fold<int>(0, (int s, _DayStats d) => s + d.sleepMinutes) /
+      (sorted.length - split);
+
+  return (second - first) / 60;
+}
+
+List<_WeekBreakdown> _buildWeeklyBreakdown(List<_DayStats> days) {
+  if (days.isEmpty) {
+    return <_WeekBreakdown>[];
+  }
+
+  final Map<DateTime, List<_DayStats>> grouped = <DateTime, List<_DayStats>>{};
+  for (final _DayStats day in days) {
+    final DateTime start = _toWeekStart(day.dayUtc);
+    grouped.putIfAbsent(start, () => <_DayStats>[]).add(day);
+  }
+
+  final List<MapEntry<DateTime, List<_DayStats>>> entries = grouped.entries
+      .toList()
+    ..sort((MapEntry<DateTime, List<_DayStats>> a,
+            MapEntry<DateTime, List<_DayStats>> b) =>
+        b.key.compareTo(a.key));
+
+  final int total = entries.length;
+  final List<_WeekBreakdown> list = <_WeekBreakdown>[];
+
+  for (int i = 0; i < entries.length; i++) {
+    final List<_DayStats> week = List<_DayStats>.from(entries[i].value)
+      ..sort((_DayStats a, _DayStats b) => a.dayUtc.compareTo(b.dayUtc));
+
+    final int avg =
+        (week.fold<int>(0, (int s, _DayStats d) => s + d.sleepMinutes) /
+                week.length)
+            .round();
+
+    final DateTime start = week.first.dayUtc;
+    final DateTime end = week.last.dayUtc;
+    list.add(
+      _WeekBreakdown(
+        title: "Week ${total - i}",
+        range:
+            "${_month(start.month)} ${start.day} - ${_month(end.month)} ${end.day}",
+        avgSleepMinutes: avg,
+      ),
+    );
+  }
+
+  return list;
+}
+
+String _formatHour(double value) {
+  if (!value.isFinite) {
+    return "0h";
+  }
+  final double rounded = (value * 10).round() / 10;
+  if ((rounded - rounded.round()).abs() < 0.001) {
+    return "${rounded.round()}h";
+  }
+  return "${rounded.toStringAsFixed(1)}h";
+}
+
+String _formatCount(double value) {
+  if (!value.isFinite || value <= 0) {
+    return "0x";
+  }
+  final double rounded = (value * 10).round() / 10;
+  if ((rounded - rounded.round()).abs() < 0.001) {
+    return "${rounded.round()}x";
+  }
+  return "${rounded.toStringAsFixed(1)}x";
+}
+
+String _formatTrend(double value) {
+  final double rounded = (value * 10).round() / 10;
+  final String sign = rounded >= 0 ? "+" : "";
+  return "$sign${rounded.toStringAsFixed(1)}h";
+}
+
+_RecentEventHighlights _buildRecentEventHighlights(
+  List<_EventDetail> history,
+  DateTime nowUtc,
+) {
+  DateTime? lastFeedUtc;
+  DateTime? lastSleepEndUtc;
+
+  for (final _EventDetail event in history) {
+    if (event.startUtc.isAfter(nowUtc)) {
+      continue;
+    }
+
+    if (event.type == "FORMULA" || event.type == "BREASTFEED") {
+      if (lastFeedUtc == null || event.startUtc.isAfter(lastFeedUtc)) {
+        lastFeedUtc = event.startUtc;
+      }
+    }
+
+    if (event.type == "SLEEP" && event.endUtc != null) {
+      final DateTime endUtc = event.endUtc!;
+      if (!endUtc.isAfter(nowUtc) &&
+          (lastSleepEndUtc == null || endUtc.isAfter(lastSleepEndUtc))) {
+        lastSleepEndUtc = endUtc;
       }
     }
   }
 
-  @override
-  bool shouldRepaint(covariant _VerticalTimeBarPainter oldDelegate) {
-    return oldDelegate.bars != bars ||
-        oldDelegate.gridColor != gridColor ||
-        oldDelegate.labelColor != labelColor;
+  return _RecentEventHighlights(
+    lastFeedUtc: lastFeedUtc,
+    lastSleepEndUtc: lastSleepEndUtc,
+  );
+}
+
+_MonthlyInsights _buildMonthlyInsights(List<_DayStats> days) {
+  if (days.isEmpty) {
+    return const _MonthlyInsights(
+      avgBedtimeMinute: null,
+      avgWakeMinute: null,
+      longestSleepMinutes: 0,
+      avgFeedIntervalMinutes: null,
+      peakFeedHour: null,
+      totalFormulaMl: 0,
+      feedEvents: 0,
+    );
+  }
+
+  final List<_EventDetail> events =
+      days.expand((_DayStats day) => day.events).toList(growable: false)
+        ..sort(
+          (_EventDetail a, _EventDetail b) => a.startUtc.compareTo(b.startUtc),
+        );
+
+  final List<int> bedtimeSamples = <int>[];
+  final List<int> wakeSamples = <int>[];
+  int longestSleepMinutes = 0;
+
+  for (final _EventDetail event in events) {
+    if (event.type != "SLEEP" || event.endUtc == null) {
+      continue;
+    }
+    final DateTime endUtc = event.endUtc!;
+    if (!endUtc.isAfter(event.startUtc)) {
+      continue;
+    }
+
+    final int duration = endUtc.difference(event.startUtc).inMinutes;
+    if (duration > longestSleepMinutes) {
+      longestSleepMinutes = duration;
+    }
+
+    final DateTime startLocal = event.startUtc.toLocal();
+    final int startMinute = startLocal.hour * 60 + startLocal.minute;
+    if (startMinute >= 18 * 60 || startMinute <= 6 * 60) {
+      bedtimeSamples.add(
+        startMinute < 12 * 60 ? startMinute + _minutesPerDay : startMinute,
+      );
+    }
+
+    final DateTime endLocal = endUtc.toLocal();
+    final int endMinute = endLocal.hour * 60 + endLocal.minute;
+    if (endMinute <= 13 * 60) {
+      wakeSamples.add(endMinute);
+    }
+  }
+
+  if (wakeSamples.isEmpty) {
+    for (final _EventDetail event in events) {
+      if (event.type != "SLEEP" || event.endUtc == null) {
+        continue;
+      }
+      final DateTime endLocal = event.endUtc!.toLocal();
+      wakeSamples.add(endLocal.hour * 60 + endLocal.minute);
+    }
+  }
+
+  final List<_EventDetail> feedEvents = events
+      .where(
+        (_EventDetail event) =>
+            event.type == "FORMULA" || event.type == "BREASTFEED",
+      )
+      .toList(growable: false)
+    ..sort(
+      (_EventDetail a, _EventDetail b) => a.startUtc.compareTo(b.startUtc),
+    );
+
+  final List<int> feedIntervals = <int>[];
+  for (int i = 1; i < feedEvents.length; i++) {
+    final int gap =
+        feedEvents[i].startUtc.difference(feedEvents[i - 1].startUtc).inMinutes;
+    if (gap >= 20 && gap <= 12 * 60) {
+      feedIntervals.add(gap);
+    }
+  }
+
+  final List<int> hourBuckets = List<int>.filled(24, 0, growable: false);
+  for (final _EventDetail event in feedEvents) {
+    final int hour = event.startUtc.toLocal().hour;
+    hourBuckets[hour] += 1;
+  }
+
+  int peakFeedCount = 0;
+  int? peakFeedHour;
+  for (int hour = 0; hour < hourBuckets.length; hour++) {
+    if (hourBuckets[hour] > peakFeedCount) {
+      peakFeedCount = hourBuckets[hour];
+      peakFeedHour = hour;
+    }
+  }
+  if (peakFeedCount == 0) {
+    peakFeedHour = null;
+  }
+
+  return _MonthlyInsights(
+    avgBedtimeMinute: _avgMinuteWrapped(bedtimeSamples),
+    avgWakeMinute: _avgInt(wakeSamples),
+    longestSleepMinutes: longestSleepMinutes,
+    avgFeedIntervalMinutes: _avgInt(feedIntervals),
+    peakFeedHour: peakFeedHour,
+    totalFormulaMl: days.fold<int>(
+      0,
+      (int sum, _DayStats day) => sum + day.formulaMl,
+    ),
+    feedEvents: feedEvents.length,
+  );
+}
+
+int? _avgInt(List<int> values) {
+  if (values.isEmpty) {
+    return null;
+  }
+  final int sum = values.fold<int>(0, (int a, int b) => a + b);
+  return (sum / values.length).round();
+}
+
+int? _avgMinuteWrapped(List<int> values) {
+  final int? avg = _avgInt(values);
+  if (avg == null) {
+    return null;
+  }
+  return avg % _minutesPerDay;
+}
+
+String _formatElapsedSince(DateTime? instantUtc, DateTime nowUtc) {
+  if (instantUtc == null) {
+    return "No record";
+  }
+  final int minutes = nowUtc.difference(instantUtc).inMinutes;
+  if (minutes <= 0) {
+    return "Just now";
+  }
+  return "${_formatDurationSpan(minutes)} ago";
+}
+
+String _formatHighlightStamp(DateTime? instantUtc) {
+  if (instantUtc == null) {
+    return "Log a record to track";
+  }
+  return "at ${_formatClock(instantUtc.toLocal())}";
+}
+
+String _formatDurationSpan(int minutes) {
+  final int safe = math.max(0, minutes);
+  final int hour = safe ~/ 60;
+  final int min = safe % 60;
+  if (hour <= 0) {
+    return "${min}m";
+  }
+  if (min == 0) {
+    return "${hour}h";
+  }
+  return "${hour}h ${min}m";
+}
+
+String _formatDurationMinutes(int? minutes) {
+  if (minutes == null || minutes <= 0) {
+    return "-";
+  }
+  return _formatDurationSpan(minutes);
+}
+
+String _formatMinuteOfDay(int? minuteOfDay) {
+  if (minuteOfDay == null) {
+    return "-";
+  }
+  return _clockMinuteLabel(minuteOfDay);
+}
+
+String _formatFeedWindow(int? startHour) {
+  if (startHour == null) {
+    return "-";
+  }
+  final int endHour = (startHour + 2) % 24;
+  final String start = startHour.toString().padLeft(2, "0");
+  final String end = endHour.toString().padLeft(2, "0");
+  return "$start:00-$end:00";
+}
+
+String _monthlySleepPatternText(_MonthlyInsights insights) {
+  if (insights.longestSleepMinutes <= 0 &&
+      insights.avgBedtimeMinute == null &&
+      insights.avgWakeMinute == null) {
+    return "Not enough sleep records yet.";
+  }
+  final String bedtime = _formatMinuteOfDay(insights.avgBedtimeMinute);
+  final String wake = _formatMinuteOfDay(insights.avgWakeMinute);
+  final String longest = _formatDurationMinutes(insights.longestSleepMinutes);
+  return "Bedtime around $bedtime, wake-up around $wake, longest stretch $longest.";
+}
+
+String _monthlyFeedPatternText(_MonthlyInsights insights) {
+  if (insights.feedEvents <= 0) {
+    return "Not enough feeding records yet.";
+  }
+  final String gap = _formatDurationMinutes(insights.avgFeedIntervalMinutes);
+  final String peak = _formatFeedWindow(insights.peakFeedHour);
+  return "Average interval $gap, peak window $peak, total formula ${insights.totalFormulaMl} ml.";
+}
+
+List<_DonutCategory> _buildDailyClockSegments(
+  BuildContext context,
+  _DayStats day,
+) {
+  final List<String> minuteCategory =
+      List<String>.filled(_minutesPerDay, "idle", growable: false);
+  final List<int> minutePriority =
+      List<int>.filled(_minutesPerDay, 0, growable: false);
+  final List<List<_EventDetail>> minuteEvents =
+      List<List<_EventDetail>>.generate(
+    _minutesPerDay,
+    (_) => <_EventDetail>[],
+    growable: false,
+  );
+
+  final List<_ClockPaintSpan> spans = day.events
+      .map((_EventDetail event) => _clockSpanForEvent(day, event))
+      .toList(growable: false);
+
+  for (final _ClockPaintSpan span in spans) {
+    final int priority = _clockCategoryPriority(span.category);
+    for (int minute = span.startMinute; minute < span.endMinute; minute++) {
+      if (priority >= minutePriority[minute]) {
+        minutePriority[minute] = priority;
+        minuteCategory[minute] = span.category;
+      }
+      minuteEvents[minute].add(span.event);
+    }
+  }
+
+  final List<_DonutCategory> slices = <_DonutCategory>[];
+  int cursor = 0;
+  while (cursor < _minutesPerDay) {
+    final String category = minuteCategory[cursor];
+    int next = cursor + 1;
+    while (next < _minutesPerDay && minuteCategory[next] == category) {
+      next += 1;
+    }
+
+    final Map<String, _EventDetail> unique = <String, _EventDetail>{};
+    for (int minute = cursor; minute < next; minute++) {
+      for (final _EventDetail event in minuteEvents[minute]) {
+        unique.putIfAbsent(_eventIdentityKey(event), () => event);
+      }
+    }
+
+    slices.add(
+      _DonutCategory(
+        slice: DonutSliceData(
+          label: _clockSliceLabel(context, category, cursor, next),
+          value: (next - cursor).toDouble(),
+          color: _clockCategoryColor(context, category),
+        ),
+        events: unique.values.toList(growable: false),
+      ),
+    );
+    cursor = next;
+  }
+
+  return slices;
+}
+
+_ClockPaintSpan _clockSpanForEvent(_DayStats day, _EventDetail event) {
+  final int startMinute = _clampI(
+    _minuteInDisplayLocalDay(event.startUtc, day.dayUtc),
+    0,
+    _minutesPerDay - 1,
+  );
+
+  final int endMinute = _clampI(
+    event.endUtc == null
+        ? startMinute + _clockDefaultSpanMinutes(event.displayType)
+        : _minuteInDisplayLocalDay(event.endUtc!, day.dayUtc),
+    startMinute + 1,
+    _minutesPerDay,
+  );
+
+  return _ClockPaintSpan(
+    startMinute: startMinute,
+    endMinute: endMinute,
+    category: event.category,
+    event: event,
+  );
+}
+
+int _clockDefaultSpanMinutes(String type) {
+  switch (type) {
+    case "SLEEP":
+      return 30;
+    case "FORMULA":
+      return 10;
+    case "BREASTFEED":
+      return 18;
+    case "PEE":
+    case "POO":
+      return 8;
+    case "MEDICATION":
+    case "SYMPTOM":
+    case "GROWTH":
+    case "CLINIC":
+      return 12;
+    case "MEMO":
+      return 10;
+    default:
+      return 9;
   }
 }
 
-class _DayMetrics {
-  const _DayMetrics({
-    required this.feedings,
-    required this.breastfeedEvents,
-    required this.formulaML,
-    required this.sleepMinutes,
-    required this.peeCount,
-    required this.pooCount,
-    required this.medicationCount,
-  });
+int _clockCategoryPriority(String category) {
+  switch (category) {
+    case "sleep":
+      return 1;
+    case "other":
+      return 2;
+    case "feed":
+      return 3;
+    case "diaper":
+      return 4;
+    case "medication":
+      return 5;
+    case "memo":
+      return 6;
+    case "hospital":
+      return 7;
+    case "idle":
+      return 0;
+    default:
+      return 1;
+  }
+}
 
-  final int feedings;
-  final int breastfeedEvents;
-  final int formulaML;
-  final int sleepMinutes;
-  final int peeCount;
-  final int pooCount;
-  final int medicationCount;
+Color _clockCategoryColor(BuildContext context, String category) {
+  switch (category) {
+    case "sleep":
+      return _SemanticColors.sleep;
+    case "feed":
+      return _SemanticColors.feed;
+    case "diaper":
+      return _SemanticColors.diaper;
+    case "medication":
+      return _SemanticColors.medication;
+    case "hospital":
+      return _SemanticColors.hospital;
+    case "memo":
+      return _SemanticColors.memo;
+    case "other":
+      return _SemanticColors.other.withValues(alpha: 0.75);
+    case "idle":
+      return Theme.of(context)
+          .colorScheme
+          .surfaceContainerHighest
+          .withValues(alpha: 0.55);
+    default:
+      return _SemanticColors.other.withValues(alpha: 0.75);
+  }
+}
+
+String _clockCategoryLabel(BuildContext context, String category) {
+  switch (category) {
+    case "sleep":
+      return tr(context, ko: "Sleep", en: "Sleep", es: "Sueno");
+    case "feed":
+      return tr(context, ko: "Feed", en: "Feed", es: "Alimentacion");
+    case "diaper":
+      return tr(context, ko: "Diaper", en: "Diaper", es: "Panal");
+    case "medication":
+      return tr(context, ko: "Medication", en: "Medication", es: "Medicina");
+    case "hospital":
+      return tr(context, ko: "Hospital", en: "Hospital", es: "Hospital");
+    case "memo":
+      return tr(context, ko: "Memo", en: "Memo", es: "Memo");
+    case "other":
+      return tr(context, ko: "Other", en: "Other", es: "Otro");
+    case "idle":
+      return tr(context, ko: "No Event", en: "No Event", es: "Sin eventos");
+    default:
+      return category;
+  }
+}
+
+String _clockSliceLabel(
+  BuildContext context,
+  String category,
+  int startMinute,
+  int endMinute,
+) {
+  final String range =
+      "${_clockMinuteLabel(startMinute)}-${_clockMinuteLabel(endMinute)}";
+  if (category == "idle") {
+    return range;
+  }
+  return "${_clockCategoryLabel(context, category)} $range";
+}
+
+String _eventIdentityKey(_EventDetail event) {
+  return "${event.displayType}|${event.startUtc.toIso8601String()}|"
+      "${event.endUtc?.toIso8601String() ?? ""}";
+}
+
+String _clockMinuteLabel(int minute) {
+  final int safe = _clampI(minute, 0, _minutesPerDay);
+  if (safe == _minutesPerDay) {
+    return "24:00";
+  }
+  final int hour = safe ~/ 60;
+  final int mins = safe % 60;
+  return "${hour.toString().padLeft(2, "0")}:${mins.toString().padLeft(2, "0")}";
+}
+
+int _minuteInDisplayLocalDay(DateTime instantUtc, DateTime dayUtc) {
+  final DateTime dayLocal = dayUtc.toLocal();
+  final DateTime dayStartLocal =
+      DateTime(dayLocal.year, dayLocal.month, dayLocal.day);
+  return instantUtc.toLocal().difference(dayStartLocal).inMinutes;
+}
+
+List<_DonutCategory> _buildDonutCategories(
+    BuildContext context, _DayStats day) {
+  final Map<String, List<_EventDetail>> grouped =
+      <String, List<_EventDetail>>{};
+  for (final _EventDetail event in day.events) {
+    grouped.putIfAbsent(event.category, () => <_EventDetail>[]).add(event);
+  }
+
+  final List<_DonutCategory> categories = <_DonutCategory>[];
+  void addCategory({
+    required String key,
+    required String label,
+    required double value,
+    required Color color,
+  }) {
+    if (value <= 0) {
+      return;
+    }
+    categories.add(
+      _DonutCategory(
+        slice: DonutSliceData(label: label, value: value, color: color),
+        events: grouped[key] ?? const <_EventDetail>[],
+      ),
+    );
+  }
+
+  final double sleepValue = (grouped["sleep"]?.length ?? 0) > 0
+      ? (grouped["sleep"]?.length ?? 0).toDouble()
+      : (day.sleepMinutes > 0 ? 1 : 0).toDouble();
+  final double feedValue = math.max(
+    day.feedCount.toDouble(),
+    (grouped["feed"]?.length ?? 0).toDouble(),
+  );
+  final double diaperValue = math.max(
+    (day.peeCount + day.pooCount).toDouble(),
+    (grouped["diaper"]?.length ?? 0).toDouble(),
+  );
+  final double medicationValue = math.max(
+    day.medicationCount.toDouble(),
+    (grouped["medication"]?.length ?? 0).toDouble(),
+  );
+  final double hospitalValue = math.max(
+    day.clinicVisits.toDouble(),
+    (grouped["hospital"]?.length ?? 0).toDouble(),
+  );
+  final double memoValue = math.max(
+    day.memoCount.toDouble(),
+    (grouped["memo"]?.length ?? 0).toDouble(),
+  );
+  final double otherValue = math.max(
+    day.otherCount.toDouble(),
+    (grouped["other"]?.length ?? 0).toDouble(),
+  );
+
+  addCategory(
+    key: "sleep",
+    label: tr(context, ko: "Sleep", en: "Sleep", es: "Sueno"),
+    value: sleepValue,
+    color: _SemanticColors.sleep,
+  );
+  addCategory(
+    key: "feed",
+    label: tr(context, ko: "Feed", en: "Feed", es: "Alimentacion"),
+    value: feedValue,
+    color: _SemanticColors.feed,
+  );
+  addCategory(
+    key: "diaper",
+    label: tr(context, ko: "Diaper", en: "Diaper", es: "Panal"),
+    value: diaperValue,
+    color: _SemanticColors.diaper,
+  );
+  addCategory(
+    key: "medication",
+    label: tr(context, ko: "Medication", en: "Medication", es: "Medicina"),
+    value: medicationValue,
+    color: _SemanticColors.medication,
+  );
+  addCategory(
+    key: "hospital",
+    label: tr(context, ko: "Hospital", en: "Hospital", es: "Hospital"),
+    value: hospitalValue,
+    color: _SemanticColors.hospital,
+  );
+  addCategory(
+    key: "memo",
+    label: tr(context, ko: "Memo", en: "Memo", es: "Memo"),
+    value: memoValue,
+    color: _SemanticColors.memo,
+  );
+  addCategory(
+    key: "other",
+    label: tr(context, ko: "Other", en: "Other", es: "Otro"),
+    value: otherValue,
+    color: _SemanticColors.other,
+  );
+
+  return categories;
+}
+
+Future<void> _showEventDetailsSheet(
+  BuildContext context, {
+  required String title,
+  required List<_EventDetail> events,
+}) async {
+  final List<_EventDetail> sorted = List<_EventDetail>.from(events)
+    ..sort(
+      (_EventDetail a, _EventDetail b) => a.startUtc.compareTo(b.startUtc),
+    );
+
+  await showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: true,
+    isScrollControlled: true,
+    builder: (BuildContext context) {
+      final double maxHeight = MediaQuery.of(context).size.height * 0.72;
+      if (sorted.isEmpty) {
+        return SafeArea(
+          child: SizedBox(
+            height: 180,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    "No detailed records for this item.",
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      }
+
+      return SafeArea(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: maxHeight),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 10),
+                child: Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: Text(
+                        title,
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      "${sorted.length} logs",
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1),
+              Expanded(
+                child: ListView.separated(
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+                  itemCount: sorted.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 4),
+                  itemBuilder: (BuildContext context, int index) {
+                    final _EventDetail event = sorted[index];
+                    final _EventVisualStyle style =
+                        _eventVisualStyle(event.displayType);
+                    final String detail = _eventSummaryText(event);
+                    final String time = _formatEventWindow(event);
+                    return ListTile(
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 2,
+                      ),
+                      leading: Container(
+                        width: 32,
+                        height: 32,
+                        decoration: BoxDecoration(
+                          color: style.color.withValues(alpha: 0.16),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Center(
+                          child: AppSvgIcon(
+                            style.iconAsset,
+                            size: 14,
+                            color: style.color,
+                          ),
+                        ),
+                      ),
+                      title: Text(
+                        _eventTypeLabel(context, event.displayType),
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      subtitle: Text(
+                        detail.isEmpty ? time : "$time · $detail",
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          height: 1.35,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    },
+  );
+}
+
+String _eventTypeLabel(BuildContext context, String type) {
+  switch (type) {
+    case "SLEEP":
+      return tr(context, ko: "Sleep", en: "Sleep", es: "Sueno");
+    case "FORMULA":
+      return tr(context, ko: "Formula", en: "Formula", es: "Formula");
+    case "BREASTFEED":
+      return tr(context, ko: "Breastfeed", en: "Breastfeed", es: "Lactancia");
+    case "PEE":
+      return tr(context, ko: "Pee", en: "Pee", es: "Orina");
+    case "POO":
+      return tr(context, ko: "Poo", en: "Poo", es: "Heces");
+    case "MEDICATION":
+      return tr(context, ko: "Medication", en: "Medication", es: "Medicina");
+    case "SYMPTOM":
+      return tr(context, ko: "Symptom", en: "Symptom", es: "Sintoma");
+    case "GROWTH":
+      return tr(context, ko: "Growth", en: "Growth", es: "Crecimiento");
+    case "CLINIC":
+      return tr(context, ko: "Hospital", en: "Hospital", es: "Hospital");
+    case "MEMO":
+      return tr(context, ko: "Memo", en: "Memo", es: "Memo");
+    default:
+      return type;
+  }
+}
+
+String _eventSummaryText(_EventDetail event) {
+  final Map<String, dynamic> value = event.value;
+  final List<String> parts = <String>[];
+
+  final int ml = _extractMl(value);
+  if (ml > 0) {
+    parts.add("$ml ml");
+  }
+
+  final int duration = _extractPositiveInt(value["duration_min"]);
+  if (duration > 0) {
+    parts.add("$duration min");
+  }
+
+  final int grams = _extractPositiveInt(value["grams"]);
+  if (grams > 0) {
+    parts.add("$grams g");
+  }
+
+  if (event.type == "PEE" || event.type == "POO") {
+    final int count = _extractCount(value);
+    if (count > 0) {
+      parts.add("${count}x");
+    }
+  }
+
+  final String name = _firstText(value, <String>["name", "med_name"]);
+  if (name.isNotEmpty) {
+    parts.add(name);
+  }
+  final String dose = _firstText(value, <String>["dose_text", "dose"]);
+  if (dose.isNotEmpty) {
+    parts.add("dose $dose");
+  }
+  final String route = _firstText(value, <String>["route", "side", "poo_type"]);
+  if (route.isNotEmpty) {
+    parts.add(route);
+  }
+
+  final String temp = _firstText(
+    value,
+    <String>["temp_c", "temperature_c", "temp"],
+  );
+  if (temp.isNotEmpty) {
+    parts.add("$temp C");
+  }
+
+  final String text = _firstText(
+    value,
+    <String>["memo", "note", "text", "content", "message"],
+  );
+  if (text.isNotEmpty) {
+    parts.add(text.length > 36 ? "${text.substring(0, 36)}..." : text);
+  }
+
+  if (parts.isEmpty) {
+    return _compactValueMap(value);
+  }
+  return parts.join(" · ");
+}
+
+String _firstText(Map<String, dynamic> value, List<String> keys) {
+  for (final String key in keys) {
+    final dynamic raw = value[key];
+    if (raw == null) {
+      continue;
+    }
+    final String text = raw.toString().trim();
+    if (text.isNotEmpty) {
+      return text;
+    }
+  }
+  return "";
+}
+
+int _extractPositiveInt(dynamic raw) {
+  if (raw is int && raw > 0) {
+    return raw;
+  }
+  if (raw is double && raw > 0) {
+    return raw.round();
+  }
+  if (raw is String) {
+    final int? parsed = int.tryParse(raw.trim());
+    if (parsed != null && parsed > 0) {
+      return parsed;
+    }
+  }
+  return 0;
+}
+
+String _compactValueMap(Map<String, dynamic> value) {
+  if (value.isEmpty) {
+    return "";
+  }
+  final List<String> entries = <String>[];
+  for (final MapEntry<String, dynamic> entry in value.entries) {
+    final String key = entry.key.trim();
+    final String text = entry.value.toString().trim();
+    if (key.isEmpty || text.isEmpty) {
+      continue;
+    }
+    entries.add("$key $text");
+    if (entries.length >= 2) {
+      break;
+    }
+  }
+  return entries.join(" · ");
+}
+
+String _formatEventWindow(_EventDetail event) {
+  final DateTime start = event.startUtc.toLocal();
+  final String startText = _formatMonthDayClock(start);
+  if (event.endUtc == null) {
+    return startText;
+  }
+
+  final DateTime end = event.endUtc!.toLocal();
+  if (start.year == end.year &&
+      start.month == end.month &&
+      start.day == end.day) {
+    return "$startText - ${_formatClock(end)}";
+  }
+  return "$startText - ${_formatMonthDayClock(end)}";
+}
+
+String _formatMonthDayClock(DateTime value) {
+  return "${value.month}/${value.day} ${_formatClock(value)}";
+}
+
+String _formatClock(DateTime value) {
+  final String h = value.hour.toString().padLeft(2, "0");
+  final String m = value.minute.toString().padLeft(2, "0");
+  return "$h:$m";
+}
+
+String _weekday(DateTime dayUtc) {
+  const List<String> names = <String>[
+    "Mon",
+    "Tue",
+    "Wed",
+    "Thu",
+    "Fri",
+    "Sat",
+    "Sun"
+  ];
+  return names[dayUtc.weekday - 1];
+}
+
+String _month(int month) {
+  const List<String> names = <String>[
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
+  return names[_clampI(month, 1, 12) - 1];
+}
+
+int _clampI(int value, int min, int max) {
+  if (value < min) {
+    return min;
+  }
+  if (value > max) {
+    return max;
+  }
+  return value;
+}
+
+double _clampD(double value, double min, double max) {
+  if (value < min) {
+    return min;
+  }
+  if (value > max) {
+    return max;
+  }
+  return value;
 }

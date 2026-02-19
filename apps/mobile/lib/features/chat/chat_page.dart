@@ -8,6 +8,7 @@ import "package:speech_to_text/speech_recognition_result.dart";
 import "package:speech_to_text/speech_to_text.dart" as stt;
 
 import "../../core/network/babyai_api.dart";
+import "../../core/widgets/app_svg_icon.dart";
 
 class ChatPage extends StatefulWidget {
   const ChatPage({
@@ -66,7 +67,10 @@ class ChatPageState extends State<ChatPage> {
   }
 
   Future<void> _initializeChatState() async {
-    await _refreshThreadsFromServer(bootstrapActive: true);
+    await _createNewThread();
+    if (!_hasActiveThread) {
+      await _refreshThreadsFromServer(bootstrapActive: false);
+    }
   }
 
   Future<void> refreshHistoryFromServer() async {
@@ -129,8 +133,7 @@ class ChatPageState extends State<ChatPage> {
       final String? currentSessionId = _activeThreadOrNull?.sessionId;
       final Map<String, _ChatThread> existingBySession = <String, _ChatThread>{
         for (final _ChatThread thread in _threads)
-          if (thread.sessionId != null &&
-              thread.sessionId!.trim().isNotEmpty)
+          if (thread.sessionId != null && thread.sessionId!.trim().isNotEmpty)
             thread.sessionId!.trim(): thread,
       };
 
@@ -179,7 +182,8 @@ class ChatPageState extends State<ChatPage> {
         if (idx >= 0) {
           nextIndex = idx;
         }
-      } else if (currentSessionId != null && currentSessionId.trim().isNotEmpty) {
+      } else if (currentSessionId != null &&
+          currentSessionId.trim().isNotEmpty) {
         final int idx = parsed
             .indexWhere((_ChatThread t) => t.sessionId == currentSessionId);
         if (idx >= 0) {
@@ -246,8 +250,7 @@ class ChatPageState extends State<ChatPage> {
         continue;
       }
       final DateTime createdAt = DateTime.tryParse(
-            (item["created_at"] ?? DateTime.now().toIso8601String())
-                .toString(),
+            (item["created_at"] ?? DateTime.now().toIso8601String()).toString(),
           ) ??
           DateTime.now();
       if (firstUserText == null && role == "user") {
@@ -629,18 +632,14 @@ class ChatPageState extends State<ChatPage> {
             label: "마지막 대변 시간",
             icon: Icons.water_drop_outlined,
             color: color,
-            onTap: _loading
-                ? null
-                : () => _sendQuestionText("마지막 대변 시간 알려줘"),
+            onTap: _loading ? null : () => _sendQuestionText("마지막 대변 시간 알려줘"),
           ),
           const SizedBox(width: 8),
           _QuickActionPill(
             label: "다음 수유 예측",
             icon: Icons.schedule_outlined,
             color: color,
-            onTap: _loading
-                ? null
-                : () => _sendQuestionText("다음 수유 시간 예측해줘"),
+            onTap: _loading ? null : () => _sendQuestionText("다음 수유 시간 예측해줘"),
           ),
           const SizedBox(width: 8),
           _QuickActionPill(
@@ -693,11 +692,21 @@ class ChatPageState extends State<ChatPage> {
                         ? CrossAxisAlignment.start
                         : CrossAxisAlignment.center,
                     children: <Widget>[
-                      Text(
-                        "Parenting Assistant",
-                        style: theme.textTheme.titleLarge?.copyWith(
-                          fontWeight: FontWeight.w700,
-                        ),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: <Widget>[
+                          const AppSvgIcon(
+                            AppSvgAsset.aiChatSparkles,
+                            size: 18,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            "Parenting Assistant",
+                            style: theme.textTheme.titleLarge?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
                       ),
                       Text(
                         active?.title ?? "New conversation",
@@ -970,6 +979,17 @@ class _DatePill extends StatelessWidget {
 class _MessageBubble extends StatelessWidget {
   const _MessageBubble({required this.message});
 
+  static final RegExp _htmlBreakTagPattern = RegExp(
+    r"<br\s*/?>",
+    caseSensitive: false,
+    multiLine: true,
+  );
+  static final RegExp _tableAlignRowPattern = RegExp(
+    r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$",
+  );
+  static final RegExp _longTokenPattern = RegExp(r"([^\s|]{14,})");
+  static const String _softWrapHint = "\u200B";
+
   final _ChatMessage message;
 
   @override
@@ -982,6 +1002,7 @@ class _MessageBubble extends StatelessWidget {
         : color.surfaceContainerHighest.withValues(alpha: 0.52);
     final Color textColor = isUser ? color.onPrimary : color.onSurface;
     final String role = isUser ? "You" : "Parenting AI";
+    final String markdownData = _normalizeMarkdownForChat(message.text);
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
@@ -1008,8 +1029,8 @@ class _MessageBubble extends StatelessWidget {
                 CircleAvatar(
                   radius: 15,
                   backgroundColor: color.secondaryContainer,
-                  child: Icon(
-                    Icons.smart_toy_outlined,
+                  child: AppSvgIcon(
+                    AppSvgAsset.aiChatSparkles,
                     size: 15,
                     color: color.onSecondaryContainer,
                   ),
@@ -1029,40 +1050,14 @@ class _MessageBubble extends StatelessWidget {
                       bottomRight: Radius.circular(isUser ? 8 : 22),
                     ),
                   ),
-                  child: isUser
-                      ? Text(
-                          message.text,
-                          style: theme.textTheme.bodyLarge?.copyWith(
-                            color: textColor,
-                            height: 1.35,
-                          ),
-                        )
-                      : MarkdownBody(
-                          data: message.text,
-                          selectable: true,
-                          extensionSet: md.ExtensionSet.gitHubFlavored,
-                          styleSheet: MarkdownStyleSheet.fromTheme(theme)
-                              .copyWith(
-                            p: theme.textTheme.bodyLarge?.copyWith(
-                              color: textColor,
-                              height: 1.35,
-                            ),
-                            strong: theme.textTheme.bodyLarge?.copyWith(
-                              color: textColor,
-                              fontWeight: FontWeight.w700,
-                            ),
-                            h1: theme.textTheme.titleLarge?.copyWith(
-                              color: textColor,
-                              fontWeight: FontWeight.w700,
-                            ),
-                            h2: theme.textTheme.titleMedium?.copyWith(
-                              color: textColor,
-                              fontWeight: FontWeight.w700,
-                            ),
-                            listBullet: theme.textTheme.bodyLarge
-                                ?.copyWith(color: textColor),
-                          ),
-                        ),
+                  child: _buildMarkdownMessage(
+                    isUser: isUser,
+                    theme: theme,
+                    color: color,
+                    textColor: textColor,
+                    bubbleColor: bubbleColor,
+                    data: markdownData,
+                  ),
                 ),
               ),
               if (isUser) ...<Widget>[
@@ -1070,8 +1065,8 @@ class _MessageBubble extends StatelessWidget {
                 CircleAvatar(
                   radius: 15,
                   backgroundColor: color.primaryContainer,
-                  child: Icon(
-                    Icons.person_outline_rounded,
+                  child: AppSvgIcon(
+                    AppSvgAsset.profile,
                     size: 15,
                     color: color.onPrimaryContainer,
                   ),
@@ -1082,6 +1077,245 @@ class _MessageBubble extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  Widget _buildMarkdownMessage({
+    required bool isUser,
+    required ThemeData theme,
+    required ColorScheme color,
+    required Color textColor,
+    required Color bubbleColor,
+    required String data,
+  }) {
+    final TextStyle baseTextStyle = (theme.textTheme.bodyLarge ??
+            const TextStyle(fontSize: 16, height: 1.4))
+        .copyWith(
+      color: textColor,
+      height: 1.46,
+      fontFamily: "NotoSans",
+      fontFamilyFallback: const <String>["IBMPlexSans"],
+    );
+    final TextStyle tableTextStyle = baseTextStyle.copyWith(
+      fontSize: (baseTextStyle.fontSize ?? 16) - 0.8,
+      height: 1.42,
+      fontFamily: "NotoSans",
+      fontFamilyFallback: const <String>["IBMPlexSans"],
+    );
+
+    return MarkdownBody(
+      data: data,
+      selectable: true,
+      softLineBreak: true,
+      extensionSet: md.ExtensionSet.gitHubFlavored,
+      styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
+        p: baseTextStyle,
+        pPadding: EdgeInsets.zero,
+        strong: baseTextStyle.copyWith(
+          fontWeight: FontWeight.w700,
+          color: isUser ? textColor : color.primary,
+        ),
+        h1: theme.textTheme.titleLarge?.copyWith(
+          color: textColor,
+          fontWeight: FontWeight.w700,
+          fontFamily: "NotoSans",
+          fontFamilyFallback: const <String>["IBMPlexSans"],
+        ),
+        h2: theme.textTheme.titleMedium?.copyWith(
+          color: textColor,
+          fontWeight: FontWeight.w700,
+          fontFamily: "NotoSans",
+          fontFamilyFallback: const <String>["IBMPlexSans"],
+        ),
+        h3: theme.textTheme.titleSmall?.copyWith(
+          color: textColor,
+          fontWeight: FontWeight.w700,
+          fontFamily: "NotoSans",
+          fontFamilyFallback: const <String>["IBMPlexSans"],
+        ),
+        listBullet: baseTextStyle,
+        tableHead: tableTextStyle.copyWith(
+          fontWeight: FontWeight.w700,
+          fontFamily: "IBMPlexSans",
+          fontFamilyFallback: const <String>["NotoSans"],
+        ),
+        tableBody: tableTextStyle,
+        tableHeadAlign: TextAlign.left,
+        tableColumnWidth: const FlexColumnWidth(),
+        tableCellsPadding: const EdgeInsets.symmetric(
+          horizontal: 8,
+          vertical: 6,
+        ),
+        tableVerticalAlignment: TableCellVerticalAlignment.top,
+        tableBorder: TableBorder.all(
+          color: textColor.withValues(alpha: 0.2),
+          width: 0.7,
+        ),
+        tableCellsDecoration: BoxDecoration(
+          color: isUser
+              ? color.onPrimary.withValues(alpha: 0.08)
+              : color.surface.withValues(alpha: 0.38),
+        ),
+        tablePadding: const EdgeInsets.only(bottom: 6),
+        code: baseTextStyle.copyWith(
+          fontFamily: "IBMPlexSans",
+          fontFamilyFallback: const <String>["NotoSans"],
+          fontSize: (baseTextStyle.fontSize ?? 16) * 0.9,
+        ),
+        codeblockPadding: const EdgeInsets.symmetric(
+          horizontal: 10,
+          vertical: 8,
+        ),
+        codeblockDecoration: BoxDecoration(
+          color: bubbleColor.withValues(alpha: isUser ? 0.18 : 0.42),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        blockquotePadding: const EdgeInsets.symmetric(
+          horizontal: 10,
+          vertical: 8,
+        ),
+        blockquoteDecoration: BoxDecoration(
+          color: bubbleColor.withValues(alpha: isUser ? 0.12 : 0.24),
+          border: Border(
+            left: BorderSide(
+              color: textColor.withValues(alpha: 0.28),
+              width: 3,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _normalizeMarkdownForChat(String raw) {
+    String normalized = raw.trim();
+    if (normalized.isEmpty) {
+      return "";
+    }
+    normalized = normalized
+        .replaceAll("\r\n", "\n")
+        .replaceAll("\r", "\n")
+        .replaceAll(_htmlBreakTagPattern, "\n");
+    return _injectTableSoftWrapHints(normalized);
+  }
+
+  String _injectTableSoftWrapHints(String markdown) {
+    final List<String> lines = markdown.split("\n");
+    final List<String> transformed = <String>[];
+    bool inFence = false;
+
+    for (final String line in lines) {
+      final String trimmedLeft = line.trimLeft();
+      if (trimmedLeft.startsWith("```")) {
+        inFence = !inFence;
+        transformed.add(line);
+        continue;
+      }
+      if (inFence ||
+          !_isLikelyTableRow(line) ||
+          _tableAlignRowPattern.hasMatch(line)) {
+        transformed.add(line);
+        continue;
+      }
+      transformed.add(_softWrapTableRow(line));
+    }
+
+    return transformed.join("\n");
+  }
+
+  bool _isLikelyTableRow(String line) {
+    final String trimmed = line.trim();
+    if (trimmed.isEmpty || !trimmed.contains("|")) {
+      return false;
+    }
+    final int pipeCount = "|".allMatches(trimmed).length;
+    if (pipeCount < 2) {
+      return false;
+    }
+    if (trimmed.startsWith("|") || trimmed.endsWith("|")) {
+      return true;
+    }
+    return trimmed.contains(" | ");
+  }
+
+  String _softWrapTableRow(String line) {
+    final int leftPaddingCount = line.length - line.trimLeft().length;
+    final int rightPaddingCount = line.length - line.trimRight().length;
+    final String leftPadding = line.substring(0, leftPaddingCount);
+    final String rightPadding = rightPaddingCount > 0
+        ? line.substring(line.length - rightPaddingCount)
+        : "";
+
+    String core = line.trim();
+    final bool hasLeadingPipe = core.startsWith("|");
+    final bool hasTrailingPipe = core.endsWith("|");
+
+    if (hasLeadingPipe) {
+      core = core.substring(1);
+    }
+    if (hasTrailingPipe && core.isNotEmpty) {
+      core = core.substring(0, core.length - 1);
+    }
+
+    final List<String> cells = core.split("|");
+    final List<String> processed = cells
+        .map(
+          (String cell) => _injectSoftWrapPoints(cell.trim()),
+        )
+        .toList(growable: false);
+
+    String rebuilt = processed.join(" | ");
+    if (hasLeadingPipe) {
+      rebuilt = "| $rebuilt";
+    }
+    if (hasTrailingPipe) {
+      rebuilt = "$rebuilt |";
+    }
+    return "$leftPadding$rebuilt$rightPadding";
+  }
+
+  String _injectSoftWrapPoints(String cellValue) {
+    if (cellValue.isEmpty) {
+      return cellValue;
+    }
+
+    String normalized = cellValue;
+    const List<String> separators = <String>[
+      "/",
+      "-",
+      "_",
+      ".",
+      ",",
+      ":",
+      ";",
+      ")",
+      "]",
+      "}",
+      ">",
+      "=",
+    ];
+    for (final String separator in separators) {
+      normalized = normalized.replaceAll(separator, "$separator$_softWrapHint");
+    }
+    normalized = normalized.replaceAllMapped(
+      _longTokenPattern,
+      (Match match) => _chunkTokenWithSoftWrap(match.group(1) ?? ""),
+    );
+    return normalized;
+  }
+
+  String _chunkTokenWithSoftWrap(String token) {
+    if (token.isEmpty || token.length < 14) {
+      return token;
+    }
+    final StringBuffer buffer = StringBuffer();
+    for (int i = 0; i < token.length; i++) {
+      buffer.write(token[i]);
+      final bool isLast = i == token.length - 1;
+      if (!isLast && (i + 1) % 10 == 0) {
+        buffer.write(_softWrapHint);
+      }
+    }
+    return buffer.toString();
   }
 }
 
@@ -1099,8 +1333,8 @@ class _TypingBubble extends StatelessWidget {
           CircleAvatar(
             radius: 15,
             backgroundColor: color.secondaryContainer,
-            child: Icon(
-              Icons.smart_toy_outlined,
+            child: AppSvgIcon(
+              AppSvgAsset.aiChatSparkles,
               size: 15,
               color: color.onSecondaryContainer,
             ),

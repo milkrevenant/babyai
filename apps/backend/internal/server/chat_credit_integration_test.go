@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -190,6 +191,73 @@ func TestQuickSnapshotDoesNotCreateUsageLogs(t *testing.T) {
 	}
 	if usageLogCount != 0 {
 		t.Fatalf("expected quick snapshot to skip AI usage logs, got %d", usageLogCount)
+	}
+}
+
+func TestChatQueryUsesOnboardingChildWhenChildIDMissing(t *testing.T) {
+	resetDatabase(t)
+	fixture := seedOwnerFixture(t)
+
+	sessionRec := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodPost,
+		"/api/v1/chat/sessions",
+		signToken(t, fixture.UserID, nil),
+		map[string]any{},
+		nil,
+	)
+	if sessionRec.Code != http.StatusOK {
+		t.Fatalf("create chat session failed: %d body=%s", sessionRec.Code, sessionRec.Body.String())
+	}
+	sessionBody := decodeJSONMap(t, sessionRec)
+	sessionID, _ := sessionBody["session_id"].(string)
+	if strings.TrimSpace(sessionID) == "" {
+		t.Fatalf("missing session_id in response: %v", sessionBody)
+	}
+	sessionChildID, _ := sessionBody["child_id"].(string)
+	if strings.TrimSpace(sessionChildID) != fixture.BabyID {
+		t.Fatalf("expected default child_id=%s from onboarding, got %v", fixture.BabyID, sessionBody["child_id"])
+	}
+
+	rec := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodPost,
+		"/api/v1/chat/query",
+		signToken(t, fixture.UserID, nil),
+		map[string]any{
+			"session_id":        sessionID,
+			"query":             "how is baby today?",
+			"use_personal_data": true,
+		},
+		nil,
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	body := decodeJSONMap(t, rec)
+	contextMap, ok := body["context"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected context map in response, got %T (%v)", body["context"], body["context"])
+	}
+	contextChildID, _ := contextMap["child_id"].(string)
+	if strings.TrimSpace(contextChildID) != fixture.BabyID {
+		t.Fatalf("expected context child_id=%s, got %v", fixture.BabyID, contextMap["child_id"])
+	}
+	birthDate, _ := contextMap["profile_birth_date_utc"].(string)
+	if strings.TrimSpace(birthDate) == "" {
+		t.Fatalf("expected profile_birth_date_utc in context, got %v", contextMap["profile_birth_date_utc"])
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var storedChildID string
+	if err := testPool.QueryRow(ctx, `SELECT "childId" FROM "ChatSession" WHERE id = $1`, sessionID).Scan(&storedChildID); err != nil {
+		t.Fatalf("query chat session childId: %v", err)
+	}
+	if strings.TrimSpace(storedChildID) != fixture.BabyID {
+		t.Fatalf("expected persisted session childId=%s, got %s", fixture.BabyID, storedChildID)
 	}
 }
 

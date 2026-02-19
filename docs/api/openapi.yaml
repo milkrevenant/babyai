@@ -1159,6 +1159,10 @@ components:
         summary:
           type: array
           items: { type: string }
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventItem'
         labels:
           type: array
           items: { type: string }

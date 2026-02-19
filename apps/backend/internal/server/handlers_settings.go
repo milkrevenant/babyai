@@ -274,7 +274,7 @@ func resolveHighlightFont(persona map[string]any) string {
 			return value
 		}
 	}
-	return "ibmPlexSans"
+	return "notoSans"
 }
 
 func resolveAccentTone(persona map[string]any) string {
