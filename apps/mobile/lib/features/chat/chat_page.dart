@@ -10,13 +10,31 @@ import "package:speech_to_text/speech_to_text.dart" as stt;
 import "../../core/network/babyai_api.dart";
 import "../../core/widgets/app_svg_icon.dart";
 
+enum ChatDateMode { day, week, month }
+
+class ChatDateScope {
+  const ChatDateScope({
+    required this.mode,
+    required this.anchorDateLocal,
+  });
+
+  final ChatDateMode mode;
+  final DateTime anchorDateLocal;
+}
+
 class ChatPage extends StatefulWidget {
   const ChatPage({
     super.key,
     this.onHistoryChanged,
+    this.initialDateMode = ChatDateMode.day,
+    this.initialAnchorDateLocal,
+    this.onDateScopeChanged,
   });
 
   final VoidCallback? onHistoryChanged;
+  final ChatDateMode initialDateMode;
+  final DateTime? initialAnchorDateLocal;
+  final ValueChanged<ChatDateScope>? onDateScopeChanged;
 
   @override
   State<ChatPage> createState() => ChatPageState();
@@ -34,6 +52,8 @@ class ChatPageState extends State<ChatPage> {
   String? _error;
   String? _speechError;
   int _activeThreadIndex = 0;
+  late ChatDateMode _dateMode;
+  late DateTime _anchorDateLocal;
   Map<String, dynamic>? _lastCredit;
   Map<String, dynamic>? _lastUsage;
 
@@ -93,7 +113,33 @@ class ChatPageState extends State<ChatPage> {
   @override
   void initState() {
     super.initState();
+    _dateMode = widget.initialDateMode;
+    _anchorDateLocal = _normalizeAnchorDate(
+      widget.initialDateMode,
+      widget.initialAnchorDateLocal ?? DateTime.now(),
+    );
     unawaited(_initializeChatState());
+  }
+
+  @override
+  void didUpdateWidget(covariant ChatPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final DateTime oldAnchor = _normalizeAnchorDate(
+      oldWidget.initialDateMode,
+      oldWidget.initialAnchorDateLocal ?? DateTime.now(),
+    );
+    final DateTime nextAnchor = _normalizeAnchorDate(
+      widget.initialDateMode,
+      widget.initialAnchorDateLocal ?? DateTime.now(),
+    );
+    if (oldWidget.initialDateMode != widget.initialDateMode ||
+        !_isSameLocalDate(oldAnchor, nextAnchor)) {
+      _applyDateScope(
+        ChatDateScope(
+            mode: widget.initialDateMode, anchorDateLocal: nextAnchor),
+        notifyParent: false,
+      );
+    }
   }
 
   @override
@@ -109,6 +155,138 @@ class ChatPageState extends State<ChatPage> {
     if (!_hasActiveThread) {
       await _refreshThreadsFromServer(bootstrapActive: false);
     }
+  }
+
+  DateTime _dateOnlyLocal(DateTime value) {
+    return DateTime(value.year, value.month, value.day);
+  }
+
+  DateTime _normalizeAnchorDate(ChatDateMode mode, DateTime value) {
+    final DateTime local = _dateOnlyLocal(value.toLocal());
+    switch (mode) {
+      case ChatDateMode.day:
+        return local;
+      case ChatDateMode.week:
+        return local.subtract(Duration(days: local.weekday - DateTime.monday));
+      case ChatDateMode.month:
+        return DateTime(local.year, local.month, 1);
+    }
+  }
+
+  bool _isSameLocalDate(DateTime a, DateTime b) {
+    return a.year == b.year && a.month == b.month && a.day == b.day;
+  }
+
+  String _modeLabel(ChatDateMode mode) {
+    switch (mode) {
+      case ChatDateMode.day:
+        return "일";
+      case ChatDateMode.week:
+        return "주";
+      case ChatDateMode.month:
+        return "월";
+    }
+  }
+
+  String _modeApiValue(ChatDateMode mode) {
+    switch (mode) {
+      case ChatDateMode.day:
+        return "day";
+      case ChatDateMode.week:
+        return "week";
+      case ChatDateMode.month:
+        return "month";
+    }
+  }
+
+  String _scopeDateLabel() {
+    String ymd(DateTime date) {
+      return "${date.year.toString().padLeft(4, "0")}-"
+          "${date.month.toString().padLeft(2, "0")}-"
+          "${date.day.toString().padLeft(2, "0")}";
+    }
+
+    switch (_dateMode) {
+      case ChatDateMode.day:
+        return ymd(_anchorDateLocal);
+      case ChatDateMode.week:
+        final DateTime end = _anchorDateLocal.add(const Duration(days: 6));
+        return "${ymd(_anchorDateLocal)} ~ ${ymd(end)}";
+      case ChatDateMode.month:
+        return "${_anchorDateLocal.year.toString().padLeft(4, "0")}-"
+            "${_anchorDateLocal.month.toString().padLeft(2, "0")}";
+    }
+  }
+
+  void _applyDateScope(
+    ChatDateScope scope, {
+    required bool notifyParent,
+  }) {
+    final DateTime normalizedAnchor =
+        _normalizeAnchorDate(scope.mode, scope.anchorDateLocal);
+    setState(() {
+      _dateMode = scope.mode;
+      _anchorDateLocal = normalizedAnchor;
+    });
+    if (notifyParent) {
+      widget.onDateScopeChanged?.call(
+        ChatDateScope(mode: scope.mode, anchorDateLocal: normalizedAnchor),
+      );
+    }
+  }
+
+  Future<void> applyDateScope(ChatDateScope scope) async {
+    if (!mounted) {
+      return;
+    }
+    _applyDateScope(scope, notifyParent: false);
+  }
+
+  Future<void> _pickScopeDate() async {
+    final DateTime now = DateTime.now();
+    final DateTime firstDate = DateTime(now.year - 12, 1, 1);
+    final DateTime lastDate = DateTime(now.year + 3, 12, 31);
+    final bool Function(DateTime)? predicate;
+    switch (_dateMode) {
+      case ChatDateMode.day:
+        predicate = null;
+      case ChatDateMode.week:
+        predicate = (DateTime day) => day.weekday == DateTime.monday;
+      case ChatDateMode.month:
+        predicate = (DateTime day) => day.day == 1;
+    }
+    final DateTime initial = _anchorDateLocal.isBefore(firstDate)
+        ? firstDate
+        : (_anchorDateLocal.isAfter(lastDate) ? lastDate : _anchorDateLocal);
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: firstDate,
+      lastDate: lastDate,
+      selectableDayPredicate: predicate,
+      helpText: _dateMode == ChatDateMode.week
+          ? "채팅 주 선택 (월요일)"
+          : _dateMode == ChatDateMode.month
+              ? "채팅 월 선택 (1일)"
+              : "채팅 날짜 선택",
+    );
+    if (picked == null || !mounted) {
+      return;
+    }
+    _applyDateScope(
+      ChatDateScope(mode: _dateMode, anchorDateLocal: picked),
+      notifyParent: true,
+    );
+  }
+
+  void _setDateMode(ChatDateMode mode) {
+    if (mode == _dateMode) {
+      return;
+    }
+    _applyDateScope(
+      ChatDateScope(mode: mode, anchorDateLocal: _anchorDateLocal),
+      notifyParent: true,
+    );
   }
 
   Future<void> refreshHistoryFromServer() async {
@@ -415,6 +593,8 @@ class ChatPageState extends State<ChatPage> {
         tone: "neutral",
         usePersonalData: true,
         childId: BabyAIApi.activeBabyId,
+        dateMode: _modeApiValue(_dateMode),
+        anchorDate: _anchorDateLocal,
       );
 
       final String answer = _extractAnswer(result);
@@ -652,32 +832,148 @@ class ChatPageState extends State<ChatPage> {
     });
   }
 
+  Widget _buildDateScopeToolbar(ColorScheme color) {
+    Widget modeChip(ChatDateMode mode) {
+      final bool selected = _dateMode == mode;
+      return Material(
+        color: selected
+            ? color.primary.withValues(alpha: 0.2)
+            : color.surfaceContainerHighest.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(999),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(999),
+          onTap: () => _setDateMode(mode),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+            child: Text(
+              _modeLabel(mode),
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: selected ? color.primary : color.onSurfaceVariant,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
+      child: Row(
+        children: <Widget>[
+          modeChip(ChatDateMode.day),
+          const SizedBox(width: 6),
+          modeChip(ChatDateMode.week),
+          const SizedBox(width: 6),
+          modeChip(ChatDateMode.month),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: Material(
+                color: color.surfaceContainerHighest.withValues(alpha: 0.5),
+                borderRadius: BorderRadius.circular(999),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(999),
+                  onTap: _pickScopeDate,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        Text(
+                          _scopeDateLabel(),
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: color.onSurfaceVariant,
+                          ),
+                        ),
+                        const SizedBox(width: 2),
+                        Icon(
+                          Icons.keyboard_arrow_down_rounded,
+                          size: 16,
+                          color: color.onSurfaceVariant,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _quickActionPills(ColorScheme color) {
+    return <Widget>[
+      _QuickActionPill(
+        label: "마지막 대변 시간",
+        icon: Icons.water_drop_outlined,
+        color: color,
+        onTap: _loading ? null : () => _sendQuestionText("마지막 대변 시간 알려줘"),
+      ),
+      _QuickActionPill(
+        label: "다음 수유 예측",
+        icon: Icons.schedule_outlined,
+        color: color,
+        onTap: _loading ? null : () => _sendQuestionText("다음 수유 시간 예측해줘"),
+      ),
+      _QuickActionPill(
+        label: "오늘 요약",
+        icon: Icons.summarize_outlined,
+        color: color,
+        onTap: _loading ? null : () => _sendQuestionText("오늘 기록 요약해줘"),
+      ),
+    ];
+  }
+
   Widget _buildQuickActionRow(ColorScheme color) {
+    final List<Widget> pills = _quickActionPills(color);
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: Row(
         children: <Widget>[
-          _QuickActionPill(
-            label: "마지막 대변 시간",
-            icon: Icons.water_drop_outlined,
-            color: color,
-            onTap: _loading ? null : () => _sendQuestionText("마지막 대변 시간 알려줘"),
-          ),
-          const SizedBox(width: 8),
-          _QuickActionPill(
-            label: "다음 수유 예측",
-            icon: Icons.schedule_outlined,
-            color: color,
-            onTap: _loading ? null : () => _sendQuestionText("다음 수유 시간 예측해줘"),
-          ),
-          const SizedBox(width: 8),
-          _QuickActionPill(
-            label: "오늘 요약",
-            icon: Icons.summarize_outlined,
-            color: color,
-            onTap: _loading ? null : () => _sendQuestionText("오늘 기록 요약해줘"),
-          ),
+          for (int i = 0; i < pills.length; i++) ...<Widget>[
+            if (i > 0) const SizedBox(width: 8),
+            pills[i],
+          ],
         ],
+      ),
+    );
+  }
+
+  Widget _buildCenteredQuickActions(ColorScheme color) {
+    final List<Widget> pills = _quickActionPills(color);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 18),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Text(
+              "추천 질문",
+              style: TextStyle(
+                color: color.onSurfaceVariant,
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              alignment: WrapAlignment.center,
+              spacing: 8,
+              runSpacing: 8,
+              children: pills,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -687,6 +983,9 @@ class ChatPageState extends State<ChatPage> {
   }) {
     final ThemeData theme = Theme.of(context);
     final ColorScheme color = theme.colorScheme;
+
+    final bool showCenteredSuggestions =
+        _hasActiveThread && _messages.isEmpty && !_loading;
 
     return Container(
       decoration: BoxDecoration(
@@ -702,28 +1001,30 @@ class ChatPageState extends State<ChatPage> {
       child: Column(
         children: <Widget>[
           Expanded(
-            child: _hasActiveThread
-                ? ListView.builder(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.fromLTRB(14, 6, 14, 10),
-                    itemCount: _messages.length + (_loading ? 1 : 0),
-                    itemBuilder: (BuildContext context, int index) {
-                      if (_loading && index == _messages.length) {
-                        return const _TypingBubble();
-                      }
-                      return _MessageBubble(message: _messages[index]);
-                    },
-                  )
-                : Center(
-                    child: Text(
-                      _loadingHistory
-                          ? "Loading conversations..."
-                          : "No conversations yet. Start a new chat.",
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: color.onSurfaceVariant,
+            child: showCenteredSuggestions
+                ? _buildCenteredQuickActions(color)
+                : _hasActiveThread
+                    ? ListView.builder(
+                        controller: _scrollController,
+                        padding: const EdgeInsets.fromLTRB(14, 6, 14, 10),
+                        itemCount: _messages.length + (_loading ? 1 : 0),
+                        itemBuilder: (BuildContext context, int index) {
+                          if (_loading && index == _messages.length) {
+                            return const _TypingBubble();
+                          }
+                          return _MessageBubble(message: _messages[index]);
+                        },
+                      )
+                    : Center(
+                        child: Text(
+                          _loadingHistory
+                              ? "Loading conversations..."
+                              : "No conversations yet. Start a new chat.",
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: color.onSurfaceVariant,
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
           ),
           if (_error != null)
             Container(
@@ -767,10 +1068,12 @@ class ChatPageState extends State<ChatPage> {
                 style: TextStyle(color: color.onPrimaryContainer),
               ),
             ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
-            child: _buildQuickActionRow(color),
-          ),
+          _buildDateScopeToolbar(color),
+          if (!showCenteredSuggestions)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
+              child: _buildQuickActionRow(color),
+            ),
           Container(
             margin: const EdgeInsets.fromLTRB(14, 0, 14, 14),
             padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),

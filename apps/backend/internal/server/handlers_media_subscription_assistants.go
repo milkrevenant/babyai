@@ -27,7 +27,7 @@ func normalizeSubscriptionPlan(raw string) string {
 
 func isKnownSubscriptionPlan(plan string) bool {
 	switch normalizeSubscriptionPlan(plan) {
-	case "AI_ONLY", "AI_PHOTO", "PHOTO_SHARE":
+	case "AI_ONLY", "AI_PHOTO":
 		return true
 	default:
 		return false
@@ -52,7 +52,7 @@ func requiredPlansForFeature(feature subscriptionFeature) []string {
 	case subscriptionFeatureAI:
 		return []string{"AI_ONLY", "AI_PHOTO"}
 	case subscriptionFeaturePhotoShare:
-		return []string{"PHOTO_SHARE", "AI_PHOTO"}
+		return []string{"AI_ONLY", "AI_PHOTO"}
 	default:
 		return nil
 	}
@@ -64,7 +64,7 @@ func planSupportsFeature(plan string, feature subscriptionFeature) bool {
 	case subscriptionFeatureAI:
 		return normalizedPlan == "AI_ONLY" || normalizedPlan == "AI_PHOTO"
 	case subscriptionFeaturePhotoShare:
-		return normalizedPlan == "PHOTO_SHARE" || normalizedPlan == "AI_PHOTO"
+		return normalizedPlan == "AI_ONLY" || normalizedPlan == "AI_PHOTO"
 	default:
 		return false
 	}
@@ -132,7 +132,7 @@ func subscriptionFeatureDetail(feature subscriptionFeature) string {
 	case subscriptionFeatureAI:
 		return "AI subscription required. Choose AI_ONLY or AI_PHOTO."
 	case subscriptionFeaturePhotoShare:
-		return "Photo subscription required. Choose PHOTO_SHARE or AI_PHOTO."
+		return "Photo sharing is included in AI plan. Choose AI_ONLY or AI_PHOTO."
 	default:
 		return "Subscription required."
 	}
@@ -403,9 +403,8 @@ func (a *App) checkoutSubscription(c *gin.Context) {
 		return
 	}
 	validPlans := map[string]struct{}{
-		"PHOTO_SHARE": {},
-		"AI_ONLY":     {},
-		"AI_PHOTO":    {},
+		"AI_ONLY":  {},
+		"AI_PHOTO": {},
 	}
 	if _, ok := validPlans[payload.Plan]; !ok {
 		writeError(c, http.StatusBadRequest, "Invalid subscription plan")

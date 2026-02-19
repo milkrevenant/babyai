@@ -1,6 +1,9 @@
 import "dart:convert";
+import "dart:io";
 
+import "package:flutter/foundation.dart";
 import "package:flutter/material.dart";
+import "package:share_plus/share_plus.dart";
 
 import "../../core/i18n/app_i18n.dart";
 import "../../core/network/babyai_api.dart";
@@ -339,6 +342,14 @@ Aviso de recopilacion y uso de privacidad de BabyAI
     );
   }
 
+  Future<void> _openDataControl(BuildContext context) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (BuildContext context) => const _DataControlPage(),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final ColorScheme color = Theme.of(context).colorScheme;
@@ -512,6 +523,21 @@ Aviso de recopilacion y uso de privacidad de BabyAI
                       en: "Collection and usage details",
                       es: "Detalle de recopilacion y uso"),
                   onTap: () => _showPrivacyTerms(context),
+                ),
+                Divider(
+                  height: 1,
+                  indent: 16,
+                  endIndent: 16,
+                  color: _sectionDividerColor(context),
+                ),
+                _sectionRow(
+                  context: context,
+                  icon: Icons.storage_outlined,
+                  title: tr(context,
+                      ko: "데이터 제어", en: "Data Control", es: "Control de datos"),
+                  subtitle: tr(context,
+                      ko: "CSV 내보내기", en: "CSV export", es: "Exportar CSV"),
+                  onTap: () => _openDataControl(context),
                 ),
               ],
             ),
@@ -835,6 +861,19 @@ class _AppStructureSettingsPage extends StatelessWidget {
     }
   }
 
+  String _reportToneLabel(BuildContext context, AppReportColorTone tone) {
+    switch (tone) {
+      case AppReportColorTone.classic:
+        return tr(context, ko: "기본", en: "Classic", es: "Clasico");
+      case AppReportColorTone.ocean:
+        return tr(context, ko: "오션", en: "Ocean", es: "Oceano");
+      case AppReportColorTone.sage:
+        return tr(context, ko: "세이지", en: "Sage", es: "Salvia");
+      case AppReportColorTone.sunset:
+        return tr(context, ko: "선셋", en: "Sunset", es: "Atardecer");
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final ColorScheme color = Theme.of(context).colorScheme;
@@ -910,6 +949,43 @@ class _AppStructureSettingsPage extends StatelessWidget {
                     es: "Mostrar u ocultar la tarjeta de nota especial en Inicio.")),
                 onChanged: (bool value) {
                   themeController.setShowSpecialMemo(value);
+                },
+              ),
+              const Divider(height: 24),
+              DropdownButtonFormField<AppReportColorTone>(
+                initialValue: themeController.reportColorTone,
+                isExpanded: true,
+                menuMaxHeight: 300,
+                borderRadius: BorderRadius.circular(14),
+                decoration: InputDecoration(
+                  labelText: tr(
+                    context,
+                    ko: "통계 화면 색상",
+                    en: "Statistics colors",
+                    es: "Color de estadisticas",
+                  ),
+                  filled: true,
+                  fillColor:
+                      color.surfaceContainerHighest.withValues(alpha: 0.28),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                ),
+                items: AppReportColorTone.values
+                    .map(
+                      (AppReportColorTone tone) =>
+                          DropdownMenuItem<AppReportColorTone>(
+                        value: tone,
+                        child: Text(_reportToneLabel(context, tone)),
+                      ),
+                    )
+                    .toList(growable: false),
+                onChanged: (AppReportColorTone? value) {
+                  if (value != null) {
+                    themeController.setReportColorTone(value);
+                  }
                 },
               ),
             ],
@@ -1032,7 +1108,7 @@ class _SubscriptionPlanSpec {
 const List<_SubscriptionPlanSpec> _kSubscriptionPlans = <_SubscriptionPlanSpec>[
   _SubscriptionPlanSpec(
     code: "FREE",
-    priceLabel: "\$0",
+    priceLabel: "무료",
     titles: (ko: "무료 플랜", en: "Free", es: "Gratis"),
     summaries: (
       ko: "기본 기록과 통계를 사용할 수 있습니다.",
@@ -1043,61 +1119,29 @@ const List<_SubscriptionPlanSpec> _kSubscriptionPlans = <_SubscriptionPlanSpec>[
       (ko: "기본 기록 입력", en: "Basic event logging", es: "Registro basico"),
       (ko: "홈/통계 조회", en: "Home and reports", es: "Inicio y reportes"),
       (
-        ko: "AI/사진 구독 기능 비활성",
-        en: "AI/photo subscription features locked",
-        es: "Funciones AI/foto bloqueadas"
+        ko: "AI/사진 기능 비활성",
+        en: "AI and photo features locked",
+        es: "Funciones de IA/foto bloqueadas"
       ),
     ],
     paid: false,
   ),
   _SubscriptionPlanSpec(
     code: "AI_ONLY",
-    priceLabel: "\$6.90 / mo",
+    priceLabel: "월 9,900원",
     titles: (ko: "AI 플랜", en: "AI Only", es: "Solo AI"),
     summaries: (
-      ko: "AI 챗/요약 기능을 사용할 수 있습니다.",
-      en: "Enables AI chat and summaries.",
-      es: "Activa chat y resumenes con IA."
-    ),
-    features: <({String ko, String en, String es})>[
-      (ko: "AI 챗", en: "AI chat", es: "Chat IA"),
-      (ko: "AI 요약", en: "AI summaries", es: "Resumen IA"),
-      (
-        ko: "사진 공유 기능 제외",
-        en: "Photo sharing excluded",
-        es: "Sin compartir fotos"
-      ),
-    ],
-    paid: true,
-  ),
-  _SubscriptionPlanSpec(
-    code: "PHOTO_SHARE",
-    priceLabel: "\$4.90 / mo",
-    titles: (ko: "포토 공유 플랜", en: "Photo Share", es: "Compartir fotos"),
-    summaries: (
-      ko: "사진 업로드 및 공유 기능을 사용할 수 있습니다.",
-      en: "Enables photo upload and sharing.",
-      es: "Activa carga y comparticion de fotos."
-    ),
-    features: <({String ko, String en, String es})>[
-      (ko: "사진 업로드", en: "Photo upload", es: "Carga de fotos"),
-      (ko: "앨범 공유", en: "Album sharing", es: "Compartir album"),
-      (ko: "AI 기능 제외", en: "AI excluded", es: "Sin AI"),
-    ],
-    paid: true,
-  ),
-  _SubscriptionPlanSpec(
-    code: "AI_PHOTO",
-    priceLabel: "\$9.90 / mo",
-    titles: (ko: "통합 플랜", en: "AI + Photo", es: "AI + Foto"),
-    summaries: (
-      ko: "AI와 포토 공유 기능을 모두 사용할 수 있습니다.",
-      en: "Enables both AI and photo sharing.",
-      es: "Activa AI y comparticion de fotos."
+      ko: "AI 챗/요약 + 사진 업로드/공유 기능을 사용할 수 있습니다.",
+      en: "Enables AI chat/summaries and photo upload/sharing.",
+      es: "Activa chat/resumen IA y carga/compartir fotos."
     ),
     features: <({String ko, String en, String es})>[
       (ko: "AI 챗/요약", en: "AI chat/summaries", es: "Chat/resumen IA"),
-      (ko: "사진 업로드/공유", en: "Photo upload/sharing", es: "Carga/compartir"),
+      (
+        ko: "사진 업로드/공유",
+        en: "Photo upload/sharing",
+        es: "Carga/compartir fotos",
+      ),
       (ko: "전체 기능", en: "All subscription features", es: "Funciones completas"),
     ],
     paid: true,
@@ -1251,7 +1295,10 @@ class _SubscriptionPlansPageState extends State<_SubscriptionPlansPage> {
     if (_currentPlan == null || _currentPlan!.isEmpty) {
       return false;
     }
-    if (_currentPlan != plan.code) {
+    final String current = _currentPlan!;
+    final bool samePlan = current == plan.code ||
+        (plan.code == "AI_ONLY" && current == "AI_PHOTO");
+    if (!samePlan) {
       return false;
     }
     return _currentStatus == "active" || _currentStatus == "trialing";
@@ -1486,9 +1533,9 @@ class _SubscriptionPlansPageState extends State<_SubscriptionPlansPage> {
             Text(
               tr(
                 context,
-                ko: "AI 기능은 AI_ONLY / AI_PHOTO, 사진 기능은 PHOTO_SHARE / AI_PHOTO에서 활성화됩니다.",
-                en: "AI requires AI_ONLY or AI_PHOTO. Photo requires PHOTO_SHARE or AI_PHOTO.",
-                es: "AI requiere AI_ONLY o AI_PHOTO. Foto requiere PHOTO_SHARE o AI_PHOTO.",
+                ko: "AI 플랜(AI_ONLY)에서 AI와 사진 기능이 함께 활성화됩니다.",
+                en: "AI plan (AI_ONLY) enables both AI and photo features.",
+                es: "El plan AI_ONLY activa IA y funciones de foto.",
               ),
               style: TextStyle(
                 fontSize: 12.5,
@@ -1518,6 +1565,144 @@ class _SubscriptionPlansPageState extends State<_SubscriptionPlansPage> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _DataControlPage extends StatefulWidget {
+  const _DataControlPage();
+
+  @override
+  State<_DataControlPage> createState() => _DataControlPageState();
+}
+
+class _DataControlPageState extends State<_DataControlPage> {
+  bool _exporting = false;
+  String? _error;
+
+  Future<void> _exportCsv() async {
+    setState(() {
+      _exporting = true;
+      _error = null;
+    });
+    try {
+      final String csv = await BabyAIApi.instance.exportDataCsv();
+      if (!mounted) {
+        return;
+      }
+      if (csv.trim().isEmpty) {
+        throw Exception(
+          tr(
+            context,
+            ko: "내보낼 데이터가 없습니다.",
+            en: "No data to export.",
+            es: "No hay datos para exportar.",
+          ),
+        );
+      }
+      if (kIsWeb) {
+        await Share.share(
+          csv,
+          subject: "babyai_export.csv",
+        );
+      } else {
+        final String timestamp =
+            DateTime.now().toIso8601String().replaceAll(RegExp(r"[:.]"), "-");
+        final File tempFile = File(
+          "${Directory.systemTemp.path}/babyai_export_$timestamp.csv",
+        );
+        await tempFile.writeAsString(csv, flush: true);
+        await Share.shareXFiles(
+          <XFile>[XFile(tempFile.path)],
+          subject: "babyai_export.csv",
+        );
+      }
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            tr(
+              context,
+              ko: "CSV 내보내기를 시작했습니다.",
+              en: "CSV export started.",
+              es: "Exportacion CSV iniciada.",
+            ),
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _error = error.toString());
+    } finally {
+      if (mounted) {
+        setState(() => _exporting = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(tr(context,
+            ko: "데이터 제어", en: "Data Control", es: "Control de datos")),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
+        children: <Widget>[
+          Text(
+            tr(
+              context,
+              ko: "데이터 내보내기",
+              en: "Export data",
+              es: "Exportar datos",
+            ),
+            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            tr(
+              context,
+              ko: "현재 아이의 기록 데이터를 CSV 형식으로 내보냅니다.",
+              en: "Export current baby's records as CSV.",
+              es: "Exporta los registros del bebe actual en CSV.",
+            ),
+            style: TextStyle(color: color.onSurfaceVariant),
+          ),
+          const SizedBox(height: 14),
+          FilledButton.icon(
+            onPressed: _exporting ? null : _exportCsv,
+            icon: const Icon(Icons.download_rounded),
+            label: Text(
+              tr(
+                context,
+                ko: "CSV 내보내기",
+                en: "Export CSV",
+                es: "Exportar CSV",
+              ),
+            ),
+          ),
+          if (_exporting) ...<Widget>[
+            const SizedBox(height: 12),
+            const LinearProgressIndicator(minHeight: 3),
+          ],
+          if (_error != null) ...<Widget>[
+            const SizedBox(height: 10),
+            Text(
+              _error!,
+              style: TextStyle(
+                color: color.error,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }

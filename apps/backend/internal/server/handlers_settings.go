@@ -38,6 +38,8 @@ var defaultHomeTileOrder = []string{
 	"medication",
 }
 
+const defaultReportColorTone = "classic"
+
 func (a *App) getMySettings(c *gin.Context) {
 	user, ok := authUserFromContext(c)
 	if !ok {
@@ -127,6 +129,15 @@ func (a *App) upsertMySettings(c *gin.Context) {
 			return
 		}
 		appSettings["accent_tone"] = tone
+	}
+
+	if payload.ReportColorTone != nil {
+		tone, valid := normalizeReportColorTone(*payload.ReportColorTone)
+		if !valid {
+			writeError(c, http.StatusBadRequest, "report_color_tone must be one of: classic, ocean, sage, sunset")
+			return
+		}
+		appSettings["report_color_tone"] = tone
 	}
 
 	if payload.ChildCareProfile != nil {
@@ -223,6 +234,7 @@ func buildSettingsResponse(persona map[string]any) gin.H {
 		"main_font":           resolveMainFont(persona),
 		"highlight_font":      resolveHighlightFont(persona),
 		"accent_tone":         resolveAccentTone(persona),
+		"report_color_tone":   resolveReportColorTone(persona),
 		"bottom_menu_enabled": resolveBottomMenuEnabled(persona),
 		"child_care_profile":  resolveChildCareProfile(persona),
 		"home_tiles":          resolveHomeTiles(persona),
@@ -284,6 +296,15 @@ func resolveAccentTone(persona map[string]any) string {
 		}
 	}
 	return "gold"
+}
+
+func resolveReportColorTone(persona map[string]any) string {
+	if appSettings, ok := persona["app_settings"].(map[string]any); ok {
+		if value, valid := normalizeReportColorTone(toString(appSettings["report_color_tone"])); valid {
+			return value
+		}
+	}
+	return defaultReportColorTone
 }
 
 func resolveChildCareProfile(persona map[string]any) string {
@@ -511,6 +532,16 @@ func normalizeChildCareProfile(input string) (string, bool) {
 	value := strings.ToLower(strings.TrimSpace(input))
 	switch value {
 	case "breastfeeding", "formula", "weaning":
+		return value, true
+	default:
+		return "", false
+	}
+}
+
+func normalizeReportColorTone(input string) (string, bool) {
+	value := strings.ToLower(strings.TrimSpace(input))
+	switch value {
+	case "classic", "ocean", "sage", "sunset":
 		return value, true
 	default:
 		return "", false

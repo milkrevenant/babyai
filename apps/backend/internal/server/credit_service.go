@@ -43,7 +43,7 @@ type billingResult struct {
 func creditsForPlan(plan string) int {
 	switch strings.ToUpper(strings.TrimSpace(plan)) {
 	case "AI_ONLY":
-		return 300
+		return 500
 	case "AI_PHOTO":
 		return 500
 	default:

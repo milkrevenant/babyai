@@ -105,6 +105,7 @@ func (a *App) Router() *gin.Engine {
 	api.GET("/events/open", a.listOpenEvents)
 	api.GET("/settings/me", a.getMySettings)
 	api.PATCH("/settings/me", a.upsertMySettings)
+	api.GET("/data/export.csv", a.exportBabyDataCSV)
 	api.GET("/babies/profile", a.getBabyProfile)
 	api.PATCH("/babies/profile", a.upsertBabyProfile)
 	api.GET("/quick/last-poo-time", a.quickLastPooTime)

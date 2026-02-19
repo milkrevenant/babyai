@@ -185,6 +185,88 @@ func TestChatModelForIntent(t *testing.T) {
 	}
 }
 
+func TestResolveRequestedChatScope(t *testing.T) {
+	now := time.Date(2026, 2, 20, 9, 0, 0, 0, time.UTC)
+	scope := resolveRequestedChatScope("weekly", "2026-02-11", now)
+	if scope.Mode != "week" {
+		t.Fatalf("expected week mode, got %q", scope.Mode)
+	}
+	if scope.AnchorDate == nil {
+		t.Fatalf("expected anchor date")
+	}
+	if scope.AnchorDate.UTC().Format("2006-01-02") != "2026-02-11" {
+		t.Fatalf("unexpected anchor date: %s", scope.AnchorDate.UTC().Format("2006-01-02"))
+	}
+
+	defaulted := resolveRequestedChatScope("month", "", now)
+	if defaulted.Mode != "month" {
+		t.Fatalf("expected month mode, got %q", defaulted.Mode)
+	}
+	if defaulted.AnchorDate == nil {
+		t.Fatalf("expected default anchor date")
+	}
+	if defaulted.AnchorDate.UTC().Format("2006-01-02") != "2026-02-20" {
+		t.Fatalf("expected fallback anchor date to be today, got %s", defaulted.AnchorDate.UTC().Format("2006-01-02"))
+	}
+}
+
+func TestResolveChatContextSelectionWithRequestedScope(t *testing.T) {
+	now := time.Date(2026, 2, 20, 9, 0, 0, 0, time.UTC)
+	dayAnchor := time.Date(2026, 2, 19, 0, 0, 0, 0, time.UTC)
+	daySelection := resolveChatContextSelection(
+		"ignored question",
+		aiIntentDataQuery,
+		now,
+		chatScopeOverride{
+			Mode:       "day",
+			AnchorDate: &dayAnchor,
+		},
+	)
+	if daySelection.Mode != chatContextModeRequestedDateRaw {
+		t.Fatalf("expected requested_date_raw for near-day anchor, got %q", daySelection.Mode)
+	}
+	if daySelection.RequestedDate == nil {
+		t.Fatalf("expected requested date for day mode")
+	}
+	if got := daySelection.RequestedDate.UTC().Format("2006-01-02"); got != "2026-02-19" {
+		t.Fatalf("unexpected requested day: %s", got)
+	}
+
+	monthAnchor := time.Date(2026, 2, 5, 0, 0, 0, 0, time.UTC)
+	monthSelection := resolveChatContextSelection(
+		"ignored question",
+		aiIntentMedicalRelated,
+		now,
+		chatScopeOverride{
+			Mode:       "month",
+			AnchorDate: &monthAnchor,
+		},
+	)
+	if monthSelection.Mode != chatContextModeMonthlyMedicalSummary {
+		t.Fatalf("expected monthly medical summary mode, got %q", monthSelection.Mode)
+	}
+	if monthSelection.MonthStart.UTC().Format("2006-01-02") != "2026-02-01" {
+		t.Fatalf("expected month start 2026-02-01, got %s", monthSelection.MonthStart.UTC().Format("2006-01-02"))
+	}
+
+	weekAnchor := time.Date(2026, 2, 20, 0, 0, 0, 0, time.UTC)
+	weekSelection := resolveChatContextSelection(
+		"ignored question",
+		aiIntentCareRoutine,
+		now,
+		chatScopeOverride{
+			Mode:       "week",
+			AnchorDate: &weekAnchor,
+		},
+	)
+	if weekSelection.Mode != chatContextModeWeeklySummary {
+		t.Fatalf("expected weekly summary mode, got %q", weekSelection.Mode)
+	}
+	if weekSelection.WeekAnchor.UTC().Weekday() != time.Monday {
+		t.Fatalf("expected week anchor monday, got %s", weekSelection.WeekAnchor.UTC().Weekday())
+	}
+}
+
 func TestEnforceAnswerEvidenceGuideFallback(t *testing.T) {
 	raw := strings.Join([]string{
 		"오늘 하루만 덜 먹은 건 크게 걱정하지 않아도 됩니다.",

@@ -28,6 +28,7 @@ class BabyAIApp extends StatefulWidget {
 class _BabyAIAppState extends State<BabyAIApp> {
   final AppThemeController _themeController = AppThemeController();
   bool _appReady = false;
+  bool _showLaunchSplash = true;
 
   @override
   void initState() {
@@ -40,6 +41,10 @@ class _BabyAIAppState extends State<BabyAIApp> {
     await _themeController.load();
     if (mounted) {
       setState(() => _appReady = true);
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    if (mounted) {
+      setState(() => _showLaunchSplash = false);
     }
   }
 
@@ -158,16 +163,10 @@ class _BabyAIAppState extends State<BabyAIApp> {
 
   @override
   Widget build(BuildContext context) {
-    if (!_appReady) {
-      return MaterialApp(
+    if (!_appReady || _showLaunchSplash) {
+      return const MaterialApp(
         debugShowCheckedModeBanner: false,
-        home: Scaffold(
-          body: Center(
-            child: CircularProgressIndicator(
-              color: ThemeData(useMaterial3: true).colorScheme.primary,
-            ),
-          ),
-        ),
+        home: _LaunchSplashScreen(),
       );
     }
 
@@ -186,6 +185,56 @@ class _BabyAIAppState extends State<BabyAIApp> {
             home: _HomeShell(themeController: _themeController),
           );
         },
+      ),
+    );
+  }
+}
+
+class _LaunchSplashScreen extends StatefulWidget {
+  const _LaunchSplashScreen();
+
+  @override
+  State<_LaunchSplashScreen> createState() => _LaunchSplashScreenState();
+}
+
+class _LaunchSplashScreenState extends State<_LaunchSplashScreen>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _scale;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      duration: const Duration(milliseconds: 300),
+      vsync: this,
+    );
+    _scale = Tween<double>(begin: 0.7, end: 1.0).animate(
+      CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic),
+    );
+    _controller.forward();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: Center(
+        child: ScaleTransition(
+          scale: _scale,
+          child: Image.asset(
+            "assets/icons/app_logo.png",
+            width: 148,
+            height: 148,
+            filterQuality: FilterQuality.high,
+          ),
+        ),
       ),
     );
   }
@@ -233,12 +282,15 @@ class _HomeShellState extends State<_HomeShell> {
   final Map<String, String> _chatRenamedTitles = <String, String>{};
 
   ReportRange _reportRange = ReportRange.daily;
+  DateTime _sharedScopeAnchorDateLocal = DateTime.now();
   MarketSection _marketSection = MarketSection.used;
   CommunitySection _communitySection = CommunitySection.free;
 
   @override
   void initState() {
     super.initState();
+    _sharedScopeAnchorDateLocal =
+        _normalizeScopeAnchorForRange(_reportRange, DateTime.now());
     _bootstrapAccountFromToken();
     _initializeAssistantBridge();
     if (BabyAIApi.activeBabyId.isNotEmpty) {
@@ -726,15 +778,15 @@ class _HomeShellState extends State<_HomeShell> {
     return null;
   }
 
-  Future<void> _openActiveChatOptionsFromTopBar() async {
+  _ChatHistoryItem? _activeChatSessionItem() {
     final String activeId = (_chatPageKey.currentState?.activeSessionId ??
             _selectedChatSessionId ??
             "")
         .trim();
     if (activeId.isEmpty) {
-      return;
+      return null;
     }
-    final _ChatHistoryItem item = _chatHistoryItemById(activeId) ??
+    return _chatHistoryItemById(activeId) ??
         _ChatHistoryItem(
           sessionId: activeId,
           title: _chatPageKey.currentState?.activeThreadTitle ??
@@ -742,7 +794,6 @@ class _HomeShellState extends State<_HomeShell> {
           preview: "",
           updatedAt: DateTime.now(),
         );
-    await _showChatSessionActions(item);
   }
 
   Future<void> _renameActiveChatFromTopBar() async {
@@ -764,63 +815,70 @@ class _HomeShellState extends State<_HomeShell> {
     await _renameChatSession(item);
   }
 
-  Future<void> _showChatSessionActions(_ChatHistoryItem item) async {
-    if (!mounted) {
-      return;
-    }
-    final BuildContext dialogContext = context;
+  List<PopupMenuEntry<String>> _chatSessionActionMenuItems(
+    BuildContext context,
+    _ChatHistoryItem item,
+  ) {
     final bool pinned = _pinnedChatSessionIds.contains(item.sessionId);
-    final String action = await showModalBottomSheet<String>(
-          context: dialogContext,
-          showDragHandle: true,
-          builder: (BuildContext context) {
-            final ColorScheme color = Theme.of(context).colorScheme;
-            return SafeArea(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  ListTile(
-                    leading: const Icon(Icons.share_outlined),
-                    title: Text(
-                        tr(context, ko: "공유", en: "Share", es: "Compartir")),
-                    onTap: () => Navigator.of(context).pop("share"),
-                  ),
-                  ListTile(
-                    leading: const Icon(Icons.drive_file_rename_outline),
-                    title: Text(
-                      tr(context, ko: "이름 바꾸기", en: "Rename", es: "Renombrar"),
-                    ),
-                    onTap: () => Navigator.of(context).pop("rename"),
-                  ),
-                  ListTile(
-                    leading:
-                        Icon(pinned ? Icons.push_pin : Icons.push_pin_outlined),
-                    title: Text(
-                      pinned
-                          ? tr(context,
-                              ko: "고정 해제", en: "Unpin", es: "Desfijar")
-                          : tr(context,
-                              ko: "채팅 고정", en: "Pin chat", es: "Fijar chat"),
-                    ),
-                    onTap: () => Navigator.of(context).pop("pin"),
-                  ),
-                  ListTile(
-                    leading: Icon(Icons.delete_outline, color: color.error),
-                    title: Text(
-                      tr(context, ko: "삭제", en: "Delete", es: "Eliminar"),
-                      style: TextStyle(
-                        color: color.error,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    onTap: () => Navigator.of(context).pop("delete"),
-                  ),
-                ],
-              ),
-            );
-          },
-        ) ??
-        "";
+    final ColorScheme color = Theme.of(context).colorScheme;
+    return <PopupMenuEntry<String>>[
+      PopupMenuItem<String>(
+        value: "share",
+        child: Row(
+          children: <Widget>[
+            const Icon(Icons.share_outlined, size: 18),
+            const SizedBox(width: 10),
+            Text(tr(context, ko: "공유", en: "Share", es: "Compartir")),
+          ],
+        ),
+      ),
+      PopupMenuItem<String>(
+        value: "rename",
+        child: Row(
+          children: <Widget>[
+            const Icon(Icons.drive_file_rename_outline, size: 18),
+            const SizedBox(width: 10),
+            Text(tr(context, ko: "이름 바꾸기", en: "Rename", es: "Renombrar")),
+          ],
+        ),
+      ),
+      PopupMenuItem<String>(
+        value: "pin",
+        child: Row(
+          children: <Widget>[
+            Icon(
+              pinned ? Icons.push_pin : Icons.push_pin_outlined,
+              size: 18,
+            ),
+            const SizedBox(width: 10),
+            Text(
+              pinned
+                  ? tr(context, ko: "고정 해제", en: "Unpin", es: "Desfijar")
+                  : tr(context, ko: "채팅 고정", en: "Pin chat", es: "Fijar chat"),
+            ),
+          ],
+        ),
+      ),
+      PopupMenuItem<String>(
+        value: "delete",
+        child: Row(
+          children: <Widget>[
+            Icon(Icons.delete_outline, size: 18, color: color.error),
+            const SizedBox(width: 10),
+            Text(
+              tr(context, ko: "삭제", en: "Delete", es: "Eliminar"),
+              style: TextStyle(color: color.error, fontWeight: FontWeight.w700),
+            ),
+          ],
+        ),
+      ),
+    ];
+  }
+
+  Future<void> _handleChatSessionAction(
+    _ChatHistoryItem item,
+    String action,
+  ) async {
     if (action.isEmpty || !mounted) {
       return;
     }
@@ -873,6 +931,56 @@ class _HomeShellState extends State<_HomeShell> {
       default:
         return;
     }
+  }
+
+  Widget _buildChatSessionPopupButton({
+    required _ChatHistoryItem? item,
+    required ColorScheme color,
+    required double iconSize,
+    EdgeInsetsGeometry padding =
+        const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+    bool compact = false,
+  }) {
+    if (item == null) {
+      return Container(
+        decoration: BoxDecoration(
+          color: color.surfaceContainerHighest.withValues(alpha: 0.45),
+          borderRadius: BorderRadius.circular(999),
+        ),
+        padding: padding,
+        child: Icon(
+          Icons.more_vert,
+          size: iconSize,
+          color: color.onSurfaceVariant.withValues(alpha: 0.42),
+        ),
+      );
+    }
+    return PopupMenuButton<String>(
+      tooltip: tr(context, ko: "채팅 옵션", en: "Chat options", es: "Opciones"),
+      onSelected: (String action) =>
+          unawaited(_handleChatSessionAction(item, action)),
+      itemBuilder: (BuildContext context) =>
+          _chatSessionActionMenuItems(context, item),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      color: color.surface,
+      child: Container(
+        decoration: BoxDecoration(
+          color: color.surfaceContainerHighest.withValues(alpha: 0.45),
+          borderRadius: BorderRadius.circular(999),
+          border: compact
+              ? Border.all(
+                  color: color.outlineVariant.withValues(alpha: 0.2),
+                )
+              : null,
+        ),
+        padding: padding,
+        child: Icon(
+          Icons.more_vert,
+          size: iconSize,
+          color: color.onSurfaceVariant,
+        ),
+      ),
+    );
   }
 
   Future<void> _renameChatSession(_ChatHistoryItem item) async {
@@ -1019,11 +1127,15 @@ class _HomeShellState extends State<_HomeShell> {
         return ChatPage(
           key: _chatPageKey,
           onHistoryChanged: _onChatHistoryChanged,
+          initialDateMode: _chatModeFromReportRange(_reportRange),
+          initialAnchorDateLocal: _sharedScopeAnchorDateLocal,
+          onDateScopeChanged: _onChatDateScopeChanged,
         );
       case _statisticsPage:
         return ReportPage(
           key: _reportPageKey,
           initialRange: _reportRange,
+          initialFocusDateLocal: _sharedScopeAnchorDateLocal,
         );
       case _photosPage:
         return SettingsPage(
@@ -1390,11 +1502,116 @@ class _HomeShellState extends State<_HomeShell> {
     unawaited(AppSessionStore.persistRuntimeState());
   }
 
-  void _setReportRange(ReportRange next) {
-    if (_reportRange != next) {
-      setState(() => _reportRange = next);
+  DateTime _dateOnlyLocal(DateTime value) {
+    final DateTime local = value.toLocal();
+    return DateTime(local.year, local.month, local.day);
+  }
+
+  DateTime _normalizeScopeAnchorForRange(ReportRange range, DateTime value) {
+    final DateTime local = _dateOnlyLocal(value);
+    switch (range) {
+      case ReportRange.daily:
+        return local;
+      case ReportRange.weekly:
+        return local.subtract(Duration(days: local.weekday - DateTime.monday));
+      case ReportRange.monthly:
+        return DateTime(local.year, local.month, 1);
     }
-    _reportPageKey.currentState?.setRange(next);
+  }
+
+  ChatDateMode _chatModeFromReportRange(ReportRange range) {
+    switch (range) {
+      case ReportRange.daily:
+        return ChatDateMode.day;
+      case ReportRange.weekly:
+        return ChatDateMode.week;
+      case ReportRange.monthly:
+        return ChatDateMode.month;
+    }
+  }
+
+  ReportRange _reportRangeFromChatMode(ChatDateMode mode) {
+    switch (mode) {
+      case ChatDateMode.day:
+        return ReportRange.daily;
+      case ChatDateMode.week:
+        return ReportRange.weekly;
+      case ChatDateMode.month:
+        return ReportRange.monthly;
+    }
+  }
+
+  String _scopeDateLabel(ReportRange range, DateTime anchorDateLocal) {
+    String ymd(DateTime day) {
+      return "${day.year.toString().padLeft(4, "0")}-"
+          "${day.month.toString().padLeft(2, "0")}-"
+          "${day.day.toString().padLeft(2, "0")}";
+    }
+
+    final DateTime anchor =
+        _normalizeScopeAnchorForRange(range, anchorDateLocal);
+    switch (range) {
+      case ReportRange.daily:
+        return ymd(anchor);
+      case ReportRange.weekly:
+        final DateTime end = anchor.add(const Duration(days: 6));
+        return "${ymd(anchor)} ~ ${ymd(end)}";
+      case ReportRange.monthly:
+        return "${anchor.year.toString().padLeft(4, "0")}-"
+            "${anchor.month.toString().padLeft(2, "0")}";
+    }
+  }
+
+  Future<void> _syncReportStateWithSharedScope() async {
+    final ReportPageState? reportState = _reportPageKey.currentState;
+    if (reportState == null) {
+      return;
+    }
+    reportState.setRange(_reportRange);
+    switch (_reportRange) {
+      case ReportRange.daily:
+        await reportState.setFocusDate(_sharedScopeAnchorDateLocal);
+      case ReportRange.weekly:
+        await reportState.setFocusWeekStart(_sharedScopeAnchorDateLocal);
+      case ReportRange.monthly:
+        await reportState.setFocusMonthStart(_sharedScopeAnchorDateLocal);
+    }
+  }
+
+  void _applySharedScope(
+    ReportRange range,
+    DateTime anchorDateLocal, {
+    bool syncReportState = true,
+    bool syncChatState = true,
+  }) {
+    final DateTime normalizedAnchor =
+        _normalizeScopeAnchorForRange(range, anchorDateLocal);
+    if (mounted) {
+      setState(() {
+        _reportRange = range;
+        _sharedScopeAnchorDateLocal = normalizedAnchor;
+      });
+    }
+    if (syncReportState) {
+      unawaited(_syncReportStateWithSharedScope());
+    }
+    if (syncChatState) {
+      unawaited(_chatPageKey.currentState?.applyDateScope(
+        ChatDateScope(
+          mode: _chatModeFromReportRange(range),
+          anchorDateLocal: normalizedAnchor,
+        ),
+      ));
+    }
+  }
+
+  void _onChatDateScopeChanged(ChatDateScope scope) {
+    final ReportRange range = _reportRangeFromChatMode(scope.mode);
+    _applySharedScope(range, scope.anchorDateLocal, syncChatState: false);
+  }
+
+  void _setReportRange(ReportRange next) {
+    _applySharedScope(next, _sharedScopeAnchorDateLocal);
   }
 
   void _onHomeBabyNameChanged(String name) {
@@ -1465,20 +1682,27 @@ class _HomeShellState extends State<_HomeShell> {
       if (reportLabel != null && reportLabel.trim().isNotEmpty) {
         return reportLabel.trim();
       }
+      return _scopeDateLabel(_reportRange, _sharedScopeAnchorDateLocal);
+    }
+    if (_index == _chatPage) {
+      return _scopeDateLabel(_reportRange, _sharedScopeAnchorDateLocal);
     }
     return _todayYmdLabel();
   }
 
   Future<void> _pickStatisticsDateFromTopBar() async {
-    if (_index != _statisticsPage) {
+    if (_index != _statisticsPage && _index != _chatPage) {
       return;
     }
     final ReportPageState? reportState = _reportPageKey.currentState;
-    final ReportRange range = reportState?.selectedRange ?? _reportRange;
+    final ReportRange range = _reportRange;
     final DateTime now = DateTime.now();
     final DateTime firstDate = DateTime(now.year - 12, 1, 1);
     final DateTime lastDate = DateTime(now.year + 3, 12, 31);
-    final DateTime rawInitial = reportState?.datePickerInitialDateLocal ?? now;
+    final DateTime rawInitial = _normalizeScopeAnchorForRange(
+      range,
+      reportState?.datePickerInitialDateLocal ?? _sharedScopeAnchorDateLocal,
+    );
     final DateTime initialDate = rawInitial.isBefore(firstDate)
         ? firstDate
         : (rawInitial.isAfter(lastDate) ? lastDate : rawInitial);
@@ -1501,15 +1725,15 @@ class _HomeShellState extends State<_HomeShell> {
       helpText: tr(
         context,
         ko: range == ReportRange.weekly
-            ? "통계 주 선택 (월요일)"
+            ? "주 선택 (월요일)"
             : range == ReportRange.monthly
-                ? "통계 월 선택 (1일)"
-                : "통계 날짜 선택",
+                ? "월 선택 (1일)"
+                : "날짜 선택",
         en: range == ReportRange.weekly
-            ? "Choose statistics week (Monday)"
+            ? "Choose week (Monday)"
             : range == ReportRange.monthly
-                ? "Choose statistics month (day 1)"
-                : "Choose statistics date",
+                ? "Choose month (day 1)"
+                : "Choose date",
         es: range == ReportRange.weekly
             ? "Elegir semana (lunes)"
             : range == ReportRange.monthly
@@ -1520,17 +1744,7 @@ class _HomeShellState extends State<_HomeShell> {
     if (!mounted || picked == null) {
       return;
     }
-    switch (range) {
-      case ReportRange.daily:
-        await reportState?.setFocusDate(picked);
-      case ReportRange.weekly:
-        await reportState?.setFocusWeekStart(picked);
-      case ReportRange.monthly:
-        await reportState?.setFocusMonthStart(picked);
-    }
-    if (mounted) {
-      setState(() {});
-    }
+    _applySharedScope(range, picked);
   }
 
   Widget _buildHeaderControls(BuildContext context) {
@@ -1711,9 +1925,11 @@ class _HomeShellState extends State<_HomeShell> {
               onTap: () => unawaited(_createNewChatFromDrawer()),
             ),
             const SizedBox(width: 4),
-            _RoundTopButton(
-              icon: Icons.more_vert,
-              onTap: _openActiveChatOptionsFromTopBar,
+            _buildChatSessionPopupButton(
+              item: _activeChatSessionItem(),
+              color: color,
+              iconSize: 20,
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
             ),
           ],
           const SizedBox(width: 8),
@@ -1721,7 +1937,7 @@ class _HomeShellState extends State<_HomeShell> {
             color: Colors.transparent,
             child: InkWell(
               borderRadius: BorderRadius.circular(999),
-              onTap: _index == _statisticsPage
+              onTap: (_index == _statisticsPage || _index == _chatPage)
                   ? () => unawaited(_pickStatisticsDateFromTopBar())
                   : null,
               child: Container(
@@ -1741,7 +1957,8 @@ class _HomeShellState extends State<_HomeShell> {
                         fontWeight: FontWeight.w600,
                       ),
                     ),
-                    if (_index == _statisticsPage) ...<Widget>[
+                    if (_index == _statisticsPage ||
+                        _index == _chatPage) ...<Widget>[
                       const SizedBox(width: 4),
                       Icon(
                         Icons.keyboard_arrow_down_rounded,
@@ -1880,8 +2097,6 @@ class _HomeShellState extends State<_HomeShell> {
                                 onTap: () => unawaited(
                                   _openChatSessionFromDrawer(item.sessionId),
                                 ),
-                                onLongPress: () =>
-                                    unawaited(_showChatSessionActions(item)),
                                 leading: CircleAvatar(
                                   radius: 16,
                                   backgroundColor:
@@ -1927,6 +2142,17 @@ class _HomeShellState extends State<_HomeShell> {
                                         fontSize: 12,
                                         color: color.onSurfaceVariant,
                                       ),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    _buildChatSessionPopupButton(
+                                      item: item,
+                                      color: color,
+                                      iconSize: 18,
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 6,
+                                        vertical: 6,
+                                      ),
+                                      compact: true,
                                     ),
                                   ],
                                 ),

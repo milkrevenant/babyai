@@ -266,3 +266,67 @@ func TestUpsertMySettingsPersistsShowSpecialMemo(t *testing.T) {
 		t.Fatalf("expected persisted show_special_memo=false, got %v", getBody["show_special_memo"])
 	}
 }
+
+func TestUpsertMySettingsPersistsReportColorTone(t *testing.T) {
+	resetDatabase(t)
+	fixture := seedOwnerFixture(t)
+
+	updateRec := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodPatch,
+		"/api/v1/settings/me",
+		signToken(t, fixture.UserID, nil),
+		map[string]any{
+			"report_color_tone": "ocean",
+		},
+		nil,
+	)
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", updateRec.Code, updateRec.Body.String())
+	}
+	updateBody := decodeJSONMap(t, updateRec)
+	if updateBody["report_color_tone"] != "ocean" {
+		t.Fatalf("expected report_color_tone=ocean, got %v", updateBody["report_color_tone"])
+	}
+
+	getRec := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodGet,
+		"/api/v1/settings/me",
+		signToken(t, fixture.UserID, nil),
+		nil,
+		nil,
+	)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", getRec.Code, getRec.Body.String())
+	}
+	getBody := decodeJSONMap(t, getRec)
+	if getBody["report_color_tone"] != "ocean" {
+		t.Fatalf("expected persisted report_color_tone=ocean, got %v", getBody["report_color_tone"])
+	}
+}
+
+func TestUpsertMySettingsRejectsInvalidReportColorTone(t *testing.T) {
+	resetDatabase(t)
+	fixture := seedOwnerFixture(t)
+
+	rec := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodPatch,
+		"/api/v1/settings/me",
+		signToken(t, fixture.UserID, nil),
+		map[string]any{
+			"report_color_tone": "ultraviolet",
+		},
+		nil,
+	)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if detail := responseDetail(t, rec); detail != "report_color_tone must be one of: classic, ocean, sage, sunset" {
+		t.Fatalf("unexpected detail: %q", detail)
+	}
+}

@@ -565,6 +565,8 @@ func (a *App) aiQuery(c *gin.Context) {
 			Query:           payload.Question,
 			Tone:            payload.Tone,
 			UsePersonalData: payload.UsePersonalData,
+			DateMode:        payload.DateMode,
+			AnchorDate:      payload.AnchorDate,
 		},
 		baby.ID,
 	)
@@ -671,6 +673,7 @@ func (a *App) runChatQuery(
 	}
 
 	now := time.Now().UTC()
+	scopeOverride := resolveRequestedChatScope(payload.DateMode, payload.AnchorDate, now)
 	preflight, err := a.preflightBilling(ctx, user.ID, session.HouseholdID, now)
 	if err != nil {
 		return chatExecutionResult{}, err
@@ -721,7 +724,16 @@ func (a *App) runChatQuery(
 		smalltalkStyleHint = deriveSmalltalkStyleHint(turns, question)
 	}
 
-	chatContext, err := a.buildChatContext(ctx, user.ID, childID, intent, question, now, payload.UsePersonalData)
+	chatContext, err := a.buildChatContext(
+		ctx,
+		user.ID,
+		childID,
+		intent,
+		question,
+		now,
+		payload.UsePersonalData,
+		scopeOverride,
+	)
 	if err != nil {
 		_ = a.releaseReservedCredits(ctx, user.ID, preflight.Reserved)
 		return chatExecutionResult{}, err
@@ -1587,6 +1599,11 @@ type chatContextSelection struct {
 	MonthEnd      time.Time
 }
 
+type chatScopeOverride struct {
+	Mode       string
+	AnchorDate *time.Time
+}
+
 type normalizedEvidenceRow struct {
 	Action  string
 	Date    string
@@ -1605,6 +1622,7 @@ func (a *App) buildChatContext(
 	question string,
 	now time.Time,
 	usePersonalData bool,
+	scopeOverride chatScopeOverride,
 ) (chatContextResult, error) {
 	if !usePersonalData || strings.TrimSpace(childID) == "" {
 		timeRange := "none"
@@ -1673,7 +1691,7 @@ func (a *App) buildChatContext(
 			Summary: strings.Join(summaryLines, "\n"),
 		}, nil
 	}
-	selection := resolveChatContextSelection(question, intent, nowUTC)
+	selection := resolveChatContextSelection(question, intent, nowUTC, scopeOverride)
 	switch selection.Mode {
 	case chatContextModeRequestedDateSummary:
 		return a.buildRequestedDateSummaryContext(ctx, childID, nowUTC, selection, profileSnapshot, birthDateText)
@@ -1813,7 +1831,68 @@ func profileCareContextLine(profile childProfileSnapshot) string {
 	return "- 온보딩 프로필=" + strings.Join(parts, ", ")
 }
 
-func resolveChatContextSelection(question string, intent aiIntent, nowUTC time.Time) chatContextSelection {
+func resolveRequestedChatScope(rawMode, rawAnchorDate string, nowUTC time.Time) chatScopeOverride {
+	mode := normalizeChatDateMode(rawMode)
+	if mode == "" {
+		return chatScopeOverride{}
+	}
+	anchor, ok := parseChatScopeAnchorDate(rawAnchorDate, nowUTC)
+	if !ok {
+		fallback := startOfUTCDay(nowUTC)
+		return chatScopeOverride{
+			Mode:       mode,
+			AnchorDate: &fallback,
+		}
+	}
+	return chatScopeOverride{
+		Mode:       mode,
+		AnchorDate: &anchor,
+	}
+}
+
+func normalizeChatDateMode(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "day", "daily", "date", "today", "d":
+		return "day"
+	case "week", "weekly", "w":
+		return "week"
+	case "month", "monthly", "m":
+		return "month"
+	default:
+		return ""
+	}
+}
+
+func parseChatScopeAnchorDate(raw string, nowUTC time.Time) (time.Time, bool) {
+	candidate := strings.TrimSpace(raw)
+	if candidate == "" {
+		return startOfUTCDay(nowUTC), true
+	}
+	if parsed, err := parseDate(candidate); err == nil {
+		return startOfUTCDay(parsed.UTC()), true
+	}
+	layouts := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02 15:04:05",
+		"2006-01-02 15:04",
+		"2006-01-02T15:04:05",
+		"2006-01-02T15:04",
+	}
+	for _, layout := range layouts {
+		if parsed, err := time.Parse(layout, candidate); err == nil {
+			return startOfUTCDay(parsed.UTC()), true
+		}
+	}
+	return time.Time{}, false
+}
+
+func resolveChatContextSelection(
+	question string,
+	intent aiIntent,
+	nowUTC time.Time,
+	scopeOverride chatScopeOverride,
+) chatContextSelection {
 	selection := chatContextSelection{
 		Mode:       chatContextModeLast3DRaw,
 		RawStart:   nowUTC.Add(-chatRawWindowDuration),
@@ -1821,6 +1900,9 @@ func resolveChatContextSelection(question string, intent aiIntent, nowUTC time.T
 		WeekAnchor: startOfUTCWeek(nowUTC),
 		MonthStart: startOfUTCMonth(nowUTC),
 		MonthEnd:   startOfUTCMonth(nowUTC).AddDate(0, 1, 0),
+	}
+	if overridden, ok := selectionByRequestedScope(selection, intent, nowUTC, scopeOverride); ok {
+		return overridden
 	}
 	if questionAsksPreviousWeek(question) {
 		selection.WeekAnchor = selection.WeekAnchor.AddDate(0, 0, -7)
@@ -1856,6 +1938,49 @@ func resolveChatContextSelection(question string, intent aiIntent, nowUTC time.T
 		return selection
 	}
 	return selection
+}
+
+func selectionByRequestedScope(
+	selection chatContextSelection,
+	intent aiIntent,
+	nowUTC time.Time,
+	scopeOverride chatScopeOverride,
+) (chatContextSelection, bool) {
+	mode := normalizeChatDateMode(scopeOverride.Mode)
+	if mode == "" {
+		return chatContextSelection{}, false
+	}
+	anchor := startOfUTCDay(nowUTC)
+	if scopeOverride.AnchorDate != nil && !scopeOverride.AnchorDate.IsZero() {
+		anchor = startOfUTCDay(scopeOverride.AnchorDate.UTC())
+	}
+	switch mode {
+	case "day":
+		selection.RequestedDate = &anchor
+		selection.RawStart = anchor
+		selection.RawEnd = anchor.Add(24 * time.Hour)
+		if nowUTC.Sub(anchor) > chatRawWindowDuration {
+			selection.Mode = chatContextModeRequestedDateSummary
+		} else {
+			selection.Mode = chatContextModeRequestedDateRaw
+		}
+		return selection, true
+	case "week":
+		selection.Mode = chatContextModeWeeklySummary
+		selection.WeekAnchor = startOfUTCWeek(anchor)
+		return selection, true
+	case "month":
+		selection.MonthStart = startOfUTCMonth(anchor)
+		selection.MonthEnd = selection.MonthStart.AddDate(0, 1, 0)
+		if intent == aiIntentMedicalRelated {
+			selection.Mode = chatContextModeMonthlyMedicalSummary
+		} else {
+			selection.Mode = chatContextModeMonthlyParentingRollup
+		}
+		return selection, true
+	default:
+		return chatContextSelection{}, false
+	}
 }
 
 func questionAsksWeeklySummary(question string) bool {

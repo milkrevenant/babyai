@@ -1,6 +1,9 @@
+import "dart:async";
+
 import "package:dio/dio.dart";
 
 import "../config/app_env.dart";
+import "../storage/offline_data_store.dart";
 
 class ApiFailure implements Exception {
   ApiFailure(this.message, {this.statusCode});
@@ -30,6 +33,10 @@ class BabyAIApi {
   static String _runtimeBabyId = AppEnv.babyId;
   static String _runtimeHouseholdId = AppEnv.householdId;
   static String _runtimeAlbumId = AppEnv.albumId;
+  static bool _mutationFlushInProgress = false;
+  static const String _cacheQuickLanding = "quick_landing_snapshot";
+  static const String _cacheDailyReport = "daily_report";
+  static const String _cacheWeeklyReport = "weekly_report";
   final Dio _dio;
 
   bool get isConfigured =>
@@ -132,6 +139,130 @@ class BabyAIApi {
       );
     }
     return ApiFailure(error.toString());
+  }
+
+  bool _isConnectivityFailure(Object error) {
+    if (error is ApiFailure) {
+      return error.message.toLowerCase().contains("cannot reach api server");
+    }
+    if (error is DioException) {
+      final String rawMessage = (error.message ?? "").toLowerCase();
+      return error.type == DioExceptionType.connectionError ||
+          error.type == DioExceptionType.connectionTimeout ||
+          error.type == DioExceptionType.unknown ||
+          rawMessage.contains("connection refused") ||
+          rawMessage.contains("failed host lookup") ||
+          rawMessage.contains("connection error");
+    }
+    return false;
+  }
+
+  Map<String, dynamic> _withOfflineCacheFlag(Map<String, dynamic> data) {
+    final Map<String, dynamic> copy = Map<String, dynamic>.from(data);
+    copy["offline_cached"] = true;
+    return copy;
+  }
+
+  Future<void> _enqueueEventMutation({
+    required String kind,
+    required Map<String, dynamic> payload,
+  }) async {
+    await OfflineDataStore.instance.enqueueMutation(
+      kind: kind,
+      payload: payload,
+    );
+  }
+
+  Future<void> _dispatchQueuedMutation(Map<String, dynamic> item) async {
+    final String kind = (item["kind"] ?? "").toString().trim();
+    final Map<String, dynamic> payload = item["payload"] is Map
+        ? Map<String, dynamic>.from(item["payload"] as Map<dynamic, dynamic>)
+        : <String, dynamic>{};
+    switch (kind) {
+      case "event_create_closed":
+        await _dio.post<dynamic>(
+          "/api/v1/events/manual",
+          data: payload,
+          options: _authOptions(),
+        );
+        return;
+      case "event_start":
+        await _dio.post<dynamic>(
+          "/api/v1/events/start",
+          data: payload,
+          options: _authOptions(),
+        );
+        return;
+      case "event_complete":
+        final String eventId = (payload["event_id"] ?? "").toString().trim();
+        if (eventId.isEmpty) {
+          return;
+        }
+        final Map<String, dynamic> body = Map<String, dynamic>.from(payload)
+          ..remove("event_id");
+        await _dio.patch<dynamic>(
+          "/api/v1/events/${Uri.encodeComponent(eventId)}/complete",
+          data: body,
+          options: _authOptions(),
+        );
+        return;
+      case "event_update":
+        final String eventId = (payload["event_id"] ?? "").toString().trim();
+        if (eventId.isEmpty) {
+          return;
+        }
+        final Map<String, dynamic> body = Map<String, dynamic>.from(payload)
+          ..remove("event_id");
+        await _dio.patch<dynamic>(
+          "/api/v1/events/${Uri.encodeComponent(eventId)}",
+          data: body,
+          options: _authOptions(),
+        );
+        return;
+      case "event_cancel":
+        final String eventId = (payload["event_id"] ?? "").toString().trim();
+        if (eventId.isEmpty) {
+          return;
+        }
+        final Map<String, dynamic> body = Map<String, dynamic>.from(payload)
+          ..remove("event_id");
+        await _dio.patch<dynamic>(
+          "/api/v1/events/${Uri.encodeComponent(eventId)}/cancel",
+          data: body,
+          options: _authOptions(),
+        );
+        return;
+      default:
+        return;
+    }
+  }
+
+  Future<void> flushOfflineMutations() async {
+    if (_mutationFlushInProgress) {
+      return;
+    }
+    _mutationFlushInProgress = true;
+    try {
+      final List<Map<String, dynamic>> queue =
+          await OfflineDataStore.instance.listMutations();
+      for (final Map<String, dynamic> item in queue) {
+        final String id = (item["id"] ?? "").toString().trim();
+        if (id.isEmpty) {
+          continue;
+        }
+        try {
+          await _dispatchQueuedMutation(item);
+          await OfflineDataStore.instance.removeMutation(id);
+        } catch (error) {
+          if (_isConnectivityFailure(error)) {
+            break;
+          }
+          await OfflineDataStore.instance.removeMutation(id);
+        }
+      }
+    } finally {
+      _mutationFlushInProgress = false;
+    }
   }
 
   Map<String, dynamic> _requireMap(Response<dynamic> response) {
@@ -418,6 +549,7 @@ class BabyAIApi {
     String? mainFont,
     String? highlightFont,
     String? accentTone,
+    String? reportColorTone,
     Map<String, bool>? bottomMenuEnabled,
     String? childCareProfile,
     Map<String, bool>? homeTiles,
@@ -437,6 +569,8 @@ class BabyAIApi {
           "highlight_font": highlightFont.trim(),
         if (accentTone != null && accentTone.trim().isNotEmpty)
           "accent_tone": accentTone.trim(),
+        if (reportColorTone != null && reportColorTone.trim().isNotEmpty)
+          "report_color_tone": reportColorTone.trim(),
         if (bottomMenuEnabled != null) "bottom_menu_enabled": bottomMenuEnabled,
         if (childCareProfile != null && childCareProfile.trim().isNotEmpty)
           "child_care_profile": childCareProfile.trim(),
@@ -456,23 +590,95 @@ class BabyAIApi {
     }
   }
 
+  Future<String> exportDataCsv({String? babyId}) async {
+    try {
+      _requireBabyId();
+      final String resolvedBabyId = (babyId ?? activeBabyId).trim();
+      if (resolvedBabyId.isEmpty) {
+        throw ApiFailure("baby_id is required");
+      }
+      final Options options = _authOptions().copyWith(
+        responseType: ResponseType.plain,
+      );
+      final Response<dynamic> response = await _dio.get<dynamic>(
+        "/api/v1/data/export.csv",
+        queryParameters: <String, dynamic>{
+          "baby_id": resolvedBabyId,
+        },
+        options: options,
+      );
+      final dynamic payload = response.data;
+      if (payload is String) {
+        return payload;
+      }
+      return payload?.toString() ?? "";
+    } catch (error) {
+      throw _toFailure(error);
+    }
+  }
+
+  Future<Map<String, dynamic>> _fetchQuickLandingSnapshotRemote(
+    String normalizedRange,
+  ) async {
+    final Response<dynamic> response = await _dio.get<dynamic>(
+      "/api/v1/quick/landing-snapshot",
+      queryParameters: <String, dynamic>{
+        "baby_id": activeBabyId,
+        "range": normalizedRange.isEmpty ? "day" : normalizedRange,
+        "tz_offset": _localTimezoneOffset(),
+      },
+      options: _authOptions(),
+    );
+    final Map<String, dynamic> payload = _requireMap(response);
+    await OfflineDataStore.instance.writeCache(
+      namespace: _cacheQuickLanding,
+      babyId: activeBabyId,
+      key: normalizedRange.isEmpty ? "day" : normalizedRange,
+      data: payload,
+    );
+    return payload;
+  }
+
+  Future<void> _refreshQuickLandingSnapshotCache(String normalizedRange) async {
+    try {
+      await _fetchQuickLandingSnapshotRemote(normalizedRange);
+    } catch (_) {
+      // Ignore background refresh failures.
+    }
+  }
+
   Future<Map<String, dynamic>> quickLandingSnapshot({
     String range = "day",
+    bool preferOffline = true,
   }) async {
     try {
       _requireBabyId();
       final String normalizedRange = range.trim().toLowerCase();
-      final Response<dynamic> response = await _dio.get<dynamic>(
-        "/api/v1/quick/landing-snapshot",
-        queryParameters: <String, dynamic>{
-          "baby_id": activeBabyId,
-          "range": normalizedRange.isEmpty ? "day" : normalizedRange,
-          "tz_offset": _localTimezoneOffset(),
-        },
-        options: _authOptions(),
+      final String cacheKey = normalizedRange.isEmpty ? "day" : normalizedRange;
+      final Map<String, dynamic>? cached =
+          await OfflineDataStore.instance.readCache(
+        namespace: _cacheQuickLanding,
+        babyId: activeBabyId,
+        key: cacheKey,
       );
-      return _requireMap(response);
+      if (preferOffline && cached != null) {
+        unawaited(_refreshQuickLandingSnapshotCache(cacheKey));
+        return _withOfflineCacheFlag(cached);
+      }
+      await flushOfflineMutations();
+      return await _fetchQuickLandingSnapshotRemote(cacheKey);
     } catch (error) {
+      final Map<String, dynamic>? cached =
+          await OfflineDataStore.instance.readCache(
+        namespace: _cacheQuickLanding,
+        babyId: activeBabyId,
+        key: range.trim().toLowerCase().isEmpty
+            ? "day"
+            : range.trim().toLowerCase(),
+      );
+      if (cached != null) {
+        return _withOfflineCacheFlag(cached);
+      }
       throw _toFailure(error);
     }
   }
@@ -598,6 +804,7 @@ class BabyAIApi {
     String? childId,
   }) async {
     try {
+      await flushOfflineMutations();
       final String sid = sessionId.trim();
       if (sid.isEmpty) {
         throw ApiFailure("sessionId is required");
@@ -645,6 +852,8 @@ class BabyAIApi {
     String tone = "neutral",
     bool usePersonalData = true,
     String? childId,
+    String dateMode = "day",
+    DateTime? anchorDate,
   }) async {
     try {
       final String sid = sessionId.trim();
@@ -655,6 +864,13 @@ class BabyAIApi {
       if (question.isEmpty) {
         throw ApiFailure("query is required");
       }
+      final DateTime anchor = (anchorDate ?? DateTime.now()).toLocal();
+      final String normalizedMode = dateMode.trim().toLowerCase().isEmpty
+          ? "day"
+          : dateMode.trim().toLowerCase();
+      final String anchorDateText = "${anchor.year.toString().padLeft(4, "0")}-"
+          "${anchor.month.toString().padLeft(2, "0")}-"
+          "${anchor.day.toString().padLeft(2, "0")}";
       final Response<dynamic> response = await _dio.post<dynamic>(
         "/api/v1/chat/query",
         data: <String, dynamic>{
@@ -662,6 +878,8 @@ class BabyAIApi {
           "query": question,
           "tone": tone,
           "use_personal_data": usePersonalData,
+          "date_mode": normalizedMode,
+          "anchor_date": anchorDateText,
           if (childId != null && childId.trim().isNotEmpty)
             "child_id": childId.trim()
           else if (activeBabyId.isNotEmpty)
@@ -725,20 +943,40 @@ class BabyAIApi {
   }) async {
     try {
       _requireBabyId();
+      await flushOfflineMutations();
+      final Map<String, dynamic> body = <String, dynamic>{
+        "baby_id": activeBabyId,
+        "type": type.trim(),
+        "start_time": startTime.toUtc().toIso8601String(),
+        if (endTime != null) "end_time": endTime.toUtc().toIso8601String(),
+        "value": value,
+        if (metadata != null) "metadata": metadata,
+      };
       final Response<dynamic> response = await _dio.post<dynamic>(
         "/api/v1/events/manual",
-        data: <String, dynamic>{
-          "baby_id": activeBabyId,
-          "type": type.trim(),
-          "start_time": startTime.toUtc().toIso8601String(),
-          if (endTime != null) "end_time": endTime.toUtc().toIso8601String(),
-          "value": value,
-          if (metadata != null) "metadata": metadata,
-        },
+        data: body,
         options: _authOptions(),
       );
       return _requireMap(response);
     } catch (error) {
+      if (_isConnectivityFailure(error)) {
+        await _enqueueEventMutation(
+          kind: "event_create_closed",
+          payload: <String, dynamic>{
+            "baby_id": activeBabyId,
+            "type": type.trim(),
+            "start_time": startTime.toUtc().toIso8601String(),
+            if (endTime != null) "end_time": endTime.toUtc().toIso8601String(),
+            "value": value,
+            if (metadata != null) "metadata": metadata,
+          },
+        );
+        return <String, dynamic>{
+          "status": "queued_offline",
+          "queued": true,
+          "event_id": "local-${DateTime.now().millisecondsSinceEpoch}",
+        };
+      }
       throw _toFailure(error);
     }
   }
@@ -751,19 +989,38 @@ class BabyAIApi {
   }) async {
     try {
       _requireBabyId();
+      await flushOfflineMutations();
+      final Map<String, dynamic> body = <String, dynamic>{
+        "baby_id": activeBabyId,
+        "type": type.trim(),
+        "start_time": startTime.toUtc().toIso8601String(),
+        "value": value,
+        if (metadata != null) "metadata": metadata,
+      };
       final Response<dynamic> response = await _dio.post<dynamic>(
         "/api/v1/events/start",
-        data: <String, dynamic>{
-          "baby_id": activeBabyId,
-          "type": type.trim(),
-          "start_time": startTime.toUtc().toIso8601String(),
-          "value": value,
-          if (metadata != null) "metadata": metadata,
-        },
+        data: body,
         options: _authOptions(),
       );
       return _requireMap(response);
     } catch (error) {
+      if (_isConnectivityFailure(error)) {
+        await _enqueueEventMutation(
+          kind: "event_start",
+          payload: <String, dynamic>{
+            "baby_id": activeBabyId,
+            "type": type.trim(),
+            "start_time": startTime.toUtc().toIso8601String(),
+            "value": value,
+            if (metadata != null) "metadata": metadata,
+          },
+        );
+        return <String, dynamic>{
+          "status": "queued_offline",
+          "queued": true,
+          "event_id": "local-${DateTime.now().millisecondsSinceEpoch}",
+        };
+      }
       throw _toFailure(error);
     }
   }
@@ -779,17 +1036,35 @@ class BabyAIApi {
       if (normalizedId.isEmpty) {
         throw ApiFailure("event_id is required");
       }
+      await flushOfflineMutations();
+      final Map<String, dynamic> body = <String, dynamic>{
+        if (endTime != null) "end_time": endTime.toUtc().toIso8601String(),
+        if (value != null) "value": value,
+        if (metadata != null) "metadata": metadata,
+      };
       final Response<dynamic> response = await _dio.patch<dynamic>(
         "/api/v1/events/${Uri.encodeComponent(normalizedId)}/complete",
-        data: <String, dynamic>{
-          if (endTime != null) "end_time": endTime.toUtc().toIso8601String(),
-          if (value != null) "value": value,
-          if (metadata != null) "metadata": metadata,
-        },
+        data: body,
         options: _authOptions(),
       );
       return _requireMap(response);
     } catch (error) {
+      if (_isConnectivityFailure(error)) {
+        await _enqueueEventMutation(
+          kind: "event_complete",
+          payload: <String, dynamic>{
+            "event_id": eventId.trim(),
+            if (endTime != null) "end_time": endTime.toUtc().toIso8601String(),
+            if (value != null) "value": value,
+            if (metadata != null) "metadata": metadata,
+          },
+        );
+        return <String, dynamic>{
+          "status": "queued_offline",
+          "queued": true,
+          "event_id": eventId.trim(),
+        };
+      }
       throw _toFailure(error);
     }
   }
@@ -807,20 +1082,41 @@ class BabyAIApi {
       if (normalizedId.isEmpty) {
         throw ApiFailure("event_id is required");
       }
+      await flushOfflineMutations();
+      final Map<String, dynamic> body = <String, dynamic>{
+        if (type != null && type.trim().isNotEmpty) "type": type.trim(),
+        if (startTime != null)
+          "start_time": startTime.toUtc().toIso8601String(),
+        if (endTime != null) "end_time": endTime.toUtc().toIso8601String(),
+        if (value != null) "value": value,
+        if (metadata != null) "metadata": metadata,
+      };
       final Response<dynamic> response = await _dio.patch<dynamic>(
         "/api/v1/events/${Uri.encodeComponent(normalizedId)}",
-        data: <String, dynamic>{
-          if (type != null && type.trim().isNotEmpty) "type": type.trim(),
-          if (startTime != null)
-            "start_time": startTime.toUtc().toIso8601String(),
-          if (endTime != null) "end_time": endTime.toUtc().toIso8601String(),
-          if (value != null) "value": value,
-          if (metadata != null) "metadata": metadata,
-        },
+        data: body,
         options: _authOptions(),
       );
       return _requireMap(response);
     } catch (error) {
+      if (_isConnectivityFailure(error)) {
+        await _enqueueEventMutation(
+          kind: "event_update",
+          payload: <String, dynamic>{
+            "event_id": eventId.trim(),
+            if (type != null && type.trim().isNotEmpty) "type": type.trim(),
+            if (startTime != null)
+              "start_time": startTime.toUtc().toIso8601String(),
+            if (endTime != null) "end_time": endTime.toUtc().toIso8601String(),
+            if (value != null) "value": value,
+            if (metadata != null) "metadata": metadata,
+          },
+        );
+        return <String, dynamic>{
+          "status": "queued_offline",
+          "queued": true,
+          "event_id": eventId.trim(),
+        };
+      }
       throw _toFailure(error);
     }
   }
@@ -834,16 +1130,32 @@ class BabyAIApi {
       if (normalizedId.isEmpty) {
         throw ApiFailure("event_id is required");
       }
+      await flushOfflineMutations();
+      final Map<String, dynamic> body = <String, dynamic>{
+        if (reason != null && reason.trim().isNotEmpty) "reason": reason.trim(),
+      };
       final Response<dynamic> response = await _dio.patch<dynamic>(
         "/api/v1/events/${Uri.encodeComponent(normalizedId)}/cancel",
-        data: <String, dynamic>{
-          if (reason != null && reason.trim().isNotEmpty)
-            "reason": reason.trim(),
-        },
+        data: body,
         options: _authOptions(),
       );
       return _requireMap(response);
     } catch (error) {
+      if (_isConnectivityFailure(error)) {
+        await _enqueueEventMutation(
+          kind: "event_cancel",
+          payload: <String, dynamic>{
+            "event_id": eventId.trim(),
+            if (reason != null && reason.trim().isNotEmpty)
+              "reason": reason.trim(),
+          },
+        );
+        return <String, dynamic>{
+          "status": "queued_offline",
+          "queued": true,
+          "event_id": eventId.trim(),
+        };
+      }
       throw _toFailure(error);
     }
   }
@@ -852,6 +1164,7 @@ class BabyAIApi {
     String? type,
   }) async {
     try {
+      await flushOfflineMutations();
       _requireBabyId();
       final Response<dynamic> response = await _dio.get<dynamic>(
         "/api/v1/events/open",
@@ -867,38 +1180,114 @@ class BabyAIApi {
     }
   }
 
-  Future<Map<String, dynamic>> dailyReport(DateTime targetDate) async {
+  Future<Map<String, dynamic>> _fetchDailyReportRemote(
+      DateTime targetDate) async {
+    final String day = targetDate.toIso8601String().split("T").first;
+    final Response<dynamic> response = await _dio.get<dynamic>(
+      "/api/v1/reports/daily",
+      queryParameters: <String, dynamic>{
+        "baby_id": activeBabyId,
+        "date": day,
+      },
+      options: _authOptions(),
+    );
+    final Map<String, dynamic> payload = _requireMap(response);
+    await OfflineDataStore.instance.writeCache(
+      namespace: _cacheDailyReport,
+      babyId: activeBabyId,
+      key: day,
+      data: payload,
+    );
+    return payload;
+  }
+
+  Future<void> _refreshDailyReportCache(DateTime targetDate) async {
     try {
-      _requireBabyId();
-      final String day = targetDate.toIso8601String().split("T").first;
-      final Response<dynamic> response = await _dio.get<dynamic>(
-        "/api/v1/reports/daily",
-        queryParameters: <String, dynamic>{
-          "baby_id": activeBabyId,
-          "date": day,
-        },
-        options: _authOptions(),
-      );
-      return _requireMap(response);
+      await _fetchDailyReportRemote(targetDate);
+    } catch (_) {
+      // Ignore background refresh failures.
+    }
+  }
+
+  Future<Map<String, dynamic>> dailyReport(
+    DateTime targetDate, {
+    bool preferOffline = true,
+  }) async {
+    _requireBabyId();
+    final String day = targetDate.toIso8601String().split("T").first;
+    final Map<String, dynamic>? cached =
+        await OfflineDataStore.instance.readCache(
+      namespace: _cacheDailyReport,
+      babyId: activeBabyId,
+      key: day,
+    );
+    if (preferOffline && cached != null) {
+      unawaited(_refreshDailyReportCache(targetDate));
+      return _withOfflineCacheFlag(cached);
+    }
+    try {
+      await flushOfflineMutations();
+      return await _fetchDailyReportRemote(targetDate);
     } catch (error) {
+      if (cached != null) {
+        return _withOfflineCacheFlag(cached);
+      }
       throw _toFailure(error);
     }
   }
 
-  Future<Map<String, dynamic>> weeklyReport(DateTime weekStart) async {
+  Future<Map<String, dynamic>> _fetchWeeklyReportRemote(
+      DateTime weekStart) async {
+    final String day = weekStart.toIso8601String().split("T").first;
+    final Response<dynamic> response = await _dio.get<dynamic>(
+      "/api/v1/reports/weekly",
+      queryParameters: <String, dynamic>{
+        "baby_id": activeBabyId,
+        "week_start": day,
+      },
+      options: _authOptions(),
+    );
+    final Map<String, dynamic> payload = _requireMap(response);
+    await OfflineDataStore.instance.writeCache(
+      namespace: _cacheWeeklyReport,
+      babyId: activeBabyId,
+      key: day,
+      data: payload,
+    );
+    return payload;
+  }
+
+  Future<void> _refreshWeeklyReportCache(DateTime weekStart) async {
     try {
-      _requireBabyId();
-      final String day = weekStart.toIso8601String().split("T").first;
-      final Response<dynamic> response = await _dio.get<dynamic>(
-        "/api/v1/reports/weekly",
-        queryParameters: <String, dynamic>{
-          "baby_id": activeBabyId,
-          "week_start": day,
-        },
-        options: _authOptions(),
-      );
-      return _requireMap(response);
+      await _fetchWeeklyReportRemote(weekStart);
+    } catch (_) {
+      // Ignore background refresh failures.
+    }
+  }
+
+  Future<Map<String, dynamic>> weeklyReport(
+    DateTime weekStart, {
+    bool preferOffline = true,
+  }) async {
+    _requireBabyId();
+    final String day = weekStart.toIso8601String().split("T").first;
+    final Map<String, dynamic>? cached =
+        await OfflineDataStore.instance.readCache(
+      namespace: _cacheWeeklyReport,
+      babyId: activeBabyId,
+      key: day,
+    );
+    if (preferOffline && cached != null) {
+      unawaited(_refreshWeeklyReportCache(weekStart));
+      return _withOfflineCacheFlag(cached);
+    }
+    try {
+      await flushOfflineMutations();
+      return await _fetchWeeklyReportRemote(weekStart);
     } catch (error) {
+      if (cached != null) {
+        return _withOfflineCacheFlag(cached);
+      }
       throw _toFailure(error);
     }
   }

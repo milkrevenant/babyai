@@ -298,6 +298,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/UserSettingsResponse'
 
+  /api/v1/data/export.csv:
+    get:
+      tags: [settings]
+      summary: Export baby event data as CSV
+      operationId: exportBabyDataCsv
+      parameters:
+        - in: query
+          name: baby_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: CSV data export
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
+
   /api/v1/babies/profile:
     get:
       tags: [babies]
@@ -774,7 +793,7 @@ components:
 
     SubscriptionPlan:
       type: string
-      enum: [PHOTO_SHARE, AI_ONLY, AI_PHOTO]
+      enum: [AI_ONLY, AI_PHOTO]
 
     ThemeMode:
       type: string
@@ -939,6 +958,15 @@ components:
         question: { type: string }
         tone: { $ref: '#/components/schemas/AiTone' }
         use_personal_data: { type: boolean, default: true }
+        date_mode:
+          type: string
+          description: Explicit chat data scope mode.
+          enum: [day, week, month]
+          default: day
+        anchor_date:
+          type: string
+          format: date
+          description: Anchor date for date_mode (YYYY-MM-DD).
 
     AiQueryResponse:
       type: object
@@ -1190,6 +1218,7 @@ components:
         main_font: { type: string, enum: [notoSans, systemSans] }
         highlight_font: { type: string, enum: [ibmPlexSans, notoSans] }
         accent_tone: { type: string, enum: [gold, teal, coral, indigo] }
+        report_color_tone: { type: string, enum: [classic, ocean, sage, sunset] }
         bottom_menu_enabled:
           type: object
           additionalProperties: { type: boolean }
@@ -1201,7 +1230,13 @@ components:
           additionalProperties: { type: boolean }
         home_tile_columns:
           type: integer
-          enum: [2, 3]
+          enum: [1, 2, 3]
+        home_tile_order:
+          type: array
+          items:
+            type: string
+            enum: [formula, breastfeed, weaning, diaper, sleep, medication, memo]
+        show_special_memo: { type: boolean }
 
     UserSettingsUpdateRequest:
       type: object
@@ -1211,6 +1246,7 @@ components:
         main_font: { type: string, enum: [notoSans, systemSans] }
         highlight_font: { type: string, enum: [ibmPlexSans, notoSans] }
         accent_tone: { type: string, enum: [gold, teal, coral, indigo] }
+        report_color_tone: { type: string, enum: [classic, ocean, sage, sunset] }
         bottom_menu_enabled:
           type: object
           additionalProperties: { type: boolean }
@@ -1222,7 +1258,13 @@ components:
           additionalProperties: { type: boolean }
         home_tile_columns:
           type: integer
-          enum: [2, 3]
+          enum: [1, 2, 3]
+        home_tile_order:
+          type: array
+          items:
+            type: string
+            enum: [formula, breastfeed, weaning, diaper, sleep, medication, memo]
+        show_special_memo: { type: boolean }
 
     PhotoUploadCompleteRequest:
       type: object

@@ -5,6 +5,7 @@ import "package:flutter/material.dart";
 
 import "../../core/i18n/app_i18n.dart";
 import "../../core/network/babyai_api.dart";
+import "../../core/theme/app_theme_controller.dart";
 import "../../core/widgets/simple_donut_chart.dart";
 import "../../core/widgets/simple_line_chart.dart";
 import "../../core/widgets/app_svg_icon.dart";
@@ -13,14 +14,64 @@ const Duration _kTabAnimationDuration = Duration(milliseconds: 220);
 const int _minutesPerDay = 24 * 60;
 
 class _SemanticColors {
-  static const Color sleep = Color(0xFF9B7AD8);
-  static const Color feed = Color(0xFF2D9CDB);
-  static const Color diaper = Color(0xFF1CA79A);
-  static const Color play = Color(0xFFF09819);
-  static const Color medication = Color(0xFFE84076);
-  static const Color hospital = Color(0xFF8E44AD);
-  static const Color memo = Color(0xFFA546C9);
-  static const Color other = Color(0xFF9AA4B2);
+  static Color sleep = const Color(0xFF9B7AD8);
+  static Color feed = const Color(0xFF2D9CDB);
+  static Color diaper = const Color(0xFF1CA79A);
+  static Color play = const Color(0xFFF09819);
+  static Color medication = const Color(0xFFE84076);
+  static Color hospital = const Color(0xFF8E44AD);
+  static Color memo = const Color(0xFFA546C9);
+  static Color other = const Color(0xFF9AA4B2);
+  static AppReportColorTone _lastTone = AppReportColorTone.classic;
+
+  static void applyTone(AppReportColorTone tone) {
+    if (_lastTone == tone) {
+      return;
+    }
+    _lastTone = tone;
+    switch (tone) {
+      case AppReportColorTone.classic:
+        sleep = const Color(0xFF9B7AD8);
+        feed = const Color(0xFF2D9CDB);
+        diaper = const Color(0xFF1CA79A);
+        play = const Color(0xFFF09819);
+        medication = const Color(0xFFE84076);
+        hospital = const Color(0xFF8E44AD);
+        memo = const Color(0xFFA546C9);
+        other = const Color(0xFF9AA4B2);
+        break;
+      case AppReportColorTone.ocean:
+        sleep = const Color(0xFF5D7BE8);
+        feed = const Color(0xFF0E9ECF);
+        diaper = const Color(0xFF2A9D8F);
+        play = const Color(0xFF4DA3FF);
+        medication = const Color(0xFF008AB8);
+        hospital = const Color(0xFF375A9E);
+        memo = const Color(0xFF2B6CB0);
+        other = const Color(0xFF7D95B5);
+        break;
+      case AppReportColorTone.sage:
+        sleep = const Color(0xFF7D8F8B);
+        feed = const Color(0xFF4F9A8A);
+        diaper = const Color(0xFF6BAA75);
+        play = const Color(0xFF8DAE4E);
+        medication = const Color(0xFF6C8E52);
+        hospital = const Color(0xFF4E7560);
+        memo = const Color(0xFF709A88);
+        other = const Color(0xFF93A69D);
+        break;
+      case AppReportColorTone.sunset:
+        sleep = const Color(0xFF8B6BD9);
+        feed = const Color(0xFFFF8B5A);
+        diaper = const Color(0xFFFFB347);
+        play = const Color(0xFFFF9D4D);
+        medication = const Color(0xFFE4585B);
+        hospital = const Color(0xFFB8547E);
+        memo = const Color(0xFFD16BA5);
+        other = const Color(0xFFB59A8A);
+        break;
+    }
+  }
 }
 
 enum ReportRange { daily, weekly, monthly }
@@ -29,9 +80,11 @@ class ReportPage extends StatefulWidget {
   const ReportPage({
     super.key,
     this.initialRange = ReportRange.daily,
+    this.initialFocusDateLocal,
   });
 
   final ReportRange initialRange;
+  final DateTime? initialFocusDateLocal;
 
   @override
   State<ReportPage> createState() => ReportPageState();
@@ -57,6 +110,16 @@ class ReportPageState extends State<ReportPage> {
   @override
   void initState() {
     super.initState();
+    final DateTime initialAnchorUtc = _utcDate(
+      (widget.initialFocusDateLocal ?? DateTime.now()).toUtc(),
+    );
+    _todayUtc = initialAnchorUtc;
+    _weekStartUtc = _toWeekStart(initialAnchorUtc);
+    _monthStartUtc = DateTime.utc(
+      initialAnchorUtc.year,
+      initialAnchorUtc.month,
+      1,
+    );
     _selected = widget.initialRange;
     unawaited(_loadReports());
   }
@@ -250,6 +313,8 @@ class ReportPageState extends State<ReportPage> {
 
   @override
   Widget build(BuildContext context) {
+    final AppThemeController settings = AppSettingsScope.of(context);
+    _SemanticColors.applyTone(settings.reportColorTone);
     final List<_DayStats> weekDays = List<_DayStats>.generate(
       7,
       (int i) => _stats(_weekStartUtc.add(Duration(days: i))),
@@ -1995,45 +2060,45 @@ String _eventCategory(String type, {required bool clinicMemo}) {
 _EventVisualStyle _eventVisualStyle(String type) {
   switch (type) {
     case "SLEEP":
-      return const _EventVisualStyle(
+      return _EventVisualStyle(
         iconAsset: AppSvgAsset.sleepCrescentPurple,
         color: _SemanticColors.sleep,
       );
     case "FORMULA":
     case "BREASTFEED":
-      return const _EventVisualStyle(
+      return _EventVisualStyle(
         iconAsset: AppSvgAsset.feeding,
         color: _SemanticColors.feed,
       );
     case "PEE":
     case "POO":
-      return const _EventVisualStyle(
+      return _EventVisualStyle(
         iconAsset: AppSvgAsset.diaper,
         color: _SemanticColors.diaper,
       );
     case "MEDICATION":
-      return const _EventVisualStyle(
+      return _EventVisualStyle(
         iconAsset: AppSvgAsset.medicine,
         color: _SemanticColors.medication,
       );
     case "MEMO":
-      return const _EventVisualStyle(
+      return _EventVisualStyle(
         iconAsset: AppSvgAsset.memoLucide,
         color: _SemanticColors.memo,
       );
     case "GROWTH":
-      return const _EventVisualStyle(
+      return _EventVisualStyle(
         iconAsset: AppSvgAsset.stats,
         color: _SemanticColors.play,
       );
     case "CLINIC":
     case "SYMPTOM":
-      return const _EventVisualStyle(
+      return _EventVisualStyle(
         iconAsset: AppSvgAsset.clinicStethoscope,
         color: _SemanticColors.hospital,
       );
     default:
-      return const _EventVisualStyle(
+      return _EventVisualStyle(
         iconAsset: AppSvgAsset.stats,
         color: _SemanticColors.other,
       );

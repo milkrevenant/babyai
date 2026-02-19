@@ -52,6 +52,8 @@ type aiQueryRequest struct {
 	Question        string `json:"question"`
 	Tone            string `json:"tone"`
 	UsePersonalData bool   `json:"use_personal_data"`
+	DateMode        string `json:"date_mode"`
+	AnchorDate      string `json:"anchor_date"`
 }
 
 type chatSessionCreateRequest struct {
@@ -73,6 +75,8 @@ type chatQueryRequest struct {
 	Query           string `json:"query"`
 	Tone            string `json:"tone"`
 	UsePersonalData bool   `json:"use_personal_data"`
+	DateMode        string `json:"date_mode"`
+	AnchorDate      string `json:"anchor_date"`
 }
 
 type photoUploadCompleteRequest struct {
@@ -92,6 +96,7 @@ type updateMySettingsRequest struct {
 	MainFont         *string         `json:"main_font"`
 	HighlightFont    *string         `json:"highlight_font"`
 	AccentTone       *string         `json:"accent_tone"`
+	ReportColorTone  *string         `json:"report_color_tone"`
 	BottomMenu       map[string]bool `json:"bottom_menu_enabled"`
 	ChildCareProfile *string         `json:"child_care_profile"`
 	HomeTiles        map[string]bool `json:"home_tiles"`

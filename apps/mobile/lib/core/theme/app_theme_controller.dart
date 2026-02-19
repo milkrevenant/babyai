@@ -27,6 +27,13 @@ enum AppAccentTone {
   indigo,
 }
 
+enum AppReportColorTone {
+  classic,
+  ocean,
+  sage,
+  sunset,
+}
+
 enum AppBottomMenu {
   chat,
   statistics,
@@ -114,6 +121,7 @@ class AppThemeController extends ChangeNotifier {
   AppMainFont _mainFont = AppMainFont.notoSans;
   AppHighlightFont _highlightFont = AppHighlightFont.notoSans;
   AppAccentTone _accentTone = AppAccentTone.gold;
+  AppReportColorTone _reportColorTone = AppReportColorTone.classic;
   AppLanguage _language = AppLanguage.ko;
   ChildCareProfile _childCareProfile = ChildCareProfile.formula;
   int _homeTileColumns = 2;
@@ -130,6 +138,7 @@ class AppThemeController extends ChangeNotifier {
   AppMainFont get mainFont => _mainFont;
   AppHighlightFont get highlightFont => _highlightFont;
   AppAccentTone get accentTone => _accentTone;
+  AppReportColorTone get reportColorTone => _reportColorTone;
   AppLanguage get language => _language;
   ChildCareProfile get childCareProfile => _childCareProfile;
   int get homeTileColumns => _homeTileColumns;
@@ -215,6 +224,12 @@ class AppThemeController extends ChangeNotifier {
         (settings["accent_tone"] ?? AppAccentTone.gold.name).toString(),
         AppAccentTone.gold,
       );
+      _reportColorTone = _enumByName<AppReportColorTone>(
+        AppReportColorTone.values,
+        (settings["report_color_tone"] ?? AppReportColorTone.classic.name)
+            .toString(),
+        AppReportColorTone.classic,
+      );
       _childCareProfile = _enumByName<ChildCareProfile>(
         ChildCareProfile.values,
         (settings["child_care_profile"] ?? ChildCareProfile.formula.name)
@@ -266,6 +281,15 @@ class AppThemeController extends ChangeNotifier {
       return;
     }
     _accentTone = next;
+    notifyListeners();
+    unawaited(_syncSettings());
+  }
+
+  void setReportColorTone(AppReportColorTone next) {
+    if (_reportColorTone == next) {
+      return;
+    }
+    _reportColorTone = next;
     notifyListeners();
     unawaited(_syncSettings());
   }
@@ -556,6 +580,7 @@ class AppThemeController extends ChangeNotifier {
         mainFont: _mainFont.name,
         highlightFont: _highlightFont.name,
         accentTone: _accentTone.name,
+        reportColorTone: _reportColorTone.name,
         bottomMenuEnabled: _serializeBottomMenu(),
         childCareProfile: _childCareProfile.name,
         homeTiles: _serializeHomeTiles(),

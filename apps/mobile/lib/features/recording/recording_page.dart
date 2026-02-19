@@ -18,6 +18,8 @@ enum _TimerActivity {
   diaper,
 }
 
+enum _BreastfeedSide { left, right }
+
 class _CompletedTimerEntry {
   const _CompletedTimerEntry({
     required this.activity,
@@ -62,6 +64,7 @@ class RecordingPageState extends State<RecordingPage> {
   _TimerActivity? _activeTimerActivity;
   DateTime? _activeTimerStartedAt;
   String? _activeTimerEventId;
+  _BreastfeedSide _breastfeedSide = _BreastfeedSide.left;
   _CompletedTimerEntry? _latestTimerEntry;
 
   @override
@@ -94,7 +97,9 @@ class RecordingPageState extends State<RecordingPage> {
     super.dispose();
   }
 
-  Future<void> _loadLandingSnapshot() async {
+  Future<void> _loadLandingSnapshot({
+    bool preferOffline = true,
+  }) async {
     setState(() {
       _snapshotLoading = true;
       _snapshotError = null;
@@ -107,7 +112,10 @@ class RecordingPageState extends State<RecordingPage> {
         RecordRange.month => "month",
       };
       final Map<String, dynamic> result =
-          await BabyAIApi.instance.quickLandingSnapshot(range: range);
+          await BabyAIApi.instance.quickLandingSnapshot(
+        range: range,
+        preferOffline: preferOffline,
+      );
       if (!mounted) {
         return;
       }
@@ -142,7 +150,7 @@ class RecordingPageState extends State<RecordingPage> {
   }
 
   Future<void> refreshData() async {
-    await _loadLandingSnapshot();
+    await _loadLandingSnapshot(preferOffline: false);
   }
 
   int? _asInt(dynamic value) {
@@ -292,6 +300,10 @@ class RecordingPageState extends State<RecordingPage> {
       case _TimerActivity.diaper:
         return "기저귀";
     }
+  }
+
+  String _breastfeedSideValue() {
+    return _breastfeedSide == _BreastfeedSide.left ? "LEFT" : "RIGHT";
   }
 
   String _timerActivityAsset(_TimerActivity activity) {
@@ -946,6 +958,7 @@ class RecordingPageState extends State<RecordingPage> {
           targetEventId: useOpenLifecycle ? normalizedOpenEventId : null,
         );
       case _TimerActivity.breastfeed:
+        final String side = _breastfeedSideValue();
         return RecordEntryInput(
           type: "BREASTFEED",
           startTime: startAt,
@@ -953,8 +966,12 @@ class RecordingPageState extends State<RecordingPage> {
           value: <String, dynamic>{
             "duration_min": safeDurationMinutes,
             "duration_sec": safeDurationSeconds,
+            "side": side,
           },
-          metadata: const <String, dynamic>{"timer_activity": "BREASTFEED"},
+          metadata: <String, dynamic>{
+            "timer_activity": "BREASTFEED",
+            "side": side,
+          },
           lifecycleAction: useOpenLifecycle
               ? RecordLifecycleAction.completeOpen
               : RecordLifecycleAction.createClosed,
@@ -1166,7 +1183,7 @@ class RecordingPageState extends State<RecordingPage> {
           break;
       }
       await _persistSleepMarker(input);
-      await _loadLandingSnapshot();
+      await _loadLandingSnapshot(preferOffline: false);
       if (!mounted) {
         return false;
       }
@@ -1208,14 +1225,21 @@ class RecordingPageState extends State<RecordingPage> {
     if (selected != _TimerActivity.diaper) {
       setState(() => _entrySaving = true);
       try {
+        final Map<String, dynamic> startValue =
+            selected == _TimerActivity.breastfeed
+                ? <String, dynamic>{"side": _breastfeedSideValue()}
+                : <String, dynamic>{};
+        final Map<String, dynamic> startMetadata = <String, dynamic>{
+          "timer_activity": _eventTypeForTimerActivity(selected),
+          if (selected == _TimerActivity.breastfeed)
+            "side": _breastfeedSideValue(),
+        };
         final Map<String, dynamic> started =
             await BabyAIApi.instance.startManualEvent(
           type: _eventTypeForTimerActivity(selected),
           startTime: startedAt,
-          value: const <String, dynamic>{},
-          metadata: <String, dynamic>{
-            "timer_activity": _eventTypeForTimerActivity(selected),
-          },
+          value: startValue,
+          metadata: startMetadata,
         );
         final String parsedEventId =
             (started["event_id"] ?? "").toString().trim();
@@ -1249,7 +1273,7 @@ class RecordingPageState extends State<RecordingPage> {
     } else if (selected == _TimerActivity.formula) {
       await AppSessionStore.setPendingFormulaStart(startedAt.toUtc());
     }
-    await _loadLandingSnapshot();
+    await _loadLandingSnapshot(preferOffline: false);
   }
 
   Future<void> _stopActiveTimer() async {
@@ -1369,7 +1393,8 @@ class RecordingPageState extends State<RecordingPage> {
     }
     if (timerRunning) {
       final String openEventId = (_activeTimerEventId ?? "").trim();
-      if (_activeTimerActivity != _TimerActivity.diaper && openEventId.isNotEmpty) {
+      if (_activeTimerActivity != _TimerActivity.diaper &&
+          openEventId.isNotEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
@@ -1415,7 +1440,7 @@ class RecordingPageState extends State<RecordingPage> {
       } else if (activity == _TimerActivity.formula) {
         await AppSessionStore.setPendingFormulaStart(picked.toUtc());
       }
-      await _loadLandingSnapshot();
+      await _loadLandingSnapshot(preferOffline: false);
       return;
     }
 
@@ -1480,7 +1505,7 @@ class RecordingPageState extends State<RecordingPage> {
         eventId: latest.eventId,
       );
     });
-    await _loadLandingSnapshot();
+    await _loadLandingSnapshot(preferOffline: false);
   }
 
   Future<void> _editTimerEndTime() async {
@@ -1629,7 +1654,7 @@ class RecordingPageState extends State<RecordingPage> {
         eventId: latest.eventId,
       );
     });
-    await _loadLandingSnapshot();
+    await _loadLandingSnapshot(preferOffline: false);
   }
 
   Widget _buildTimerInfoItem({
@@ -1672,6 +1697,69 @@ class RecordingPageState extends State<RecordingPage> {
         onTap: onTap,
         child: content,
       ),
+    );
+  }
+
+  Widget _buildBreastfeedSideSelector({
+    required ColorScheme color,
+    required bool enabled,
+  }) {
+    Widget chip({
+      required _BreastfeedSide side,
+      required String label,
+      required IconData icon,
+    }) {
+      final bool selected = _breastfeedSide == side;
+      return ChoiceChip(
+        selected: selected,
+        onSelected: enabled
+            ? (bool value) {
+                if (!value) {
+                  return;
+                }
+                setState(() => _breastfeedSide = side);
+              }
+            : null,
+        label: Text(label),
+        avatar: Icon(
+          icon,
+          size: 15,
+          color: selected ? color.onPrimaryContainer : color.onSurfaceVariant,
+        ),
+        labelStyle: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+          color: selected ? color.onPrimaryContainer : color.onSurfaceVariant,
+        ),
+        selectedColor: color.primary.withValues(alpha: 0.2),
+        side: BorderSide(
+          color: selected
+              ? color.primary.withValues(alpha: 0.55)
+              : color.outline.withValues(alpha: 0.3),
+        ),
+        visualDensity: VisualDensity.compact,
+        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      );
+    }
+
+    return Row(
+      children: <Widget>[
+        Expanded(
+          child: chip(
+            side: _BreastfeedSide.left,
+            label: "왼쪽",
+            icon: Icons.keyboard_arrow_left_rounded,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: chip(
+            side: _BreastfeedSide.right,
+            label: "오른쪽",
+            icon: Icons.keyboard_arrow_right_rounded,
+          ),
+        ),
+      ],
     );
   }
 
@@ -1987,6 +2075,13 @@ class RecordingPageState extends State<RecordingPage> {
                     }).toList(growable: false),
                   ),
                 ),
+                if (cardActivity == _TimerActivity.breastfeed) ...<Widget>[
+                  const SizedBox(height: 10),
+                  _buildBreastfeedSideSelector(
+                    color: color,
+                    enabled: !_entrySaving && !timerRunning,
+                  ),
+                ],
                 const SizedBox(height: 12),
                 Container(
                   padding:
