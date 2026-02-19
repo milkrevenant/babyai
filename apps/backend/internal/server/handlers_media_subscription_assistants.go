@@ -14,6 +14,137 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+type subscriptionFeature string
+
+const (
+	subscriptionFeatureAI         subscriptionFeature = "ai"
+	subscriptionFeaturePhotoShare subscriptionFeature = "photo_share"
+)
+
+func normalizeSubscriptionPlan(raw string) string {
+	return strings.ToUpper(strings.TrimSpace(raw))
+}
+
+func normalizeSubscriptionStatus(raw string) string {
+	return strings.ToUpper(strings.TrimSpace(raw))
+}
+
+func isEnabledSubscriptionStatus(raw string) bool {
+	switch normalizeSubscriptionStatus(raw) {
+	case "ACTIVE", "TRIALING":
+		return true
+	default:
+		return false
+	}
+}
+
+func requiredPlansForFeature(feature subscriptionFeature) []string {
+	switch feature {
+	case subscriptionFeatureAI:
+		return []string{"AI_ONLY", "AI_PHOTO"}
+	case subscriptionFeaturePhotoShare:
+		return []string{"PHOTO_SHARE", "AI_PHOTO"}
+	default:
+		return nil
+	}
+}
+
+func planSupportsFeature(plan string, feature subscriptionFeature) bool {
+	normalizedPlan := normalizeSubscriptionPlan(plan)
+	switch feature {
+	case subscriptionFeatureAI:
+		return normalizedPlan == "AI_ONLY" || normalizedPlan == "AI_PHOTO"
+	case subscriptionFeaturePhotoShare:
+		return normalizedPlan == "PHOTO_SHARE" || normalizedPlan == "AI_PHOTO"
+	default:
+		return false
+	}
+}
+
+func (a *App) getLatestSubscription(
+	ctx context.Context,
+	householdID string,
+) (string, string, error) {
+	var plan string
+	var statusValue string
+	err := a.db.QueryRow(
+		ctx,
+		`SELECT plan::text, status::text
+		 FROM "Subscription"
+		 WHERE "householdId" = $1
+		 ORDER BY "createdAt" DESC
+		 LIMIT 1`,
+		strings.TrimSpace(householdID),
+	).Scan(&plan, &statusValue)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", "", nil
+	}
+	if err != nil {
+		return "", "", err
+	}
+	return normalizeSubscriptionPlan(plan), normalizeSubscriptionStatus(statusValue), nil
+}
+
+func (a *App) hasSubscriptionFeature(
+	ctx context.Context,
+	householdID string,
+	feature subscriptionFeature,
+) (bool, string, string, error) {
+	plan, statusValue, err := a.getLatestSubscription(ctx, householdID)
+	if err != nil {
+		return false, "", "", err
+	}
+	if !isEnabledSubscriptionStatus(statusValue) {
+		return false, plan, statusValue, nil
+	}
+	if !planSupportsFeature(plan, feature) {
+		return false, plan, statusValue, nil
+	}
+	return true, plan, statusValue, nil
+}
+
+func subscriptionFeatureDetail(feature subscriptionFeature) string {
+	switch feature {
+	case subscriptionFeatureAI:
+		return "AI subscription required. Choose AI_ONLY or AI_PHOTO."
+	case subscriptionFeaturePhotoShare:
+		return "Photo subscription required. Choose PHOTO_SHARE or AI_PHOTO."
+	default:
+		return "Subscription required."
+	}
+}
+
+func maybeLowerOrNil(raw string) any {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil
+	}
+	return strings.ToLower(trimmed)
+}
+
+func maybeUpperOrNil(raw string) any {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil
+	}
+	return strings.ToUpper(trimmed)
+}
+
+func (a *App) writeSubscriptionRequired(
+	c *gin.Context,
+	feature subscriptionFeature,
+	currentPlan string,
+	currentStatus string,
+) {
+	c.AbortWithStatusJSON(http.StatusPaymentRequired, gin.H{
+		"detail":         subscriptionFeatureDetail(feature),
+		"feature":        string(feature),
+		"required_plans": requiredPlansForFeature(feature),
+		"current_plan":   maybeUpperOrNil(currentPlan),
+		"current_status": maybeLowerOrNil(currentStatus),
+	})
+}
+
 func (a *App) createPhotoUploadURL(c *gin.Context) {
 	user, ok := authUserFromContext(c)
 	if !ok {
@@ -44,6 +175,19 @@ func (a *App) createPhotoUploadURL(c *gin.Context) {
 
 	if _, statusCode, err := a.assertHouseholdAccess(c.Request.Context(), user.ID, householdID, writeRoles); err != nil {
 		writeError(c, statusCode, err.Error())
+		return
+	}
+	hasFeature, plan, statusValue, err := a.hasSubscriptionFeature(
+		c.Request.Context(),
+		householdID,
+		subscriptionFeaturePhotoShare,
+	)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to load subscription")
+		return
+	}
+	if !hasFeature {
+		a.writeSubscriptionRequired(c, subscriptionFeaturePhotoShare, plan, statusValue)
 		return
 	}
 
@@ -106,6 +250,19 @@ func (a *App) completePhotoUpload(c *gin.Context) {
 
 	if _, statusCode, err := a.assertHouseholdAccess(c.Request.Context(), user.ID, householdID, writeRoles); err != nil {
 		writeError(c, statusCode, err.Error())
+		return
+	}
+	hasFeature, plan, statusValue, err := a.hasSubscriptionFeature(
+		c.Request.Context(),
+		householdID,
+		subscriptionFeaturePhotoShare,
+	)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to load subscription")
+		return
+	}
+	if !hasFeature {
+		a.writeSubscriptionRequired(c, subscriptionFeaturePhotoShare, plan, statusValue)
 		return
 	}
 
@@ -186,7 +343,11 @@ func (a *App) getMySubscription(c *gin.Context) {
 	var plan, statusValue string
 	err := a.db.QueryRow(
 		c.Request.Context(),
-		`SELECT plan, status FROM "Subscription" WHERE "householdId" = $1 LIMIT 1`,
+		`SELECT plan::text, status::text
+		 FROM "Subscription"
+		 WHERE "householdId" = $1
+		 ORDER BY "createdAt" DESC
+		 LIMIT 1`,
 		householdID,
 	).Scan(&plan, &statusValue)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -204,8 +365,8 @@ func (a *App) getMySubscription(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"household_id": householdID,
-		"plan":         plan,
-		"status":       strings.ToLower(statusValue),
+		"plan":         normalizeSubscriptionPlan(plan),
+		"status":       strings.ToLower(normalizeSubscriptionStatus(statusValue)),
 	})
 }
 
@@ -442,6 +603,19 @@ func (a *App) handleSiriIntent(c *gin.Context, intent string) {
 		writeError(c, statusCode, err.Error())
 		return
 	}
+	hasFeature, plan, statusValue, err := a.hasSubscriptionFeature(
+		c.Request.Context(),
+		baby.HouseholdID,
+		subscriptionFeatureAI,
+	)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to load subscription")
+		return
+	}
+	if !hasFeature {
+		a.writeSubscriptionRequired(c, subscriptionFeatureAI, plan, statusValue)
+		return
+	}
 
 	dialog, reference, err := a.assistantDialog(c.Request.Context(), baby.ID, payload.Tone, intent)
 	if err != nil {
@@ -490,6 +664,19 @@ func (a *App) bixbyQuery(c *gin.Context) {
 	baby, statusCode, err := a.getBabyWithAccess(c.Request.Context(), user.ID, payload.BabyID, readRoles)
 	if err != nil {
 		writeError(c, statusCode, err.Error())
+		return
+	}
+	hasFeature, plan, statusValue, err := a.hasSubscriptionFeature(
+		c.Request.Context(),
+		baby.HouseholdID,
+		subscriptionFeatureAI,
+	)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to load subscription")
+		return
+	}
+	if !hasFeature {
+		a.writeSubscriptionRequired(c, subscriptionFeatureAI, plan, statusValue)
 		return
 	}
 

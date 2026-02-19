@@ -1225,7 +1225,8 @@ class RecordingPageState extends State<RecordingPage> {
       padding: const EdgeInsets.only(top: 2),
       child: Row(
         children: <Widget>[
-          Expanded(
+          Flexible(
+            flex: 6,
             child: Text(
               label,
               maxLines: 1,
@@ -1238,13 +1239,17 @@ class RecordingPageState extends State<RecordingPage> {
             ),
           ),
           const SizedBox(width: 6),
-          Text(
-            value,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              fontWeight: FontWeight.w700,
-              fontSize: 11.8,
+          Flexible(
+            flex: 4,
+            child: Text(
+              value,
+              maxLines: 1,
+              textAlign: TextAlign.end,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontWeight: FontWeight.w700,
+                fontSize: 11.8,
+              ),
             ),
           ),
         ],

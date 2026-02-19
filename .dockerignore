@@ -1,0 +1,11 @@
+.git
+.gitignore
+node_modules
+**/node_modules
+.DS_Store
+*.log
+apps/backend/uploads
+apps/mobile/.dart_tool
+apps/mobile/build
+apps/mobile/.flutter-plugins
+apps/mobile/.flutter-plugins-dependencies

@@ -1,6 +1,9 @@
+import "dart:convert";
+
 import "package:flutter/material.dart";
 
 import "../../core/i18n/app_i18n.dart";
+import "../../core/network/babyai_api.dart";
 import "../../core/theme/app_theme_controller.dart";
 import "home_tile_settings_page.dart";
 
@@ -325,6 +328,17 @@ Aviso de recopilacion y uso de privacidad de BabyAI
     );
   }
 
+  Future<void> _openSubscriptionPlans(BuildContext context) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (BuildContext context) => _SubscriptionPlansPage(
+          isGoogleLoggedIn: isGoogleLoggedIn,
+          onGoogleLogin: onGoogleLogin,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final ColorScheme color = Theme.of(context).colorScheme;
@@ -443,6 +457,25 @@ Aviso de recopilacion y uso de privacidad de BabyAI
                         en: "Login status and child profile",
                         es: "Estado de sesion y perfil"),
                     onTap: () => _openAccountSettings(context),
+                  ),
+                  Divider(
+                    height: 1,
+                    indent: 16,
+                    endIndent: 16,
+                    color: _sectionDividerColor(context),
+                  ),
+                  _sectionRow(
+                    context: context,
+                    icon: Icons.workspace_premium_outlined,
+                    title: tr(context,
+                        ko: "구독 안내 / 플랜",
+                        en: "Subscription Plans",
+                        es: "Planes de suscripcion"),
+                    subtitle: tr(context,
+                        ko: "무료/유료 플랜 비교 및 선택",
+                        en: "Compare free and paid plans",
+                        es: "Compara planes gratis y de pago"),
+                    onTap: () => _openSubscriptionPlans(context),
                   ),
                 ],
               ),
@@ -980,6 +1013,518 @@ class _AccountSettingsPage extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _SubscriptionPlanSpec {
+  const _SubscriptionPlanSpec({
+    required this.code,
+    required this.priceLabel,
+    required this.titles,
+    required this.summaries,
+    required this.features,
+    required this.paid,
+  });
+
+  final String code;
+  final String priceLabel;
+  final ({String ko, String en, String es}) titles;
+  final ({String ko, String en, String es}) summaries;
+  final List<({String ko, String en, String es})> features;
+  final bool paid;
+}
+
+const List<_SubscriptionPlanSpec> _kSubscriptionPlans = <_SubscriptionPlanSpec>[
+  _SubscriptionPlanSpec(
+    code: "FREE",
+    priceLabel: "\$0",
+    titles: (ko: "무료 플랜", en: "Free", es: "Gratis"),
+    summaries: (
+      ko: "기본 기록과 통계를 사용할 수 있습니다.",
+      en: "Basic records and stats are available.",
+      es: "Registros y estadisticas basicas disponibles."
+    ),
+    features: <({String ko, String en, String es})>[
+      (ko: "기본 기록 입력", en: "Basic event logging", es: "Registro basico"),
+      (ko: "홈/통계 조회", en: "Home and reports", es: "Inicio y reportes"),
+      (
+        ko: "AI/사진 구독 기능 비활성",
+        en: "AI/photo subscription features locked",
+        es: "Funciones AI/foto bloqueadas"
+      ),
+    ],
+    paid: false,
+  ),
+  _SubscriptionPlanSpec(
+    code: "AI_ONLY",
+    priceLabel: "\$6.90 / mo",
+    titles: (ko: "AI 플랜", en: "AI Only", es: "Solo AI"),
+    summaries: (
+      ko: "AI 챗/요약 기능을 사용할 수 있습니다.",
+      en: "Enables AI chat and summaries.",
+      es: "Activa chat y resumenes con IA."
+    ),
+    features: <({String ko, String en, String es})>[
+      (ko: "AI 챗", en: "AI chat", es: "Chat IA"),
+      (ko: "AI 요약", en: "AI summaries", es: "Resumen IA"),
+      (
+        ko: "사진 공유 기능 제외",
+        en: "Photo sharing excluded",
+        es: "Sin compartir fotos"
+      ),
+    ],
+    paid: true,
+  ),
+  _SubscriptionPlanSpec(
+    code: "PHOTO_SHARE",
+    priceLabel: "\$4.90 / mo",
+    titles: (ko: "포토 공유 플랜", en: "Photo Share", es: "Compartir fotos"),
+    summaries: (
+      ko: "사진 업로드 및 공유 기능을 사용할 수 있습니다.",
+      en: "Enables photo upload and sharing.",
+      es: "Activa carga y comparticion de fotos."
+    ),
+    features: <({String ko, String en, String es})>[
+      (ko: "사진 업로드", en: "Photo upload", es: "Carga de fotos"),
+      (ko: "앨범 공유", en: "Album sharing", es: "Compartir album"),
+      (ko: "AI 기능 제외", en: "AI excluded", es: "Sin AI"),
+    ],
+    paid: true,
+  ),
+  _SubscriptionPlanSpec(
+    code: "AI_PHOTO",
+    priceLabel: "\$9.90 / mo",
+    titles: (ko: "통합 플랜", en: "AI + Photo", es: "AI + Foto"),
+    summaries: (
+      ko: "AI와 포토 공유 기능을 모두 사용할 수 있습니다.",
+      en: "Enables both AI and photo sharing.",
+      es: "Activa AI y comparticion de fotos."
+    ),
+    features: <({String ko, String en, String es})>[
+      (ko: "AI 챗/요약", en: "AI chat/summaries", es: "Chat/resumen IA"),
+      (ko: "사진 업로드/공유", en: "Photo upload/sharing", es: "Carga/compartir"),
+      (ko: "전체 기능", en: "All subscription features", es: "Funciones completas"),
+    ],
+    paid: true,
+  ),
+];
+
+class _SubscriptionPlansPage extends StatefulWidget {
+  const _SubscriptionPlansPage({
+    required this.isGoogleLoggedIn,
+    required this.onGoogleLogin,
+  });
+
+  final bool isGoogleLoggedIn;
+  final Future<void> Function() onGoogleLogin;
+
+  @override
+  State<_SubscriptionPlansPage> createState() => _SubscriptionPlansPageState();
+}
+
+class _SubscriptionPlansPageState extends State<_SubscriptionPlansPage> {
+  bool _loading = false;
+  bool _submitting = false;
+  String? _error;
+  String? _currentPlan;
+  String _currentStatus = "none";
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSubscription();
+  }
+
+  String? _tokenProvider() {
+    final String token = BabyAIApi.currentBearerToken.trim();
+    if (token.isEmpty) {
+      return null;
+    }
+    try {
+      final List<String> parts = token.split(".");
+      if (parts.length < 2) {
+        return null;
+      }
+      final String payloadPart = base64Url.normalize(parts[1]);
+      final Object? payload = jsonDecode(
+        utf8.decode(base64Url.decode(payloadPart)),
+      );
+      if (payload is! Map<String, dynamic>) {
+        return null;
+      }
+      final String provider = (payload["provider"] ?? "").toString().trim();
+      if (provider.isEmpty) {
+        return null;
+      }
+      return provider.toLowerCase();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  bool _isGoogleSignedIn() {
+    final String? provider = _tokenProvider();
+    if (provider == null) {
+      return widget.isGoogleLoggedIn;
+    }
+    return provider == "google";
+  }
+
+  Future<bool> _ensureGoogleLogin() async {
+    if (_isGoogleSignedIn()) {
+      return true;
+    }
+    final bool? approved = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text(
+            tr(
+              context,
+              ko: "구독 전 로그인 필요",
+              en: "Login required before checkout",
+              es: "Inicio de sesion requerido",
+            ),
+          ),
+          content: Text(
+            tr(
+              context,
+              ko: "유료 구독은 Google 로그인 후 진행할 수 있습니다.",
+              en: "Paid subscriptions require Google login.",
+              es: "Las suscripciones pagas requieren Google login.",
+            ),
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: Text(tr(context, ko: "취소", en: "Cancel", es: "Cancelar")),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: Text(tr(context, ko: "로그인", en: "Login", es: "Entrar")),
+            ),
+          ],
+        );
+      },
+    );
+    if (approved != true) {
+      return false;
+    }
+    try {
+      await widget.onGoogleLogin();
+    } catch (_) {
+      return false;
+    }
+    return _isGoogleSignedIn();
+  }
+
+  Future<void> _loadSubscription() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final Map<String, dynamic> result =
+          await BabyAIApi.instance.subscriptionMe();
+      final String normalizedPlan =
+          (result["plan"] ?? "").toString().trim().toUpperCase();
+      final String normalizedStatus =
+          (result["status"] ?? "none").toString().trim().toLowerCase();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _currentPlan = normalizedPlan.isEmpty ? null : normalizedPlan;
+        _currentStatus = normalizedStatus.isEmpty ? "none" : normalizedStatus;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _error = error.toString());
+    } finally {
+      if (mounted) {
+        setState(() => _loading = false);
+      }
+    }
+  }
+
+  bool _isCurrentPlan(_SubscriptionPlanSpec plan) {
+    if (plan.code == "FREE") {
+      return (_currentPlan == null || _currentPlan!.isEmpty);
+    }
+    if (_currentPlan == null || _currentPlan!.isEmpty) {
+      return false;
+    }
+    if (_currentPlan != plan.code) {
+      return false;
+    }
+    return _currentStatus == "active" || _currentStatus == "trialing";
+  }
+
+  String _titleFor(BuildContext context, _SubscriptionPlanSpec plan) {
+    return tr(
+      context,
+      ko: plan.titles.ko,
+      en: plan.titles.en,
+      es: plan.titles.es,
+    );
+  }
+
+  String _summaryFor(BuildContext context, _SubscriptionPlanSpec plan) {
+    return tr(
+      context,
+      ko: plan.summaries.ko,
+      en: plan.summaries.en,
+      es: plan.summaries.es,
+    );
+  }
+
+  Future<void> _checkoutPlan(_SubscriptionPlanSpec plan) async {
+    if (!plan.paid) {
+      return;
+    }
+    final bool signedIn = await _ensureGoogleLogin();
+    if (!signedIn) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            tr(
+              context,
+              ko: "로그인 후 다시 시도해 주세요.",
+              en: "Please login and try again.",
+              es: "Inicia sesion e intenta de nuevo.",
+            ),
+          ),
+        ),
+      );
+      return;
+    }
+
+    setState(() => _submitting = true);
+    try {
+      await BabyAIApi.instance.checkoutSubscription(plan: plan.code);
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            tr(
+              context,
+              ko: "구독 신청이 시작되었습니다.",
+              en: "Subscription checkout started.",
+              es: "Se inicio la suscripcion.",
+            ),
+          ),
+        ),
+      );
+      await _loadSubscription();
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _error = error.toString());
+    } finally {
+      if (mounted) {
+        setState(() => _submitting = false);
+      }
+    }
+  }
+
+  Widget _featureLine(
+    BuildContext context,
+    ({String ko, String en, String es}) text,
+  ) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Icon(
+            Icons.check_circle_outline,
+            size: 16,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              tr(context, ko: text.ko, en: text.en, es: text.es),
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _planCard(BuildContext context, _SubscriptionPlanSpec plan) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    final bool current = _isCurrentPlan(plan);
+    final bool disabled = current || _submitting || _loading;
+
+    return Card(
+      elevation: 0,
+      margin: EdgeInsets.zero,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(20),
+        side: BorderSide(
+          color: current
+              ? color.primary.withValues(alpha: 0.56)
+              : color.outlineVariant.withValues(alpha: 0.4),
+          width: current ? 1.4 : 1.0,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: Text(
+                    _titleFor(context, plan),
+                    style: const TextStyle(
+                        fontSize: 18, fontWeight: FontWeight.w700),
+                  ),
+                ),
+                if (current)
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: color.primaryContainer.withValues(alpha: 0.85),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      tr(context, ko: "현재 플랜", en: "Current", es: "Actual"),
+                      style: TextStyle(
+                        color: color.onPrimaryContainer,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 11.5,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              plan.priceLabel,
+              style: TextStyle(
+                color: color.primary,
+                fontWeight: FontWeight.w800,
+                fontSize: 15,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              _summaryFor(context, plan),
+              style: TextStyle(color: color.onSurfaceVariant),
+            ),
+            const SizedBox(height: 6),
+            ...plan.features.map(
+              (({String ko, String en, String es}) item) =>
+                  _featureLine(context, item),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.tonal(
+                onPressed: disabled ? null : () => _checkoutPlan(plan),
+                child: Text(
+                  current
+                      ? tr(context, ko: "사용 중", en: "In use", es: "En uso")
+                      : (plan.paid
+                          ? tr(context,
+                              ko: "이 플랜 선택", en: "Choose plan", es: "Elegir")
+                          : tr(context,
+                              ko: "기본 플랜", en: "Base plan", es: "Plan base")),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final String statusLabel = (_currentPlan == null || _currentPlan!.isEmpty)
+        ? tr(context, ko: "FREE", en: "FREE", es: "FREE")
+        : "$_currentPlan (${_currentStatus.toUpperCase()})";
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(
+          tr(context, ko: "구독 안내", en: "Subscriptions", es: "Suscripciones"),
+        ),
+      ),
+      body: RefreshIndicator(
+        onRefresh: _loadSubscription,
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
+          children: <Widget>[
+            Text(
+              tr(
+                context,
+                ko: "현재 구독 상태",
+                en: "Current subscription",
+                es: "Suscripcion actual",
+              ),
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              statusLabel,
+              style: TextStyle(
+                fontSize: 14,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              tr(
+                context,
+                ko: "AI 기능은 AI_ONLY / AI_PHOTO, 사진 기능은 PHOTO_SHARE / AI_PHOTO에서 활성화됩니다.",
+                en: "AI requires AI_ONLY or AI_PHOTO. Photo requires PHOTO_SHARE or AI_PHOTO.",
+                es: "AI requiere AI_ONLY o AI_PHOTO. Foto requiere PHOTO_SHARE o AI_PHOTO.",
+              ),
+              style: TextStyle(
+                fontSize: 12.5,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+            if (_loading) ...<Widget>[
+              const SizedBox(height: 12),
+              const LinearProgressIndicator(minHeight: 3),
+            ],
+            if (_error != null) ...<Widget>[
+              const SizedBox(height: 10),
+              Text(
+                _error!,
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.error,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+            const SizedBox(height: 12),
+            ..._kSubscriptionPlans.map(
+              (_SubscriptionPlanSpec plan) => Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: _planCard(context, plan),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

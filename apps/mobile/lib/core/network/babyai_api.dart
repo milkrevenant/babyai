@@ -1000,4 +1000,27 @@ class BabyAIApi {
       throw _toFailure(error);
     }
   }
+
+  Future<Map<String, dynamic>> checkoutSubscription({
+    required String plan,
+  }) async {
+    try {
+      _requireHouseholdId();
+      final String normalizedPlan = plan.trim().toUpperCase();
+      if (normalizedPlan.isEmpty) {
+        throw ApiFailure("plan is required");
+      }
+      final Response<dynamic> response = await _dio.post<dynamic>(
+        "/api/v1/subscription/checkout",
+        data: <String, dynamic>{
+          "household_id": activeHouseholdId,
+          "plan": normalizedPlan,
+        },
+        options: _authOptions(),
+      );
+      return _requireMap(response);
+    } catch (error) {
+      throw _toFailure(error);
+    }
+  }
 }

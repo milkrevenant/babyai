@@ -515,6 +515,19 @@ func (a *App) aiQuery(c *gin.Context) {
 		writeError(c, statusCode, err.Error())
 		return
 	}
+	hasFeature, plan, statusValue, err := a.hasSubscriptionFeature(
+		c.Request.Context(),
+		baby.HouseholdID,
+		subscriptionFeatureAI,
+	)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to load subscription")
+		return
+	}
+	if !hasFeature {
+		a.writeSubscriptionRequired(c, subscriptionFeatureAI, plan, statusValue)
+		return
+	}
 
 	sessionID, err := a.getOrCreateCompatChatSession(c.Request.Context(), user.ID, baby.HouseholdID, baby.ID)
 	if err != nil {
@@ -578,6 +591,20 @@ func (a *App) runChatQuery(
 	session, err := a.loadChatSessionForUser(ctx, user.ID, sessionID)
 	if err != nil {
 		return chatExecutionResult{}, err
+	}
+	hasFeature, _, _, err := a.hasSubscriptionFeature(
+		ctx,
+		session.HouseholdID,
+		subscriptionFeatureAI,
+	)
+	if err != nil {
+		return chatExecutionResult{}, err
+	}
+	if !hasFeature {
+		return chatExecutionResult{}, &chatHTTPError{
+			Status: http.StatusPaymentRequired,
+			Detail: subscriptionFeatureDetail(subscriptionFeatureAI),
+		}
 	}
 
 	childID := strings.TrimSpace(payload.ChildID)
