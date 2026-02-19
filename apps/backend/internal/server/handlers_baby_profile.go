@@ -314,7 +314,7 @@ func (a *App) latestFeedingTime(ctx context.Context, babyID string) (*time.Time,
 		 ORDER BY "startTime" DESC LIMIT 1`,
 		babyID,
 	).Scan(&latest)
-	if err != nil && isUndefinedColumnError(err) {
+	if err != nil && isUndefinedSchemaReferenceError(err) {
 		err = a.db.QueryRow(
 			ctx,
 			`SELECT "startTime" FROM "Event"
@@ -323,6 +323,11 @@ func (a *App) latestFeedingTime(ctx context.Context, babyID string) (*time.Time,
 			 ORDER BY "startTime" DESC LIMIT 1`,
 			babyID,
 		).Scan(&latest)
+	}
+	if err != nil && isUndefinedSchemaReferenceError(err) {
+		// Legacy/local schemas may not yet have aligned Event columns.
+		// Return no feeding history instead of failing profile/landing APIs.
+		return nil, nil
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -334,9 +339,12 @@ func (a *App) latestFeedingTime(ctx context.Context, babyID string) (*time.Time,
 	return &latestUTC, nil
 }
 
-func isUndefinedColumnError(err error) bool {
+func isUndefinedSchemaReferenceError(err error) bool {
 	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "42703"
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	return pgErr.Code == "42703" || pgErr.Code == "42P01"
 }
 
 func calculateFeedingRecommendation(

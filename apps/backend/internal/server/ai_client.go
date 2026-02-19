@@ -27,6 +27,7 @@ type AIUsage struct {
 }
 
 type AIModelRequest struct {
+	Model        string
 	SystemPrompt string
 	Conversation []ChatTurn
 	UserPrompt   string
@@ -75,7 +76,10 @@ func (m MockAIClient) Query(_ context.Context, req AIModelRequest) (AIModelRespo
 		answer = "Mock response: sleep routine can be adjusted with consistent bedtime and nap windows."
 	}
 
-	model := strings.TrimSpace(m.Model)
+	model := strings.TrimSpace(req.Model)
+	if model == "" {
+		model = strings.TrimSpace(m.Model)
+	}
 	if model == "" {
 		model = "gpt-5-mini"
 	}
@@ -113,8 +117,13 @@ func (c *OpenAIResponsesClient) Query(ctx context.Context, req AIModelRequest) (
 	if strings.TrimSpace(c.baseURL) == "" {
 		return AIModelResponse{}, errors.New("OPENAI_BASE_URL is not configured")
 	}
-	if strings.TrimSpace(c.model) == "" {
+	defaultModel := strings.TrimSpace(c.model)
+	if defaultModel == "" {
 		return AIModelResponse{}, errors.New("OPENAI_MODEL is not configured")
+	}
+	requestModel := strings.TrimSpace(req.Model)
+	if requestModel == "" {
+		requestModel = defaultModel
 	}
 
 	type inputText struct {
@@ -182,7 +191,7 @@ func (c *OpenAIResponsesClient) Query(ctx context.Context, req AIModelRequest) (
 			return 0, nil, errors.New("AI request input is empty")
 		}
 		payload := map[string]any{
-			"model":             c.model,
+			"model":             requestModel,
 			"input":             input,
 			"max_output_tokens": maxTokens,
 			"reasoning": map[string]any{
@@ -270,7 +279,7 @@ func (c *OpenAIResponsesClient) Query(ctx context.Context, req AIModelRequest) (
 
 	modelName := strings.TrimSpace(toString(parsed["model"]))
 	if modelName == "" {
-		modelName = c.model
+		modelName = requestModel
 	}
 
 	return AIModelResponse{

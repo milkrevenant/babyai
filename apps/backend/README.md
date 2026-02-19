@@ -52,6 +52,8 @@ Optional:
 - `JWT_AUDIENCE`
 - `JWT_ISSUER`
 - `AUTH_AUTOCREATE_USER` (default `false`)
+- `LOCAL_FORCE_SUBSCRIPTION_PLAN` (local only: `AI_ONLY` | `AI_PHOTO` | `PHOTO_SHARE`)
+- `ONBOARDING_SEED_DUMMY_DATA` (default `false`, local only)
 - `CORS_ALLOW_ORIGINS`
 - `OPENAI_MODEL` (default `gpt-5-mini`)
 - `OPENAI_BASE_URL` (default `https://api.openai.com/v1`)
@@ -73,6 +75,8 @@ JWT_ALGORITHM=HS256
 JWT_AUDIENCE=
 JWT_ISSUER=
 AUTH_AUTOCREATE_USER=false
+LOCAL_FORCE_SUBSCRIPTION_PLAN=
+ONBOARDING_SEED_DUMMY_DATA=false
 CORS_ALLOW_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000
 OPENAI_API_KEY=<your-openai-api-key>
 OPENAI_MODEL=gpt-5-mini

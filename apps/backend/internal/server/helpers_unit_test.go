@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -169,5 +170,114 @@ func TestAgeMonthsFromBirthDate(t *testing.T) {
 	}
 	if got := ageMonthsFromBirthDate(time.Time{}, time.Now().UTC()); got != 0 {
 		t.Fatalf("expected 0 months for zero birth date, got %d", got)
+	}
+}
+
+func TestChatModelForIntent(t *testing.T) {
+	if got := chatModelForIntent(aiIntentSmalltalk); got != chatDailyModel {
+		t.Fatalf("expected smalltalk to use %q, got %q", chatDailyModel, got)
+	}
+	if got := chatModelForIntent(aiIntentDataQuery); got != chatCoreModel {
+		t.Fatalf("expected data_query to use %q, got %q", chatCoreModel, got)
+	}
+	if got := chatModelForIntent(aiIntentMedicalRelated); got != chatCoreModel {
+		t.Fatalf("expected medical_related to use %q, got %q", chatCoreModel, got)
+	}
+}
+
+func TestEnforceAnswerEvidenceGuideFallback(t *testing.T) {
+	raw := strings.Join([]string{
+		"오늘 하루만 덜 먹은 건 크게 걱정하지 않아도 됩니다.",
+		"최근 3일 기록에서 분유량이 평소보다 20ml 정도 낮았습니다.",
+		"오늘 밤까지 수유량과 기분 변화를 관찰해보세요.",
+	}, "\n")
+
+	got := enforceAnswerEvidenceGuide(raw)
+	if !strings.Contains(got, "답변\n") {
+		t.Fatalf("expected answer section, got: %s", got)
+	}
+	if !strings.Contains(got, "\n근거\n") {
+		t.Fatalf("expected evidence section, got: %s", got)
+	}
+	if !strings.Contains(got, "\n가이드\n") {
+		t.Fatalf("expected guide section, got: %s", got)
+	}
+}
+
+func TestEnforceAnswerEvidenceGuideStructuredInput(t *testing.T) {
+	raw := strings.Join([]string{
+		"답변",
+		"지금은 응급 상황으로 보이지 않습니다.",
+		"",
+		"근거",
+		"최근 체온 기록은 37.6도 이하였습니다.",
+		"",
+		"가이드",
+		"수분 섭취를 늘리고 체온을 4시간 간격으로 확인하세요.",
+	}, "\n")
+
+	got := enforceAnswerEvidenceGuide(raw)
+	if !strings.Contains(got, "지금은 응급 상황으로 보이지 않습니다.") {
+		t.Fatalf("expected answer content to remain, got: %s", got)
+	}
+	if !strings.Contains(got, "최근 체온 기록은 37.6도 이하였습니다.") {
+		t.Fatalf("expected evidence content to remain, got: %s", got)
+	}
+	if !strings.Contains(got, "수분 섭취를 늘리고 체온을 4시간 간격으로 확인하세요.") {
+		t.Fatalf("expected guide content to remain, got: %s", got)
+	}
+}
+
+func TestBuildOnboardingDummySeedEvents(t *testing.T) {
+	now := time.Date(2026, 2, 19, 18, 0, 0, 0, time.UTC)
+	events := buildOnboardingDummySeedEvents(now)
+	if len(events) < 8 {
+		t.Fatalf("expected enough seeded events, got %d", len(events))
+	}
+
+	hasFormula := false
+	hasSleep := false
+	hasPee := false
+	hasPoo := false
+	hasMedication := false
+	hasMemo := false
+
+	for _, item := range events {
+		if item.Type == "" {
+			t.Fatalf("event type must not be empty")
+		}
+		if item.StartTime.After(now) {
+			t.Fatalf("seed event start must be <= now, got %s", item.StartTime.Format(time.RFC3339))
+		}
+		if item.EndTime != nil && !item.EndTime.After(item.StartTime) {
+			t.Fatalf("seed event end must be after start type=%s", item.Type)
+		}
+
+		switch item.Type {
+		case "FORMULA":
+			hasFormula = true
+		case "SLEEP":
+			hasSleep = true
+		case "PEE":
+			hasPee = true
+		case "POO":
+			hasPoo = true
+		case "MEDICATION":
+			hasMedication = true
+		case "MEMO":
+			hasMemo = true
+		}
+	}
+
+	if !hasFormula || !hasSleep || !hasPee || !hasPoo || !hasMedication || !hasMemo {
+		t.Fatalf(
+			"expected representative seed types formula=%v sleep=%v pee=%v poo=%v medication=%v memo=%v",
+			hasFormula,
+			hasSleep,
+			hasPee,
+			hasPoo,
+			hasMedication,
+			hasMemo,
+		)
 	}
 }

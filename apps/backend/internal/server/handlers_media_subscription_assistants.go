@@ -25,6 +25,15 @@ func normalizeSubscriptionPlan(raw string) string {
 	return strings.ToUpper(strings.TrimSpace(raw))
 }
 
+func isKnownSubscriptionPlan(plan string) bool {
+	switch normalizeSubscriptionPlan(plan) {
+	case "AI_ONLY", "AI_PHOTO", "PHOTO_SHARE":
+		return true
+	default:
+		return false
+	}
+}
+
 func normalizeSubscriptionStatus(raw string) string {
 	return strings.ToUpper(strings.TrimSpace(raw))
 }
@@ -61,10 +70,25 @@ func planSupportsFeature(plan string, feature subscriptionFeature) bool {
 	}
 }
 
+func (a *App) localForcedSubscription() (string, string, bool) {
+	if !strings.EqualFold(strings.TrimSpace(a.cfg.AppEnv), "local") {
+		return "", "", false
+	}
+	plan := normalizeSubscriptionPlan(a.cfg.LocalForceSubscriptionPlan)
+	if !isKnownSubscriptionPlan(plan) {
+		return "", "", false
+	}
+	return plan, "ACTIVE", true
+}
+
 func (a *App) getLatestSubscription(
 	ctx context.Context,
 	householdID string,
 ) (string, string, error) {
+	if forcedPlan, forcedStatus, ok := a.localForcedSubscription(); ok {
+		return forcedPlan, forcedStatus, nil
+	}
+
 	var plan string
 	var statusValue string
 	err := a.db.QueryRow(
@@ -340,17 +364,8 @@ func (a *App) getMySubscription(c *gin.Context) {
 		return
 	}
 
-	var plan, statusValue string
-	err := a.db.QueryRow(
-		c.Request.Context(),
-		`SELECT plan::text, status::text
-		 FROM "Subscription"
-		 WHERE "householdId" = $1
-		 ORDER BY "createdAt" DESC
-		 LIMIT 1`,
-		householdID,
-	).Scan(&plan, &statusValue)
-	if errors.Is(err, pgx.ErrNoRows) {
+	plan, statusValue, err := a.getLatestSubscription(c.Request.Context(), householdID)
+	if errors.Is(err, pgx.ErrNoRows) || (strings.TrimSpace(plan) == "" && strings.TrimSpace(statusValue) == "") {
 		c.JSON(http.StatusOK, gin.H{
 			"household_id": householdID,
 			"plan":         nil,

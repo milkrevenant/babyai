@@ -353,7 +353,6 @@ class ChatPageState extends State<ChatPage> {
       "answer",
       "message",
       "dialog",
-      "reference_text",
     ]) {
       final Object? value = data[key];
       if (value is String && value.trim().isNotEmpty) {

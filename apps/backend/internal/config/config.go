@@ -10,42 +10,46 @@ import (
 )
 
 type Config struct {
-	AppEnv             string
-	AppName            string
-	APIPrefix          string
-	AppPort            string
-	DatabaseURL        string
-	RedisURL           string
-	DefaultTone        string
-	JWTSecret          string
-	JWTAlgorithm       string
-	JWTAudience        string
-	JWTIssuer          string
-	AuthAutoCreateUser bool
-	CORSAllowOrigins   []string
-	OpenAIAPIKey       string
-	OpenAIModel        string
-	OpenAIBaseURL      string
-	AIMaxOutputTokens  int
-	AITimeoutSeconds   int
+	AppEnv                     string
+	AppName                    string
+	APIPrefix                  string
+	AppPort                    string
+	DatabaseURL                string
+	RedisURL                   string
+	DefaultTone                string
+	JWTSecret                  string
+	JWTAlgorithm               string
+	JWTAudience                string
+	JWTIssuer                  string
+	AuthAutoCreateUser         bool
+	LocalForceSubscriptionPlan string
+	OnboardingSeedDummyData    bool
+	CORSAllowOrigins           []string
+	OpenAIAPIKey               string
+	OpenAIModel                string
+	OpenAIBaseURL              string
+	AIMaxOutputTokens          int
+	AITimeoutSeconds           int
 }
 
 func Load() Config {
 	_ = godotenv.Load(".env")
 
 	return Config{
-		AppEnv:             getEnv("APP_ENV", "local"),
-		AppName:            getEnv("APP_NAME", "BabyAI API"),
-		APIPrefix:          getEnv("API_PREFIX", "/api/v1"),
-		AppPort:            getEnv("APP_PORT", getEnv("PORT", "8000")),
-		DatabaseURL:        getEnv("DATABASE_URL", "postgresql://babyai:babyai@localhost:5432/babyai"),
-		RedisURL:           getEnv("REDIS_URL", "redis://localhost:6379/0"),
-		DefaultTone:        getEnv("DEFAULT_TONE", "neutral"),
-		JWTSecret:          getEnv("JWT_SECRET", ""),
-		JWTAlgorithm:       getEnv("JWT_ALGORITHM", "HS256"),
-		JWTAudience:        getEnv("JWT_AUDIENCE", ""),
-		JWTIssuer:          getEnv("JWT_ISSUER", ""),
-		AuthAutoCreateUser: getEnvBool("AUTH_AUTOCREATE_USER", false),
+		AppEnv:                     getEnv("APP_ENV", "local"),
+		AppName:                    getEnv("APP_NAME", "BabyAI API"),
+		APIPrefix:                  getEnv("API_PREFIX", "/api/v1"),
+		AppPort:                    getEnv("APP_PORT", getEnv("PORT", "8000")),
+		DatabaseURL:                getEnv("DATABASE_URL", "postgresql://babyai:babyai@localhost:5432/babyai"),
+		RedisURL:                   getEnv("REDIS_URL", "redis://localhost:6379/0"),
+		DefaultTone:                getEnv("DEFAULT_TONE", "neutral"),
+		JWTSecret:                  getEnv("JWT_SECRET", ""),
+		JWTAlgorithm:               getEnv("JWT_ALGORITHM", "HS256"),
+		JWTAudience:                getEnv("JWT_AUDIENCE", ""),
+		JWTIssuer:                  getEnv("JWT_ISSUER", ""),
+		AuthAutoCreateUser:         getEnvBool("AUTH_AUTOCREATE_USER", false),
+		LocalForceSubscriptionPlan: getEnv("LOCAL_FORCE_SUBSCRIPTION_PLAN", ""),
+		OnboardingSeedDummyData:    getEnvBool("ONBOARDING_SEED_DUMMY_DATA", false),
 		CORSAllowOrigins: getEnvCSV(
 			"CORS_ALLOW_ORIGINS",
 			[]string{"http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"},

@@ -64,6 +64,14 @@ func (a *App) ensureUserWallet(ctx context.Context, q dbQuerier, userID string) 
 }
 
 func (a *App) ensureMonthlyGrant(ctx context.Context, q dbQuerier, userID, householdID string, now time.Time) (*string, error) {
+	if forcedPlan, forcedStatus, ok := a.localForcedSubscription(); ok {
+		if isEnabledSubscriptionStatus(forcedStatus) && creditsForPlan(forcedPlan) > 0 {
+			plan := forcedPlan
+			return &plan, nil
+		}
+		return nil, nil
+	}
+
 	var subscriptionID, plan, status string
 	err := q.QueryRow(
 		ctx,
@@ -163,6 +171,19 @@ func (a *App) getWalletBalance(ctx context.Context, q dbQuerier, userID string) 
 }
 
 func (a *App) preflightBilling(ctx context.Context, userID, householdID string, now time.Time) (preflightResult, error) {
+	if forcedPlan, forcedStatus, ok := a.localForcedSubscription(); ok {
+		if isEnabledSubscriptionStatus(forcedStatus) && planSupportsFeature(forcedPlan, subscriptionFeatureAI) {
+			plan := forcedPlan
+			return preflightResult{
+				Mode:          billingModeGrace,
+				Reserved:      0,
+				Plan:          &plan,
+				BalanceBefore: 0,
+				GraceUsed:     0,
+			}, nil
+		}
+	}
+
 	tx, err := a.db.Begin(ctx)
 	if err != nil {
 		return preflightResult{}, err

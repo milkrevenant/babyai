@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/http"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -85,14 +84,30 @@ type chatHTTPError struct {
 }
 
 const (
-	chatConversationTurnLimit = 30
-	chatMemorySummaryCharMax  = 3200
-	chatMemoryLineCharMax     = 180
-	smalltalkReplyRuneMax     = 90
+	chatConversationTurnLimit             = 20
+	chatMemorySummaryCharMax              = 3200
+	chatMemoryLineCharMax                 = 180
+	smalltalkReplyRuneMax                 = 90
+	chatRawWindowDuration                 = 72 * time.Hour
+	chatCoreModel                         = "gpt-5-mini"
+	chatDailyModel                        = "gpt-5-nano"
+	chatContextModeLast3DRaw              = "last_3d_raw"
+	chatContextModeRequestedDateRaw       = "requested_date_raw"
+	chatContextModeRequestedDateSummary   = "requested_date_summary"
+	chatContextModeWeeklySummary          = "weekly_summary"
+	chatContextModeMonthlyMedicalSummary  = "monthly_medical_summary"
+	chatContextModeMonthlyParentingRollup = "monthly_parenting_rollup"
 )
 
 func (e *chatHTTPError) Error() string {
 	return e.Detail
+}
+
+func chatModelForIntent(intent aiIntent) string {
+	if intent == aiIntentSmalltalk {
+		return chatDailyModel
+	}
+	return chatCoreModel
 }
 
 func (a *App) createChatSession(c *gin.Context) {
@@ -707,6 +722,7 @@ func (a *App) runChatQuery(
 	}
 
 	aiResponse, err := a.ai.Query(ctx, AIModelRequest{
+		Model: chatModelForIntent(intent),
 		SystemPrompt: buildChatSystemPrompt(
 			intent,
 			tone,
@@ -732,6 +748,8 @@ func (a *App) runChatQuery(
 	finalAnswer = sanitizeUserFacingAnswer(finalAnswer)
 	if intent == aiIntentSmalltalk {
 		finalAnswer = sanitizeSmalltalkAnswer(finalAnswer)
+	} else {
+		finalAnswer = enforceAnswerEvidenceGuide(finalAnswer)
 	}
 
 	userContext := cloneMap(chatContext.Meta)
@@ -1322,6 +1340,7 @@ func (a *App) resolveSessionIntentFromFirstUserMessage(
 	if firstMessage == "" {
 		return fallback
 	}
+
 	// Guardrail: caregiver self-state utterances should stay in smalltalk.
 	if isLikelyCaregiverSelfTalk(firstMessage) {
 		if strings.TrimSpace(firstUserMessageID) != "" {
@@ -1336,6 +1355,7 @@ func (a *App) resolveSessionIntentFromFirstUserMessage(
 	if err != nil || intent == "" {
 		return fallback
 	}
+
 	if strings.TrimSpace(firstUserMessageID) != "" {
 		if saveErr := a.saveFirstUserIntent(ctx, firstUserMessageID, intent); saveErr != nil {
 			log.Printf("failed to persist first-user intent session_id=%s message_id=%s intent=%s err=%v", sessionID, firstUserMessageID, intent, saveErr)
@@ -1346,23 +1366,32 @@ func (a *App) resolveSessionIntentFromFirstUserMessage(
 
 func (a *App) resolveAIIntentByFirstMessage(ctx context.Context, firstMessage, latestQuestion string) (aiIntent, error) {
 	systemPrompt := strings.Join([]string{
-		"너는 육아 도우미의 의도 분류 라우터다.",
-		"화자는 기본적으로 아이가 아닌 보호자로 가정한다.",
-		"첫 사용자 메시지를 가장 중요한 신호로 사용해 대화 의도를 분류한다.",
-		"허용 의도는 smalltalk, data_query, medical_related, care_routine 네 가지뿐이다.",
-		"메시지가 보호자 본인 상태(예: 배고픔/피곤함/스트레스)이고 아이 주어가 명시되지 않으면 smalltalk로 분류한다.",
-		"모호한 1인칭 표현을 아이 상태로 과추론하지 않는다.",
-		"반드시 JSON 객체만 반환한다.",
-		`JSON schema: {"intent":"smalltalk|data_query|medical_related|care_routine","confidence":0.0,"reason":"short reason"}`,
-		"마크다운, 코드펜스, 부가 설명 텍스트는 금지한다.",
+		"You classify childcare chat intent for session-level persona routing.",
+		"Return exactly one intent: smalltalk, data_query, medical_related, care_routine.",
+		"The first user message is the highest-priority signal for base persona.",
+		"Intent definitions:",
+		"- smalltalk: casual chat, emotional support, caregiver self-state talk, no child-record analysis request.",
+		"- data_query: asks counts/times/trends/history from childcare records.",
+		"- medical_related: symptoms, fever, medication, risk assessment, clinic or emergency judgement.",
+		"- care_routine: routine guidance for feeding/sleep/diaper/care plans without acute medical risk.",
+		"Rules:",
+		"1) If caregiver self-state is the main subject without child focus, choose smalltalk.",
+		"2) If medical risk language appears, choose medical_related.",
+		"3) If asking record numbers/timing/history, choose data_query.",
+		"4) Otherwise, if asking routine planning guidance, choose care_routine.",
+		"Return JSON object only.",
+		`Schema: {"intent":"smalltalk|data_query|medical_related|care_routine","confidence":0.0,"reason":"short"}`,
+		"Do not output markdown or extra text.",
 	}, "\n")
+
 	userPrompt := strings.Join([]string{
-		"첫 사용자 메시지: " + strings.TrimSpace(firstMessage),
-		"최신 사용자 메시지: " + strings.TrimSpace(latestQuestion),
-		"의도는 정확히 1개만 선택한다.",
+		"First user message: " + strings.TrimSpace(firstMessage),
+		"Latest user message: " + strings.TrimSpace(latestQuestion),
+		"Select one intent.",
 	}, "\n")
 
 	resp, err := a.ai.Query(ctx, AIModelRequest{
+		Model:        chatModelForIntent(aiIntentSmalltalk),
 		SystemPrompt: systemPrompt,
 		UserPrompt:   userPrompt,
 	})
@@ -1384,24 +1413,24 @@ func isLikelyCaregiverSelfTalk(message string) bool {
 	}
 
 	childSubjectMarkers := []string{
-		"아기", "아이", "애기", "우리애", "우리 아이", "아들", "딸",
 		"baby", "child", "kid", "infant", "newborn", "toddler",
+		"아이", "아기", "애기", "우리 애", "우리 아이", "아들", "딸",
 	}
 	if containsAnyKeyword(normalized, childSubjectMarkers) {
 		return false
 	}
 
 	parentingDomainMarkers := []string{
-		"수유", "분유", "모유", "기저귀", "이유식", "수면", "낮잠", "밤잠", "체온", "열", "기침", "구토", "설사",
 		"feeding", "formula", "breastfeed", "diaper", "nap", "sleep", "fever", "cough", "vomit", "diarrhea",
+		"수유", "분유", "모유", "기저귀", "낮잠", "잠", "열", "기침", "구토", "설사",
 	}
 	if containsAnyKeyword(normalized, parentingDomainMarkers) {
 		return false
 	}
 
 	caregiverStateMarkers := []string{
-		"배고프", "배가 고파", "피곤", "졸리", "지치", "힘들", "우울", "불안", "스트레스", "멘붕",
 		"hungry", "starving", "tired", "sleepy", "exhausted", "stressed", "overwhelmed", "burned out", "burnt out", "anxious",
+		"배고파", "피곤", "졸려", "지침", "힘들", "불안", "스트레스", "멘붕",
 	}
 	return containsAnyKeyword(normalized, caregiverStateMarkers)
 }
@@ -1518,16 +1547,16 @@ func firstUserIntentFromTurns(turns []ChatTurn) aiIntent {
 func isShortCasualFollowUp(question string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(question))
 	if normalized == "" {
-		return true
+		return false
+	}
+	if len([]rune(normalized)) > 18 {
+		return false
 	}
 	casual := []string{
-		"thanks", "thank you", "ok", "okay", "got it", "sure", "sounds good",
-		"yes", "yeah", "yep", "nope", "cool",
+		"ok", "okay", "thanks", "thank you", "got it", "cool", "nice", "hmm", "huh",
+		"응", "네", "고마워", "오케이", "ㅇㅋ", "굿",
 	}
-	if containsAnyKeyword(normalized, casual) {
-		return true
-	}
-	return len([]rune(normalized)) <= 8
+	return containsAnyKeyword(normalized, casual)
 }
 
 func isVagueFollowUp(question string) bool {
@@ -1537,9 +1566,31 @@ func isVagueFollowUp(question string) bool {
 	}
 	candidates := []string{
 		"then", "why", "how", "more", "details", "what about", "explain", "again",
+		"그럼", "왜", "어떻게", "더", "자세히", "다시",
 	}
 	return containsAnyKeyword(normalized, candidates)
 }
+
+type chatContextSelection struct {
+	Mode          string
+	RawStart      time.Time
+	RawEnd        time.Time
+	RequestedDate *time.Time
+	WeekAnchor    time.Time
+	MonthStart    time.Time
+	MonthEnd      time.Time
+}
+
+type normalizedEvidenceRow struct {
+	Action  string
+	Date    string
+	Start   string
+	End     string
+	Type    string
+	Note    string
+	EventID string
+}
+
 func (a *App) buildChatContext(
 	ctx context.Context,
 	userID string,
@@ -1581,24 +1632,13 @@ func (a *App) buildChatContext(
 	if !profileSnapshot.BirthDate.IsZero() {
 		birthDateText = profileSnapshot.BirthDate.UTC().Format("2006-01-02")
 	}
+
 	if intent == aiIntentSmalltalk {
-		meta := map[string]any{
-			"child_id":                       childID,
-			"time_range":                     "smalltalk_profile_snapshot",
-			"evidence_event_ids":             []string{},
-			"has_estimated_values":           false,
-			"has_missing_data":               false,
-			"profile_name":                   profileSnapshot.Name,
-			"profile_birth_date_utc":         birthDateText,
-			"profile_age_days":               profileSnapshot.AgeDays,
-			"profile_age_months":             profileSnapshot.AgeMonths,
-			"profile_age_months_basis":       "calendar_from_birth_date",
-			"profile_weight_kg":              profileSnapshot.WeightKg,
-			"profile_weight_source":          profileSnapshot.WeightSource,
-			"profile_height_cm":              profileSnapshot.HeightCm,
-			"profile_height_source":          profileSnapshot.HeightSource,
-			"profile_growth_measured_at_utc": formatNullableTimeRFC3339(profileSnapshot.GrowthMeasuredAt),
-		}
+		meta := buildBaseProfileMeta(childID, profileSnapshot, birthDateText)
+		meta["time_range"] = "smalltalk_profile_snapshot"
+		meta["evidence_event_ids"] = []string{}
+		meta["has_missing_data"] = false
+		meta["has_estimated_values"] = false
 		summaryLines := []string{
 			fmt.Sprintf("일상대화용 아동 프로필 DB 스냅샷 (child_id=%s).", childID),
 			fmt.Sprintf("- 이름=%s", profileSnapshot.Name),
@@ -1624,246 +1664,776 @@ func (a *App) buildChatContext(
 			Summary: strings.Join(summaryLines, "\n"),
 		}, nil
 	}
-
-	rawStart, rawEnd, requestedDate := resolveRawWindow(question, nowUTC)
-	monthlyStart := nowUTC.Add(-30 * 24 * time.Hour)
-	if monthlyStart.After(rawStart) {
-		monthlyStart = rawStart.Add(-30 * 24 * time.Hour)
+	selection := resolveChatContextSelection(question, intent, nowUTC)
+	switch selection.Mode {
+	case chatContextModeRequestedDateSummary:
+		return a.buildRequestedDateSummaryContext(ctx, childID, nowUTC, selection, profileSnapshot, birthDateText)
+	case chatContextModeWeeklySummary:
+		return a.buildWeeklySummaryContext(ctx, childID, nowUTC, selection, profileSnapshot, birthDateText)
+	case chatContextModeMonthlyMedicalSummary:
+		return a.buildMonthlyMedicalSummaryContext(ctx, childID, nowUTC, selection, profileSnapshot, birthDateText)
+	case chatContextModeMonthlyParentingRollup:
+		return a.buildMonthlyParentingRollupContext(ctx, childID, nowUTC, selection, profileSnapshot, birthDateText)
+	case chatContextModeRequestedDateRaw, chatContextModeLast3DRaw:
+		return a.buildRawEventContext(ctx, childID, question, intent, nowUTC, selection, profileSnapshot, birthDateText)
+	default:
+		return a.buildRawEventContext(ctx, childID, question, intent, nowUTC, selection, profileSnapshot, birthDateText)
 	}
-	monthlyEnd := rawStart
-	if monthlyEnd.Before(monthlyStart) {
-		monthlyStart = monthlyEnd
+}
+
+func buildBaseProfileMeta(childID string, profile childProfileSnapshot, birthDateText string) map[string]any {
+	return map[string]any{
+		"child_id":                       childID,
+		"profile_name":                   profile.Name,
+		"profile_birth_date_utc":         birthDateText,
+		"profile_age_days":               profile.AgeDays,
+		"profile_age_months":             profile.AgeMonths,
+		"profile_age_months_basis":       "calendar_from_birth_date",
+		"profile_weight_kg":              profile.WeightKg,
+		"profile_weight_source":          profile.WeightSource,
+		"profile_height_cm":              profile.HeightCm,
+		"profile_height_source":          profile.HeightSource,
+		"profile_growth_measured_at_utc": formatNullableTimeRFC3339(profile.GrowthMeasuredAt),
+	}
+}
+
+func resolveChatContextSelection(question string, intent aiIntent, nowUTC time.Time) chatContextSelection {
+	selection := chatContextSelection{
+		Mode:       chatContextModeLast3DRaw,
+		RawStart:   nowUTC.Add(-chatRawWindowDuration),
+		RawEnd:     nowUTC,
+		WeekAnchor: startOfUTCWeek(nowUTC),
+		MonthStart: startOfUTCMonth(nowUTC),
+		MonthEnd:   startOfUTCMonth(nowUTC).AddDate(0, 1, 0),
+	}
+	if questionAsksPreviousWeek(question) {
+		selection.WeekAnchor = selection.WeekAnchor.AddDate(0, 0, -7)
+	}
+	if questionAsksPreviousMonth(question) {
+		selection.MonthStart = selection.MonthStart.AddDate(0, -1, 0)
+		selection.MonthEnd = selection.MonthStart.AddDate(0, 1, 0)
 	}
 
-	rawRows, err := a.db.Query(
+	if requestedDate, ok := extractRequestedDate(question, nowUTC); ok {
+		requestedStart := startOfUTCDay(requestedDate.UTC())
+		selection.RequestedDate = &requestedStart
+		selection.RawStart = requestedStart
+		selection.RawEnd = requestedStart.Add(24 * time.Hour)
+		if nowUTC.Sub(requestedStart) > chatRawWindowDuration {
+			selection.Mode = chatContextModeRequestedDateSummary
+		} else {
+			selection.Mode = chatContextModeRequestedDateRaw
+		}
+		return selection
+	}
+
+	if questionAsksMonthlySummary(question) {
+		if intent == aiIntentMedicalRelated {
+			selection.Mode = chatContextModeMonthlyMedicalSummary
+		} else {
+			selection.Mode = chatContextModeMonthlyParentingRollup
+		}
+		return selection
+	}
+	if questionAsksWeeklySummary(question) {
+		selection.Mode = chatContextModeWeeklySummary
+		return selection
+	}
+	return selection
+}
+
+func questionAsksWeeklySummary(question string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(question))
+	if normalized == "" {
+		return false
+	}
+	return containsAnyKeyword(normalized, []string{
+		"weekly", "this week", "last week", "week summary", "week trend",
+		"이번주", "지난주", "주간", "일주일", "한 주", "1주",
+	})
+}
+
+func questionAsksPreviousWeek(question string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(question))
+	if normalized == "" {
+		return false
+	}
+	return containsAnyKeyword(normalized, []string{"last week", "지난주", "저번주", "전주"})
+}
+
+func questionAsksMonthlySummary(question string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(question))
+	if normalized == "" {
+		return false
+	}
+	return containsAnyKeyword(normalized, []string{
+		"monthly", "this month", "last month", "month summary", "month trend",
+		"이번달", "지난달", "월간", "월별", "한달", "한 달", "1개월",
+	})
+}
+
+func questionAsksPreviousMonth(question string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(question))
+	if normalized == "" {
+		return false
+	}
+	return containsAnyKeyword(normalized, []string{"last month", "지난달", "저번달", "전월"})
+}
+
+func startOfUTCWeek(value time.Time) time.Time {
+	dayStart := startOfUTCDay(value.UTC())
+	weekday := int(dayStart.Weekday())
+	// Monday-based week start.
+	offset := (weekday + 6) % 7
+	return dayStart.AddDate(0, 0, -offset)
+}
+
+func startOfUTCMonth(value time.Time) time.Time {
+	utc := value.UTC()
+	return time.Date(utc.Year(), utc.Month(), 1, 0, 0, 0, 0, time.UTC)
+}
+
+func focusEventTypesForQuestion(question string, intent aiIntent) map[string]struct{} {
+	normalized := strings.ToLower(strings.TrimSpace(question))
+	add := func(target map[string]struct{}, values ...string) {
+		for _, value := range values {
+			trimmed := strings.ToUpper(strings.TrimSpace(value))
+			if trimmed == "" {
+				continue
+			}
+			target[trimmed] = struct{}{}
+		}
+	}
+	focus := map[string]struct{}{}
+
+	if intent == aiIntentMedicalRelated {
+		add(focus, "SYMPTOM", "MEDICATION", "TEMPERATURE", "FORMULA", "BREASTFEED", "PEE", "POO", "SLEEP")
+		return focus
+	}
+	if containsAnyKeyword(normalized, []string{"feeding", "formula", "breastfeed", "feed", "수유", "분유", "모유"}) {
+		add(focus, "FORMULA", "BREASTFEED")
+	}
+	if containsAnyKeyword(normalized, []string{"sleep", "nap", "night sleep", "잠", "수면", "낮잠", "밤잠"}) {
+		add(focus, "SLEEP")
+	}
+	if containsAnyKeyword(normalized, []string{"diaper", "pee", "poo", "poop", "stool", "기저귀", "소변", "대변", "응가"}) {
+		add(focus, "PEE", "POO")
+	}
+	if containsAnyKeyword(normalized, []string{"medication", "medicine", "symptom", "fever", "투약", "약", "증상", "열"}) {
+		add(focus, "MEDICATION", "SYMPTOM", "TEMPERATURE")
+	}
+	if len(focus) == 0 {
+		if intent == aiIntentDataQuery || intent == aiIntentCareRoutine {
+			add(focus, "FORMULA", "BREASTFEED", "SLEEP", "PEE", "POO", "MEDICATION", "SYMPTOM", "MEMO")
+		}
+	}
+	return focus
+}
+
+func shouldKeepFocusEventType(eventType string, focus map[string]struct{}) bool {
+	if len(focus) == 0 {
+		return true
+	}
+	_, ok := focus[strings.ToUpper(strings.TrimSpace(eventType))]
+	return ok
+}
+
+func actionForEventType(eventType string) string {
+	switch strings.ToUpper(strings.TrimSpace(eventType)) {
+	case "FORMULA", "BREASTFEED":
+		return "feeding"
+	case "SLEEP":
+		return "sleep"
+	case "PEE", "POO":
+		return "diaper"
+	case "MEDICATION":
+		return "medication"
+	case "SYMPTOM", "TEMPERATURE":
+		return "medical"
+	case "MEMO":
+		return "note"
+	default:
+		return "record"
+	}
+}
+
+func normalizeEvidenceNote(eventType string, valueMap map[string]any, metadataMap map[string]any) string {
+	for _, raw := range []any{
+		valueMap["note"],
+		valueMap["memo"],
+		valueMap["comment"],
+		valueMap["text"],
+		valueMap["summary"],
+		valueMap["name"],
+		valueMap["symptom"],
+		valueMap["medication_name"],
+		metadataMap["note"],
+		metadataMap["memo"],
+		metadataMap["comment"],
+	} {
+		text := strings.TrimSpace(toString(raw))
+		if text != "" {
+			return truncateRunes(strings.Join(strings.Fields(text), " "), 80)
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(eventType), "FORMULA") {
+		amount := int(extractNumberFromMap(valueMap, "ml", "amount_ml", "volume_ml") + 0.5)
+		if amount > 0 {
+			return strconv.Itoa(amount) + "ml"
+		}
+	}
+	return "-"
+}
+
+func normalizeEvidenceRow(
+	eventID string,
+	eventType string,
+	startAt time.Time,
+	endAt *time.Time,
+	valueText string,
+	metadataText string,
+) normalizedEvidenceRow {
+	valueMap := parseJSONStringMap([]byte(valueText))
+	metadataMap := parseJSONStringMap([]byte(metadataText))
+	startUTC := startAt.UTC()
+	endLabel := "-"
+	if endAt != nil {
+		endLabel = endAt.UTC().Format("2006-01-02 15:04")
+	}
+	return normalizedEvidenceRow{
+		Action:  actionForEventType(eventType),
+		Date:    startUTC.Format("2006-01-02"),
+		Start:   startUTC.Format("2006-01-02 15:04"),
+		End:     endLabel,
+		Type:    strings.ToUpper(strings.TrimSpace(eventType)),
+		Note:    normalizeEvidenceNote(eventType, valueMap, metadataMap),
+		EventID: strings.TrimSpace(eventID),
+	}
+}
+
+func (a *App) buildRawEventContext(
+	ctx context.Context,
+	childID string,
+	question string,
+	intent aiIntent,
+	nowUTC time.Time,
+	selection chatContextSelection,
+	profileSnapshot childProfileSnapshot,
+	birthDateText string,
+) (chatContextResult, error) {
+	rows, err := a.db.Query(
 		ctx,
-		`SELECT id, type::text, "startTime", "endTime", "valueJson"::text, COALESCE("metadataJson", '{}'::jsonb)::text
+		`SELECT id, type::text, "startTime", "endTime", COALESCE("valueJson", '{}'::jsonb)::text, COALESCE("metadataJson", '{}'::jsonb)::text
 		 FROM "Event"
 		 WHERE "babyId" = $1
 		   AND "startTime" >= $2
 		   AND "startTime" < $3
-		 ORDER BY "startTime" DESC`,
+		   AND NOT (
+		     "endTime" IS NULL
+		     AND (
+		       COALESCE("metadataJson"->>'event_state', '') = 'OPEN'
+		       OR COALESCE("metadataJson"->>'entry_mode', '') = 'manual_start'
+		     )
+		   )
+		   AND COALESCE("metadataJson"->>'event_state', 'CLOSED') <> 'CANCELED'
+		 ORDER BY "startTime" DESC
+		 LIMIT 240`,
 		childID,
-		rawStart,
-		rawEnd,
+		selection.RawStart,
+		selection.RawEnd,
 	)
 	if err != nil {
 		return chatContextResult{}, err
 	}
-	defer rawRows.Close()
+	defer rows.Close()
 
-	rawLines := make([]string, 0, 128)
-	evidenceIDs := make([]string, 0, 200)
-	rawCountByType := map[string]int{}
-	for rawRows.Next() {
-		var eventID, eventType, valueText, metadataText string
+	focusTypes := focusEventTypesForQuestion(question, intent)
+	evidenceRows := make([]normalizedEvidenceRow, 0, 96)
+	evidenceIDs := make([]string, 0, 96)
+	for rows.Next() {
+		var eventID string
+		var eventType string
 		var startAt time.Time
 		var endAt *time.Time
-		if err := rawRows.Scan(&eventID, &eventType, &startAt, &endAt, &valueText, &metadataText); err != nil {
+		var valueText string
+		var metadataText string
+		if err := rows.Scan(&eventID, &eventType, &startAt, &endAt, &valueText, &metadataText); err != nil {
 			return chatContextResult{}, err
 		}
-		eventType = strings.TrimSpace(eventType)
-		rawCountByType[eventType]++
-		evidenceIDs = append(evidenceIDs, eventID)
-
-		details := []string{
-			fmt.Sprintf("이벤트ID=%s", strings.TrimSpace(eventID)),
-			fmt.Sprintf("유형=%s", strings.ToUpper(eventType)),
-			fmt.Sprintf("시작시각=%s", formatContextTime(startAt)),
+		if !shouldKeepFocusEventType(eventType, focusTypes) {
+			continue
 		}
-		if endAt != nil {
-			details = append(details, fmt.Sprintf("종료시각=%s", formatContextTime(*endAt)))
-		}
-		if v := strings.TrimSpace(valueText); v != "" && v != "{}" && v != "null" {
-			details = append(details, "값="+v)
-		}
-		if m := strings.TrimSpace(metadataText); m != "" && m != "{}" && m != "null" {
-			details = append(details, "메타="+m)
-		}
-		rawLines = append(rawLines, "- "+strings.Join(details, " | "))
+		row := normalizeEvidenceRow(eventID, eventType, startAt, endAt, valueText, metadataText)
+		evidenceRows = append(evidenceRows, row)
+		evidenceIDs = append(evidenceIDs, row.EventID)
 	}
-	if err := rawRows.Err(); err != nil {
+	if err := rows.Err(); err != nil {
+		return chatContextResult{}, err
+	}
+	if len(evidenceRows) > 80 {
+		evidenceRows = evidenceRows[:80]
+		evidenceIDs = evidenceIDs[:80]
+	}
+
+	meta := buildBaseProfileMeta(childID, profileSnapshot, birthDateText)
+	meta["time_range"] = selection.Mode
+	meta["context_source"] = "event_window"
+	meta["reference_now_utc"] = nowUTC.Format(time.RFC3339)
+	meta["raw_since_utc"] = selection.RawStart.UTC().Format(time.RFC3339)
+	meta["raw_until_utc"] = selection.RawEnd.UTC().Format(time.RFC3339)
+	meta["evidence_event_ids"] = evidenceIDs
+	meta["has_estimated_values"] = false
+	meta["has_missing_data"] = len(evidenceRows) == 0
+	if selection.RequestedDate != nil {
+		meta["requested_date_utc"] = selection.RequestedDate.UTC().Format("2006-01-02")
+	}
+
+	summaryLines := []string{
+		fmt.Sprintf("질문 우선 컨텍스트 (child_id=%s). 질문과 직접 관련된 근거만 사용하세요.", childID),
+		fmt.Sprintf("아동 프로필: 이름=%s, 생년월일=%s, 나이=%d일 (만 %d개월).", profileSnapshot.Name, birthDateText, profileSnapshot.AgeDays, profileSnapshot.AgeMonths),
+		fmt.Sprintf("근거 범위: %s ~ %s", formatContextTime(selection.RawStart), formatContextTime(selection.RawEnd)),
+		"정규화 이벤트 테이블(action | date | start_time | end_time | type | note | evidence_event_id):",
+	}
+	if len(evidenceRows) == 0 {
+		summaryLines = append(summaryLines, "- 기록만으로는 판단이 어렵습니다.")
+	} else {
+		for _, item := range evidenceRows {
+			summaryLines = append(summaryLines,
+				fmt.Sprintf(
+					"- %s | %s | %s | %s | %s | %s | %s",
+					item.Action,
+					item.Date,
+					item.Start,
+					item.End,
+					item.Type,
+					item.Note,
+					item.EventID,
+				),
+			)
+		}
+	}
+	return chatContextResult{
+		Meta:    meta,
+		Summary: strings.Join(summaryLines, "\n"),
+	}, nil
+}
+
+func (a *App) buildRequestedDateSummaryContext(
+	ctx context.Context,
+	childID string,
+	nowUTC time.Time,
+	selection chatContextSelection,
+	profileSnapshot childProfileSnapshot,
+	birthDateText string,
+) (chatContextResult, error) {
+	targetDate := selection.RawStart
+	if selection.RequestedDate != nil {
+		targetDate = selection.RequestedDate.UTC()
+	}
+
+	var sleepTotalMin *int
+	var intakeCount *int
+	var formulaTotalML *int
+	var intakeTotalML *int
+	var peeCount *int
+	var pooCount *int
+	var tempMax *float64
+	var tempMin *float64
+	var missingnessText string
+	err := a.db.QueryRow(
+		ctx,
+		`SELECT
+			"sleepTotalMin",
+			"intakeCount",
+			"formulaTotalMl",
+			"intakeTotalMl",
+			"diaperPeeCount",
+			"diaperPooCount",
+			CAST("tempMaxC" AS float8),
+			CAST("tempMinC" AS float8),
+			COALESCE("missingnessJson", '{}'::jsonb)::text
+		 FROM "DailySummary"
+		 WHERE "childId" = $1 AND "date" = $2
+		 LIMIT 1`,
+		childID,
+		targetDate.UTC(),
+	).Scan(
+		&sleepTotalMin,
+		&intakeCount,
+		&formulaTotalML,
+		&intakeTotalML,
+		&peeCount,
+		&pooCount,
+		&tempMax,
+		&tempMin,
+		&missingnessText,
+	)
+	found := true
+	if errors.Is(err, pgx.ErrNoRows) {
+		found = false
+		err = nil
+	}
+	if err != nil {
 		return chatContextResult{}, err
 	}
 
-	monthlyCountByType := map[string]int{}
-	if monthlyStart.Before(monthlyEnd) {
-		monthlyTypeRows, err := a.db.Query(
-			ctx,
-			`SELECT type::text, COUNT(*)::int
-			 FROM "Event"
-			 WHERE "babyId" = $1
-			   AND "startTime" >= $2
-			   AND "startTime" < $3
-			 GROUP BY type`,
-			childID,
-			monthlyStart,
-			monthlyEnd,
-		)
-		if err != nil {
-			return chatContextResult{}, err
-		}
-		for monthlyTypeRows.Next() {
-			var eventType string
-			var count int
-			if err := monthlyTypeRows.Scan(&eventType, &count); err != nil {
-				monthlyTypeRows.Close()
-				return chatContextResult{}, err
-			}
-			monthlyCountByType[strings.TrimSpace(eventType)] = count
-		}
-		if err := monthlyTypeRows.Err(); err != nil {
-			monthlyTypeRows.Close()
-			return chatContextResult{}, err
-		}
-		monthlyTypeRows.Close()
-	}
+	meta := buildBaseProfileMeta(childID, profileSnapshot, birthDateText)
+	meta["time_range"] = chatContextModeRequestedDateSummary
+	meta["context_source"] = "daily_summary"
+	meta["reference_now_utc"] = nowUTC.Format(time.RFC3339)
+	meta["requested_date_utc"] = targetDate.UTC().Format("2006-01-02")
+	meta["evidence_event_ids"] = []string{}
+	meta["has_estimated_values"] = false
+	meta["has_missing_data"] = !found
 
-	dailyOverviewLines := make([]string, 0, 40)
-	if monthlyStart.Before(monthlyEnd) {
-		dailyRows, err := a.db.Query(
-			ctx,
-			`SELECT TO_CHAR(DATE_TRUNC('day', "startTime" AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS day, COUNT(*)::int
-			 FROM "Event"
-			 WHERE "babyId" = $1
-			   AND "startTime" >= $2
-			   AND "startTime" < $3
-			 GROUP BY day
-			 ORDER BY day DESC`,
-			childID,
-			monthlyStart,
-			monthlyEnd,
-		)
-		if err != nil {
-			return chatContextResult{}, err
-		}
-		for dailyRows.Next() {
-			var day string
-			var count int
-			if err := dailyRows.Scan(&day, &count); err != nil {
-				dailyRows.Close()
-				return chatContextResult{}, err
-			}
-			dailyOverviewLines = append(dailyOverviewLines, fmt.Sprintf("- %s: %d건", strings.TrimSpace(day), count))
-		}
-		if err := dailyRows.Err(); err != nil {
-			dailyRows.Close()
-			return chatContextResult{}, err
-		}
-		dailyRows.Close()
+	summaryLines := []string{
+		fmt.Sprintf("질문 우선 컨텍스트 (child_id=%s).", childID),
+		fmt.Sprintf("요청 날짜(%s)가 최근 3일을 초과하여 DailySummary 집계를 사용합니다.", targetDate.UTC().Format("2006-01-02")),
 	}
-
-	rawRangeLabel := "last_7d_raw"
-	if requestedDate != nil {
-		rawRangeLabel = "requested_date_raw"
-	}
-	hasMissingData := len(rawLines) == 0
-	meta := map[string]any{
-		"child_id":                       childID,
-		"time_range":                     rawRangeLabel,
-		"evidence_event_ids":             evidenceIDs,
-		"has_estimated_values":           false,
-		"has_missing_data":               hasMissingData,
-		"reference_now_utc":              nowUTC.Format(time.RFC3339),
-		"raw_since_utc":                  rawStart.Format(time.RFC3339),
-		"raw_until_utc":                  rawEnd.Format(time.RFC3339),
-		"monthly_since_utc":              monthlyStart.Format(time.RFC3339),
-		"monthly_until_utc":              monthlyEnd.Format(time.RFC3339),
-		"profile_name":                   profileSnapshot.Name,
-		"profile_birth_date_utc":         birthDateText,
-		"profile_age_days":               profileSnapshot.AgeDays,
-		"profile_age_months":             profileSnapshot.AgeMonths,
-		"profile_age_months_basis":       "calendar_from_birth_date",
-		"profile_weight_kg":              profileSnapshot.WeightKg,
-		"profile_weight_source":          profileSnapshot.WeightSource,
-		"profile_height_cm":              profileSnapshot.HeightCm,
-		"profile_height_source":          profileSnapshot.HeightSource,
-		"profile_growth_measured_at_utc": formatNullableTimeRFC3339(profileSnapshot.GrowthMeasuredAt),
-	}
-	if requestedDate != nil {
-		meta["requested_date_utc"] = requestedDate.Format("2006-01-02")
-	}
-
-	summaryLines := make([]string, 0, len(rawLines)+96)
-	summaryLines = append(summaryLines, fmt.Sprintf("아동 기준 참고 컨텍스트 (child_id=%s).", childID))
-	summaryLines = append(summaryLines,
-		"아동 프로필 스냅샷:",
-		fmt.Sprintf("- 이름=%s", profileSnapshot.Name),
-		fmt.Sprintf("- 생년월일=%s", birthDateText),
-		fmt.Sprintf("- 나이=%d일 (만 %d개월, 생년월일 기준)", profileSnapshot.AgeDays, profileSnapshot.AgeMonths),
-		fmt.Sprintf("- 현재 기준 시각=%s", formatContextTime(nowUTC)),
-	)
-	if profileSnapshot.WeightKg != nil {
+	if !found {
+		summaryLines = append(summaryLines, "- 기록만으로는 판단이 어렵습니다.")
+	} else {
 		summaryLines = append(summaryLines,
-			fmt.Sprintf("- 몸무게=%.1fkg (출처=%s)", *profileSnapshot.WeightKg, profileSnapshot.WeightSource),
+			fmt.Sprintf("- 수면 합계(분): %v", nullableIntLabel(sleepTotalMin)),
+			fmt.Sprintf("- 수유 횟수: %v", nullableIntLabel(intakeCount)),
+			fmt.Sprintf("- 분유 합계(ml): %v", nullableIntLabel(formulaTotalML)),
+			fmt.Sprintf("- 섭취 합계(ml): %v", nullableIntLabel(intakeTotalML)),
+			fmt.Sprintf("- 소변 횟수: %v", nullableIntLabel(peeCount)),
+			fmt.Sprintf("- 대변 횟수: %v", nullableIntLabel(pooCount)),
+			fmt.Sprintf("- 최고 체온: %v", nullableFloatLabel(tempMax, "°C")),
+			fmt.Sprintf("- 최저 체온: %v", nullableFloatLabel(tempMin, "°C")),
+			fmt.Sprintf("- 데이터 결측 정보: %s", strings.TrimSpace(missingnessText)),
 		)
-	} else {
-		summaryLines = append(summaryLines, "- 몸무게=없음")
-	}
-	if profileSnapshot.HeightCm != nil {
-		line := fmt.Sprintf("- 키=%.1fcm (출처=%s)", *profileSnapshot.HeightCm, profileSnapshot.HeightSource)
-		if profileSnapshot.GrowthMeasuredAt != nil {
-			line = line + fmt.Sprintf(", 측정시각=%s", formatContextTime(*profileSnapshot.GrowthMeasuredAt))
-		}
-		summaryLines = append(summaryLines, line)
-	} else {
-		summaryLines = append(summaryLines, "- 키=없음")
-	}
-	if requestedDate != nil {
-		summaryLines = append(summaryLines,
-			fmt.Sprintf("사용자가 특정 날짜 원시 기록을 요청함: %s.", requestedDate.Format("2006-01-02")),
-		)
-	}
-	summaryLines = append(summaryLines,
-		fmt.Sprintf("원시 기록 조회 구간: %s ~ %s.", formatContextTime(rawStart), formatContextTime(rawEnd)),
-		"아래 원시 이벤트는 사용자가 입력한 기록의 저장 원본(값/메타)입니다.",
-	)
-	if len(rawLines) == 0 {
-		summaryLines = append(summaryLines, "- 선택한 원시 구간에 기록이 없습니다.")
-	} else {
-		summaryLines = append(summaryLines, rawLines...)
-		rawTypes := make([]string, 0, len(rawCountByType))
-		for eventType := range rawCountByType {
-			rawTypes = append(rawTypes, eventType)
-		}
-		sort.Strings(rawTypes)
-		summaryLines = append(summaryLines, "원시 구간 유형별 건수:")
-		for _, eventType := range rawTypes {
-			summaryLines = append(summaryLines,
-				fmt.Sprintf("- %s: %d건", strings.ToUpper(strings.TrimSpace(eventType)), rawCountByType[eventType]),
-			)
-		}
-	}
-
-	summaryLines = append(summaryLines,
-		"월간 요약(원시 구간 이전 최대 30일):",
-		fmt.Sprintf("월간 요약 구간: %s ~ %s.", formatContextTime(monthlyStart), formatContextTime(monthlyEnd)),
-	)
-	if len(monthlyCountByType) == 0 {
-		summaryLines = append(summaryLines, "- 설정된 월간 구간에 요약할 기록이 없습니다.")
-	} else {
-		types := make([]string, 0, len(monthlyCountByType))
-		for eventType := range monthlyCountByType {
-			types = append(types, eventType)
-		}
-		sort.Strings(types)
-		for _, eventType := range types {
-			summaryLines = append(summaryLines,
-				fmt.Sprintf("- %s: %d건", strings.ToUpper(strings.TrimSpace(eventType)), monthlyCountByType[eventType]),
-			)
-		}
-	}
-	if len(dailyOverviewLines) == 0 {
-		summaryLines = append(summaryLines, "- 월간 구간 일자별 집계가 없습니다.")
-	} else {
-		summaryLines = append(summaryLines, "월간 구간 일자별 건수:")
-		summaryLines = append(summaryLines, dailyOverviewLines...)
 	}
 
 	return chatContextResult{
 		Meta:    meta,
 		Summary: strings.Join(summaryLines, "\n"),
 	}, nil
+}
+
+func (a *App) buildWeeklySummaryContext(
+	ctx context.Context,
+	childID string,
+	nowUTC time.Time,
+	selection chatContextSelection,
+	profileSnapshot childProfileSnapshot,
+	birthDateText string,
+) (chatContextResult, error) {
+	rows, err := a.db.Query(
+		ctx,
+		`SELECT
+			"weekStartDate",
+			COALESCE("metricsJson", '{}'::jsonb)::text,
+			COALESCE("missingnessJson", '{}'::jsonb)::text
+		 FROM "WeeklySummary"
+		 WHERE "childId" = $1
+		   AND "weekStartDate" <= $2
+		 ORDER BY "weekStartDate" DESC
+		 LIMIT 6`,
+		childID,
+		selection.WeekAnchor.UTC(),
+	)
+	if err != nil {
+		return chatContextResult{}, err
+	}
+	defer rows.Close()
+
+	type weeklyItem struct {
+		WeekStart   time.Time
+		Metrics     string
+		Missingness string
+	}
+	items := make([]weeklyItem, 0, 6)
+	for rows.Next() {
+		var item weeklyItem
+		if err := rows.Scan(&item.WeekStart, &item.Metrics, &item.Missingness); err != nil {
+			return chatContextResult{}, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return chatContextResult{}, err
+	}
+
+	meta := buildBaseProfileMeta(childID, profileSnapshot, birthDateText)
+	meta["time_range"] = chatContextModeWeeklySummary
+	meta["context_source"] = "weekly_summary"
+	meta["reference_now_utc"] = nowUTC.Format(time.RFC3339)
+	meta["week_anchor_utc"] = selection.WeekAnchor.UTC().Format("2006-01-02")
+	meta["evidence_event_ids"] = []string{}
+	meta["has_estimated_values"] = false
+	meta["has_missing_data"] = len(items) == 0
+
+	summaryLines := []string{
+		fmt.Sprintf("질문 우선 컨텍스트 (child_id=%s).", childID),
+		"요청 범위가 최근 3일을 초과하여 WeeklySummary 집계를 사용합니다.",
+		"주간 집계 테이블(week_start_date | metrics_json | missingness_json):",
+	}
+	if len(items) == 0 {
+		summaryLines = append(summaryLines, "- 기록만으로는 판단이 어렵습니다.")
+	} else {
+		for _, item := range items {
+			summaryLines = append(summaryLines,
+				fmt.Sprintf(
+					"- %s | %s | %s",
+					item.WeekStart.UTC().Format("2006-01-02"),
+					strings.TrimSpace(item.Metrics),
+					strings.TrimSpace(item.Missingness),
+				),
+			)
+		}
+	}
+
+	return chatContextResult{
+		Meta:    meta,
+		Summary: strings.Join(summaryLines, "\n"),
+	}, nil
+}
+
+func (a *App) buildMonthlyMedicalSummaryContext(
+	ctx context.Context,
+	childID string,
+	nowUTC time.Time,
+	selection chatContextSelection,
+	profileSnapshot childProfileSnapshot,
+	birthDateText string,
+) (chatContextResult, error) {
+	rows, err := a.db.Query(
+		ctx,
+		`SELECT
+			"month",
+			COALESCE("medicalTimelineJson", '{}'::jsonb)::text,
+			COALESCE("missingnessJson", '{}'::jsonb)::text
+		 FROM "MonthlyMedicalSummary"
+		 WHERE "childId" = $1
+		   AND "month" <= $2
+		 ORDER BY "month" DESC
+		 LIMIT 4`,
+		childID,
+		selection.MonthStart.UTC(),
+	)
+	if err != nil {
+		return chatContextResult{}, err
+	}
+	defer rows.Close()
+
+	type monthlyMedicalItem struct {
+		Month       time.Time
+		Timeline    string
+		Missingness string
+	}
+	items := make([]monthlyMedicalItem, 0, 4)
+	for rows.Next() {
+		var item monthlyMedicalItem
+		if err := rows.Scan(&item.Month, &item.Timeline, &item.Missingness); err != nil {
+			return chatContextResult{}, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return chatContextResult{}, err
+	}
+
+	meta := buildBaseProfileMeta(childID, profileSnapshot, birthDateText)
+	meta["time_range"] = chatContextModeMonthlyMedicalSummary
+	meta["context_source"] = "monthly_medical_summary"
+	meta["reference_now_utc"] = nowUTC.Format(time.RFC3339)
+	meta["month_start_utc"] = selection.MonthStart.UTC().Format("2006-01-02")
+	meta["evidence_event_ids"] = []string{}
+	meta["has_estimated_values"] = false
+	meta["has_missing_data"] = len(items) == 0
+
+	summaryLines := []string{
+		fmt.Sprintf("질문 우선 컨텍스트 (child_id=%s).", childID),
+		"요청 범위가 최근 3일을 초과하여 MonthlyMedicalSummary 집계를 사용합니다.",
+		"월간 의료 집계 테이블(month | medical_timeline_json | missingness_json):",
+	}
+	if len(items) == 0 {
+		summaryLines = append(summaryLines, "- 기록만으로는 판단이 어렵습니다.")
+	} else {
+		for _, item := range items {
+			summaryLines = append(summaryLines,
+				fmt.Sprintf(
+					"- %s | %s | %s",
+					item.Month.UTC().Format("2006-01"),
+					strings.TrimSpace(item.Timeline),
+					strings.TrimSpace(item.Missingness),
+				),
+			)
+		}
+	}
+
+	return chatContextResult{
+		Meta:    meta,
+		Summary: strings.Join(summaryLines, "\n"),
+	}, nil
+}
+
+func (a *App) buildMonthlyParentingRollupContext(
+	ctx context.Context,
+	childID string,
+	nowUTC time.Time,
+	selection chatContextSelection,
+	profileSnapshot childProfileSnapshot,
+	birthDateText string,
+) (chatContextResult, error) {
+	dailyRows, err := a.db.Query(
+		ctx,
+		`SELECT
+			"date",
+			"sleepTotalMin",
+			"intakeCount",
+			"formulaTotalMl",
+			"intakeTotalMl",
+			"diaperPeeCount",
+			"diaperPooCount"
+		 FROM "DailySummary"
+		 WHERE "childId" = $1
+		   AND "date" >= $2
+		   AND "date" < $3
+		 ORDER BY "date" ASC`,
+		childID,
+		selection.MonthStart.UTC(),
+		selection.MonthEnd.UTC(),
+	)
+	if err != nil {
+		return chatContextResult{}, err
+	}
+	defer dailyRows.Close()
+
+	dayCount := 0
+	sleepTotal := 0
+	intakeCountTotal := 0
+	formulaTotal := 0
+	peeTotal := 0
+	pooTotal := 0
+	for dailyRows.Next() {
+		var date time.Time
+		var sleepMin *int
+		var intakeCount *int
+		var formulaML *int
+		var intakeML *int
+		var peeCount *int
+		var pooCount *int
+		if err := dailyRows.Scan(&date, &sleepMin, &intakeCount, &formulaML, &intakeML, &peeCount, &pooCount); err != nil {
+			return chatContextResult{}, err
+		}
+		_ = date
+		_ = intakeML
+		dayCount++
+		if sleepMin != nil {
+			sleepTotal += *sleepMin
+		}
+		if intakeCount != nil {
+			intakeCountTotal += *intakeCount
+		}
+		if formulaML != nil {
+			formulaTotal += *formulaML
+		}
+		if peeCount != nil {
+			peeTotal += *peeCount
+		}
+		if pooCount != nil {
+			pooTotal += *pooCount
+		}
+	}
+	if err := dailyRows.Err(); err != nil {
+		return chatContextResult{}, err
+	}
+
+	weeklyRows, err := a.db.Query(
+		ctx,
+		`SELECT
+			"weekStartDate",
+			COALESCE("metricsJson", '{}'::jsonb)::text
+		 FROM "WeeklySummary"
+		 WHERE "childId" = $1
+		   AND "weekStartDate" >= $2
+		   AND "weekStartDate" < $3
+		 ORDER BY "weekStartDate" ASC`,
+		childID,
+		selection.MonthStart.UTC().AddDate(0, 0, -7),
+		selection.MonthEnd.UTC(),
+	)
+	if err != nil {
+		return chatContextResult{}, err
+	}
+	defer weeklyRows.Close()
+
+	weeklyLines := make([]string, 0, 8)
+	for weeklyRows.Next() {
+		var weekStart time.Time
+		var metrics string
+		if err := weeklyRows.Scan(&weekStart, &metrics); err != nil {
+			return chatContextResult{}, err
+		}
+		weeklyLines = append(weeklyLines, fmt.Sprintf("- %s | %s", weekStart.UTC().Format("2006-01-02"), strings.TrimSpace(metrics)))
+	}
+	if err := weeklyRows.Err(); err != nil {
+		return chatContextResult{}, err
+	}
+
+	meta := buildBaseProfileMeta(childID, profileSnapshot, birthDateText)
+	meta["time_range"] = chatContextModeMonthlyParentingRollup
+	meta["context_source"] = "weekly_daily_rollup"
+	meta["reference_now_utc"] = nowUTC.Format(time.RFC3339)
+	meta["month_start_utc"] = selection.MonthStart.UTC().Format("2006-01-02")
+	meta["month_end_utc"] = selection.MonthEnd.UTC().Format("2006-01-02")
+	meta["evidence_event_ids"] = []string{}
+	meta["has_estimated_values"] = false
+	meta["has_missing_data"] = dayCount == 0 && len(weeklyLines) == 0
+
+	summaryLines := []string{
+		fmt.Sprintf("질문 우선 컨텍스트 (child_id=%s).", childID),
+		"요청 범위가 최근 3일을 초과하여 월간 육아 롤업(WeeklySummary + DailySummary)을 사용합니다.",
+		fmt.Sprintf("대상 월: %s", selection.MonthStart.UTC().Format("2006-01")),
+	}
+	if dayCount == 0 {
+		summaryLines = append(summaryLines, "- 기록만으로는 판단이 어렵습니다.")
+	} else {
+		summaryLines = append(summaryLines,
+			fmt.Sprintf("- 일자 집계 건수: %d일", dayCount),
+			fmt.Sprintf("- 1일 평균 분유량(ml): %.1f", safeAvg(formulaTotal, dayCount)),
+			fmt.Sprintf("- 1일 평균 수유 횟수: %.1f", safeAvg(intakeCountTotal, dayCount)),
+			fmt.Sprintf("- 1일 평균 수면 시간(분): %.1f", safeAvg(sleepTotal, dayCount)),
+			fmt.Sprintf("- 1일 평균 소변 횟수: %.1f", safeAvg(peeTotal, dayCount)),
+			fmt.Sprintf("- 1일 평균 대변 횟수: %.1f", safeAvg(pooTotal, dayCount)),
+		)
+	}
+	summaryLines = append(summaryLines, "주간 롤업(week_start_date | metrics_json):")
+	if len(weeklyLines) == 0 {
+		summaryLines = append(summaryLines, "- 주간 롤업 데이터가 없습니다.")
+	} else {
+		summaryLines = append(summaryLines, weeklyLines...)
+	}
+
+	return chatContextResult{
+		Meta:    meta,
+		Summary: strings.Join(summaryLines, "\n"),
+	}, nil
+}
+
+func nullableIntLabel(value *int) string {
+	if value == nil {
+		return "-"
+	}
+	return strconv.Itoa(*value)
+}
+
+func nullableFloatLabel(value *float64, suffix string) string {
+	if value == nil {
+		return "-"
+	}
+	text := strconv.FormatFloat(*value, 'f', 1, 64)
+	return strings.TrimSpace(text + suffix)
+}
+
+func safeAvg(total int, count int) float64 {
+	if count <= 0 {
+		return 0
+	}
+	return float64(total) / float64(count)
 }
 
 func (a *App) loadChildProfileSnapshot(ctx context.Context, userID, childID string) (childProfileSnapshot, error) {
@@ -1966,14 +2536,6 @@ var (
 	koreanDatePattern      = regexp.MustCompile(`(?:(20\d{2})\s*년\s*)?(\d{1,2})\s*월\s*(\d{1,2})\s*일`)
 )
 
-func resolveRawWindow(question string, nowUTC time.Time) (time.Time, time.Time, *time.Time) {
-	if specificDate, ok := extractRequestedDate(question, nowUTC); ok {
-		start := startOfUTCDay(specificDate.UTC())
-		return start, start.Add(24 * time.Hour), &start
-	}
-	return nowUTC.Add(-7 * 24 * time.Hour), nowUTC, nil
-}
-
 func extractRequestedDate(question string, nowUTC time.Time) (time.Time, bool) {
 	normalized := strings.TrimSpace(question)
 	lowered := strings.ToLower(normalized)
@@ -2062,6 +2624,10 @@ func buildChatSystemPrompt(
 		"데이터가 누락되거나 추정치가 섞이면 쉬운 한국어로 짧고 명확하게 설명한다.",
 		"진단/처방을 단정하지 말고 가능성과 안전한 다음 행동을 제시한다.",
 		"시간 예측 질문(예: 다음 수유 ETA)은 컨텍스트에 제공된 현재 기준 시각을 기준으로 계산한다.",
+		"smalltalk가 아닌 의도에서는 응답을 반드시 `답변 -> 근거 -> 가이드` 순서로 구성한다.",
+		"smalltalk가 아닌 의도에서는 첫 문장을 질문에 대한 직접 답변으로 시작한다.",
+		"smalltalk가 아닌 의도에서는 질문과 무관한 데이터는 답변 본문에서 제외한다.",
+		"smalltalk가 아닌 의도에서는 근거 섹션이 직접 답변 섹션보다 길어지지 않게 유지한다.",
 		"smalltalk가 아닌 의도에서는 Markdown으로 답한다.",
 		"모바일 화면에서 읽기 쉽도록 짧은 문단과 짧은 줄바꿈 중심으로 작성한다.",
 		"핵심 결론은 첫 줄 1문장으로 제시한다.",
@@ -2105,7 +2671,11 @@ func buildChatSystemPrompt(
 			"사실 판단은 제공된 데이터 컨텍스트 안에서만 수행한다.",
 			"필요하면 아이 프로필(월령/일령, 몸무게, 키)을 함께 반영한다.",
 			"context.time_range가 requested_date_raw이면 해당 날짜 원시 기록을 우선한다.",
-			"context.time_range가 last_7d_raw이면 최근 7일 원시 기록을 우선하고, 그 이전 추세는 월간 요약으로 보완한다.",
+			"context.time_range가 last_3d_raw이면 최근 3일 원시 기록을 우선한다.",
+			"context.time_range가 requested_date_summary이면 요청 날짜 DailySummary 집계를 우선한다.",
+			"context.time_range가 weekly_summary이면 WeeklySummary 집계를 우선한다.",
+			"context.time_range가 monthly_medical_summary이면 MonthlyMedicalSummary 집계를 우선한다.",
+			"context.time_range가 monthly_parenting_rollup이면 WeeklySummary+DailySummary 롤업을 우선한다.",
 			"참고 컨텍스트: "+context.Summary,
 		)
 	} else {
@@ -2405,6 +2975,159 @@ func sanitizeSmalltalkAnswer(answer string) string {
 		merged = strings.Join(strings.Fields(trimmed), " ")
 	}
 	return truncateRunes(merged, smalltalkReplyRuneMax)
+}
+
+func enforceAnswerEvidenceGuide(answer string) string {
+	trimmed := strings.TrimSpace(answer)
+	if trimmed == "" {
+		return ""
+	}
+
+	answerSection, evidenceSection, guideSection := splitAnswerEvidenceGuideSections(trimmed)
+	if answerSection == "" || evidenceSection == "" || guideSection == "" {
+		answerSection, evidenceSection, guideSection = buildAnswerEvidenceGuideFallback(trimmed)
+	}
+	if answerSection == "" {
+		answerSection = "기록을 바탕으로 먼저 확인이 필요합니다."
+	}
+	if evidenceSection == "" {
+		evidenceSection = "기록만으로는 판단이 어렵습니다."
+	}
+	if guideSection == "" {
+		guideSection = "추가 기록을 남겨 주시면 더 정확히 안내할 수 있습니다."
+	}
+
+	limit := len([]rune(answerSection)) * 2
+	if limit < 120 {
+		limit = 120
+	}
+	if len([]rune(evidenceSection)) > limit {
+		evidenceSection = truncateRunes(evidenceSection, limit)
+	}
+
+	return strings.TrimSpace(strings.Join([]string{
+		"답변",
+		answerSection,
+		"",
+		"근거",
+		evidenceSection,
+		"",
+		"가이드",
+		guideSection,
+	}, "\n"))
+}
+
+func splitAnswerEvidenceGuideSections(answer string) (string, string, string) {
+	lines := splitNonEmptyLines(answer)
+	if len(lines) == 0 {
+		return "", "", ""
+	}
+
+	current := ""
+	answerLines := make([]string, 0, len(lines))
+	evidenceLines := make([]string, 0, len(lines))
+	guideLines := make([]string, 0, len(lines))
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		if label := normalizeAEGSectionLabel(line); label != "" {
+			current = label
+			continue
+		}
+		switch current {
+		case "answer":
+			answerLines = append(answerLines, line)
+		case "evidence":
+			evidenceLines = append(evidenceLines, line)
+		case "guide":
+			guideLines = append(guideLines, line)
+		}
+	}
+
+	return strings.TrimSpace(strings.Join(answerLines, "\n")),
+		strings.TrimSpace(strings.Join(evidenceLines, "\n")),
+		strings.TrimSpace(strings.Join(guideLines, "\n"))
+}
+
+func normalizeAEGSectionLabel(line string) string {
+	trimmed := strings.TrimSpace(line)
+	trimmed = strings.TrimLeft(trimmed, "#")
+	trimmed = strings.TrimSpace(trimmed)
+	trimmed = strings.Trim(trimmed, "*`")
+	trimmed = strings.TrimSpace(strings.TrimSuffix(trimmed, ":"))
+	lowered := strings.ToLower(trimmed)
+
+	switch lowered {
+	case "답변", "answer", "결론", "판단", "1. 답변", "1) 답변", "1. answer", "1) answer":
+		return "answer"
+	case "근거", "evidence", "데이터 근거", "2. 근거", "2) 근거", "2. evidence", "2) evidence":
+		return "evidence"
+	case "가이드", "guide", "실천 가이드", "행동 가이드", "3. 가이드", "3) 가이드", "3. guide", "3) guide":
+		return "guide"
+	default:
+		return ""
+	}
+}
+
+func buildAnswerEvidenceGuideFallback(answer string) (string, string, string) {
+	lines := splitNonEmptyLines(answer)
+	if len(lines) == 0 {
+		return "", "", ""
+	}
+
+	firstLine := strings.TrimSpace(stripSmalltalkListPrefix(lines[0]))
+	firstLine = strings.TrimSpace(strings.Trim(firstLine, "*`"))
+	if normalizeAEGSectionLabel(firstLine) != "" && len(lines) > 1 {
+		firstLine = strings.TrimSpace(stripSmalltalkListPrefix(lines[1]))
+	}
+	answerSection := strings.Join(strings.Fields(firstLine), " ")
+	if answerSection == "" {
+		answerSection = strings.Join(strings.Fields(strings.TrimSpace(answer)), " ")
+	}
+	answerSection = truncateRunes(answerSection, 220)
+
+	remainder := make([]string, 0, len(lines))
+	for idx, raw := range lines {
+		if idx == 0 {
+			continue
+		}
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		if normalizeAEGSectionLabel(line) != "" {
+			continue
+		}
+		remainder = append(remainder, line)
+	}
+
+	evidenceLines := make([]string, 0, len(remainder))
+	guideLines := make([]string, 0, len(remainder))
+	for _, line := range remainder {
+		lowered := strings.ToLower(line)
+		if containsAnyKeyword(lowered, []string{
+			"하세요", "해보세요", "권장", "관찰", "확인", "내원", "응급", "병원",
+			"monitor", "check", "follow", "visit", "go to",
+		}) {
+			guideLines = append(guideLines, line)
+			continue
+		}
+		evidenceLines = append(evidenceLines, line)
+	}
+
+	evidenceSection := strings.TrimSpace(strings.Join(evidenceLines, "\n"))
+	if evidenceSection == "" {
+		evidenceSection = "기록만으로는 판단이 어렵습니다."
+	}
+
+	guideSection := strings.TrimSpace(strings.Join(guideLines, "\n"))
+	if guideSection == "" {
+		guideSection = "필요한 항목을 추가로 기록하고 변화가 있으면 다시 확인하세요."
+	}
+
+	return answerSection, evidenceSection, guideSection
 }
 
 func stripSmalltalkListPrefix(line string) string {

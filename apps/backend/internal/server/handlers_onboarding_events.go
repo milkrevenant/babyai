@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"log"
 	"net/http"
@@ -21,6 +22,13 @@ var startableManualEventTypes = map[string]struct{}{
 	"POO":        {},
 	"MEDICATION": {},
 	"MEMO":       {},
+}
+
+type onboardingDummySeedEvent struct {
+	Type      string
+	StartTime time.Time
+	EndTime   *time.Time
+	Value     map[string]any
 }
 
 func (a *App) onboardingParent(c *gin.Context) {
@@ -171,6 +179,24 @@ func (a *App) onboardingParent(c *gin.Context) {
 		}
 	}
 
+	dummySeeded := false
+	dummySeededCount := 0
+	if a.cfg.OnboardingSeedDummyData {
+		seededCount, seedErr := a.seedOnboardingDummyData(
+			c.Request.Context(),
+			tx,
+			babyID,
+			user.ID,
+			birthDate.UTC(),
+		)
+		if seedErr != nil {
+			log.Printf("onboarding dummy seed failed baby_id=%s user_id=%s err=%v", babyID, user.ID, seedErr)
+		} else if seededCount > 0 {
+			dummySeeded = true
+			dummySeededCount = seededCount
+		}
+	}
+
 	if err := recordAuditLog(
 		c.Request.Context(),
 		tx,
@@ -196,7 +222,130 @@ func (a *App) onboardingParent(c *gin.Context) {
 		"baby_id":              babyID,
 		"baby_profile_created": true,
 		"provider":             provider,
+		"dummy_seeded":         dummySeeded,
+		"dummy_seeded_count":   dummySeededCount,
 	})
+}
+
+func buildOnboardingDummySeedEvents(nowUTC time.Time) []onboardingDummySeedEvent {
+	at := func(offset time.Duration) time.Time {
+		return nowUTC.Add(offset).UTC()
+	}
+	withEnd := func(start time.Time, duration time.Duration) *time.Time {
+		end := start.Add(duration).UTC()
+		return &end
+	}
+
+	sleepNightStart := at(-16 * time.Hour)
+	sleepNap1Start := at(-11 * time.Hour)
+	sleepNap2Start := at(-7 * time.Hour)
+	sleepNap3Start := at(-4 * time.Hour)
+
+	return []onboardingDummySeedEvent{
+		{Type: "SLEEP", StartTime: sleepNightStart, EndTime: withEnd(sleepNightStart, 3*time.Hour+20*time.Minute), Value: map[string]any{"sleep_type": "night"}},
+		{Type: "FORMULA", StartTime: at(-13*time.Hour - 30*time.Minute), Value: map[string]any{"ml": 145}},
+		{Type: "SLEEP", StartTime: sleepNap1Start, EndTime: withEnd(sleepNap1Start, 58*time.Minute), Value: map[string]any{"sleep_type": "nap"}},
+		{Type: "FORMULA", StartTime: at(-10 * time.Hour), Value: map[string]any{"ml": 125}},
+		{Type: "PEE", StartTime: at(-9*time.Hour - 35*time.Minute), Value: map[string]any{"count": 1}},
+		{Type: "FORMULA", StartTime: at(-8*time.Hour - 15*time.Minute), Value: map[string]any{"ml": 130}},
+		{Type: "POO", StartTime: at(-7*time.Hour - 50*time.Minute), Value: map[string]any{"count": 1}},
+		{Type: "SLEEP", StartTime: sleepNap2Start, EndTime: withEnd(sleepNap2Start, 42*time.Minute), Value: map[string]any{"sleep_type": "nap"}},
+		{Type: "FORMULA", StartTime: at(-6 * time.Hour), Value: map[string]any{"ml": 90}},
+		{Type: "SLEEP", StartTime: sleepNap3Start, EndTime: withEnd(sleepNap3Start, 36*time.Minute), Value: map[string]any{"sleep_type": "nap"}},
+		{Type: "FORMULA", StartTime: at(-2*time.Hour - 30*time.Minute), Value: map[string]any{"ml": 150}},
+		{Type: "MEDICATION", StartTime: at(-95 * time.Minute), Value: map[string]any{"name": "vitamin-d", "dose": "1drop"}},
+		{Type: "MEMO", StartTime: at(-75 * time.Minute), Value: map[string]any{"category": "WEANING", "memo": "쌀미음 70g"}},
+	}
+}
+
+func (a *App) seedOnboardingDummyData(
+	ctx context.Context,
+	tx pgx.Tx,
+	babyID string,
+	userID string,
+	birthDateUTC time.Time,
+) (int, error) {
+	nowUTC := time.Now().UTC()
+	events := buildOnboardingDummySeedEvents(nowUTC)
+	if len(events) == 0 {
+		return 0, nil
+	}
+
+	insertedCount := 0
+	for _, item := range events {
+		if strings.TrimSpace(item.Type) == "" {
+			continue
+		}
+		startUTC := item.StartTime.UTC()
+		if startUTC.After(nowUTC) {
+			continue
+		}
+		if !birthDateUTC.IsZero() && startUTC.Before(birthDateUTC) {
+			continue
+		}
+
+		var endTime any
+		projectEndTime := item.EndTime
+		if item.EndTime != nil {
+			endUTC := item.EndTime.UTC()
+			if endUTC.After(nowUTC) {
+				endUTC = nowUTC
+			}
+			if endUTC.After(startUTC) {
+				endTime = endUTC
+				projectEndTime = &endUTC
+			} else {
+				endTime = nil
+				projectEndTime = nil
+			}
+		} else {
+			endTime = nil
+		}
+
+		value := item.Value
+		if value == nil {
+			value = map[string]any{}
+		}
+		metadata := map[string]any{
+			"entry_mode":  "dummy_seed",
+			"event_state": "CLOSED",
+			"dummy_seed":  true,
+		}
+
+		eventID := uuid.NewString()
+		if _, err := tx.Exec(
+			ctx,
+			`INSERT INTO "Event" (
+				id, "babyId", type, "startTime", "endTime", "valueJson", "metadataJson", source, "createdBy", "createdAt"
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, 'MANUAL', $8, NOW())`,
+			eventID,
+			babyID,
+			item.Type,
+			startUTC,
+			endTime,
+			mustMarshalJSON(value),
+			mustMarshalJSON(metadata),
+			userID,
+		); err != nil {
+			return insertedCount, err
+		}
+
+		if err := a.projectEventToPRDTables(
+			ctx,
+			tx,
+			babyID,
+			item.Type,
+			startUTC,
+			projectEndTime,
+			value,
+		); err != nil {
+			log.Printf("projectEventToPRDTables warning dummy_seed baby_id=%s event_type=%s err=%v", babyID, item.Type, err)
+		}
+
+		insertedCount++
+	}
+
+	return insertedCount, nil
 }
 
 func (a *App) parseVoiceEvent(c *gin.Context) {
