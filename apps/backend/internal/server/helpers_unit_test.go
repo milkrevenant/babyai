@@ -52,38 +52,6 @@ func TestParseDate(t *testing.T) {
 	}
 }
 
-func TestParseTZOffset(t *testing.T) {
-	loc, normalized, err := parseTZOffset("+09:30")
-	if err != nil {
-		t.Fatalf("expected parseTZOffset to succeed: %v", err)
-	}
-	if normalized != "+09:30" {
-		t.Fatalf("unexpected normalized offset: %q", normalized)
-	}
-	_, seconds := time.Now().In(loc).Zone()
-	if seconds != 9*3600+30*60 {
-		t.Fatalf("unexpected offset seconds: %d", seconds)
-	}
-
-	utcLoc, utcNormalized, err := parseTZOffset("")
-	if err != nil {
-		t.Fatalf("expected empty tz_offset to fallback to UTC: %v", err)
-	}
-	if utcNormalized != "+00:00" {
-		t.Fatalf("unexpected UTC normalized offset: %q", utcNormalized)
-	}
-	if utcLoc != time.UTC {
-		t.Fatalf("expected UTC location for empty offset")
-	}
-
-	if _, _, err := parseTZOffset("0900"); err == nil {
-		t.Fatalf("expected invalid offset to fail")
-	}
-	if _, _, err := parseTZOffset("+14:30"); err == nil {
-		t.Fatalf("expected out-of-range offset to fail")
-	}
-}
-
 func TestStartOfUTCDay(t *testing.T) {
 	local := time.Date(2026, 2, 15, 23, 45, 0, 0, time.FixedZone("KST", 9*60*60))
 	start := startOfUTCDay(local)

@@ -84,15 +84,6 @@ type chatHTTPError struct {
 	Credit *creditSnapshot
 }
 
-type aiIntent string
-
-const (
-	aiIntentMedicalRelated aiIntent = "medical_related"
-	aiIntentDataQuery      aiIntent = "data_query"
-	aiIntentCareRoutine    aiIntent = "care_routine"
-	aiIntentSmalltalk      aiIntent = "smalltalk"
-)
-
 const (
 	chatConversationTurnLimit = 30
 	chatMemorySummaryCharMax  = 3200
@@ -102,49 +93,6 @@ const (
 
 func (e *chatHTTPError) Error() string {
 	return e.Detail
-}
-
-func classifyAIIntent(question string) aiIntent {
-	normalized := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(question)), " "))
-	if normalized == "" {
-		return aiIntentSmalltalk
-	}
-
-	medicalKeywords := []string{
-		"fever", "temp", "temperature", "diarrhea", "vomit", "rash", "cough", "blood",
-		"medication", "medicine", "antibiotic", "emergency", "hospital", "pediatric",
-	}
-	if containsAnyKeyword(normalized, medicalKeywords) {
-		return aiIntentMedicalRelated
-	}
-
-	dataKeywords := []string{
-		"how many", "count", "total", "last", "when", "eta", "summary", "trend",
-		"record", "history", "stats", "average", "interval",
-	}
-	if containsAnyKeyword(normalized, dataKeywords) {
-		return aiIntentDataQuery
-	}
-
-	careKeywords := []string{
-		"sleep", "nap", "night sleep", "routine", "schedule", "pattern", "feeding plan",
-		"bedtime", "wake", "soothe", "care plan",
-	}
-	if containsAnyKeyword(normalized, careKeywords) {
-		return aiIntentCareRoutine
-	}
-
-	casualKeywords := []string{
-		"thanks", "thank you", "ok", "okay", "got it", "hello", "hi", "tired", "hungry",
-	}
-	if containsAnyKeyword(normalized, casualKeywords) {
-		return aiIntentSmalltalk
-	}
-	if len([]rune(normalized)) <= 8 {
-		return aiIntentSmalltalk
-	}
-
-	return aiIntentSmalltalk
 }
 
 func (a *App) createChatSession(c *gin.Context) {
@@ -537,6 +485,77 @@ func (a *App) chatQuery(c *gin.Context) {
 		"credit":         creditMap(result.Credit),
 		"context":        result.ContextMeta,
 		"reference_text": result.ReferenceText,
+	})
+}
+
+func (a *App) aiQuery(c *gin.Context) {
+	user, ok := authUserFromContext(c)
+	if !ok {
+		writeError(c, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	var payload aiQueryRequest
+	if !mustJSON(c, &payload) {
+		return
+	}
+	payload.Tone = normalizeTone(payload.Tone)
+	payload.BabyID = strings.TrimSpace(payload.BabyID)
+	if payload.BabyID == "" {
+		writeError(c, http.StatusBadRequest, "baby_id is required")
+		return
+	}
+	if strings.TrimSpace(payload.Question) == "" {
+		writeError(c, http.StatusBadRequest, "question is required")
+		return
+	}
+
+	baby, statusCode, err := a.getBabyWithAccess(c.Request.Context(), user.ID, payload.BabyID, readRoles)
+	if err != nil {
+		writeError(c, statusCode, err.Error())
+		return
+	}
+
+	sessionID, err := a.getOrCreateCompatChatSession(c.Request.Context(), user.ID, baby.HouseholdID, baby.ID)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to prepare chat session")
+		return
+	}
+
+	result, err := a.runChatQuery(
+		c.Request.Context(),
+		user,
+		chatQueryRequest{
+			SessionID:       sessionID,
+			ChildID:         baby.ID,
+			Query:           payload.Question,
+			Tone:            payload.Tone,
+			UsePersonalData: payload.UsePersonalData,
+		},
+		baby.ID,
+	)
+	if err != nil {
+		a.writeChatExecutionError(c, err)
+		return
+	}
+
+	labels := []string{"general_information"}
+	if payload.UsePersonalData {
+		labels = []string{"record_based"}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"answer":            result.Answer,
+		"labels":            labels,
+		"tone":              payload.Tone,
+		"use_personal_data": payload.UsePersonalData,
+		"intent":            string(result.Intent),
+		"session_id":        result.SessionID,
+		"message_id":        result.AssistantMessageID,
+		"model":             result.Model,
+		"usage":             usageMap(result.Usage),
+		"credit":            creditMap(result.Credit),
+		"reference_text":    result.ReferenceText,
 	})
 }
 
