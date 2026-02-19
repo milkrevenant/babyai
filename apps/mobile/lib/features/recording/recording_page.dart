@@ -6,10 +6,31 @@ import "../../core/config/session_store.dart";
 import "../../core/i18n/app_i18n.dart";
 import "../../core/network/babyai_api.dart";
 import "../../core/theme/app_theme_controller.dart";
-import "../../core/widgets/simple_line_chart.dart";
+import "../../core/widgets/app_svg_icon.dart";
 import "record_entry_sheet.dart";
 
 enum RecordRange { day, week, month }
+
+enum _TimerActivity {
+  sleep,
+  formula,
+  breastfeed,
+  diaper,
+}
+
+class _CompletedTimerEntry {
+  const _CompletedTimerEntry({
+    required this.activity,
+    required this.startAt,
+    required this.endAt,
+  });
+
+  final _TimerActivity activity;
+  final DateTime startAt;
+  final DateTime endAt;
+
+  Duration get duration => endAt.difference(startAt);
+}
 
 class RecordingPage extends StatefulWidget {
   const RecordingPage({
@@ -29,34 +50,35 @@ class RecordingPageState extends State<RecordingPage> {
 
   String? _snapshotError;
   Map<String, dynamic>? _snapshot;
+  Timer? _clockTicker;
+  DateTime _now = DateTime.now();
+  _TimerActivity _selectedTimerActivity = _TimerActivity.sleep;
+  _TimerActivity? _activeTimerActivity;
+  DateTime? _activeTimerStartedAt;
+  _CompletedTimerEntry? _latestTimerEntry;
 
   @override
   void initState() {
     super.initState();
+    final DateTime? pendingSleepStart =
+        AppSessionStore.pendingSleepStart?.toLocal();
+    if (pendingSleepStart != null) {
+      _selectedTimerActivity = _TimerActivity.sleep;
+      _activeTimerActivity = _TimerActivity.sleep;
+      _activeTimerStartedAt = pendingSleepStart;
+    }
+    _clockTicker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) {
+        setState(() => _now = DateTime.now());
+      }
+    });
     unawaited(_loadLandingSnapshot());
   }
 
   @override
-  void didUpdateWidget(covariant RecordingPage oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.range != widget.range) {
-      unawaited(_loadLandingSnapshot());
-    }
-  }
-
-  Future<void> refreshData() async {
-    await _loadLandingSnapshot();
-  }
-
-  String _rangeApiValue() {
-    switch (widget.range) {
-      case RecordRange.day:
-        return "day";
-      case RecordRange.week:
-        return "week";
-      case RecordRange.month:
-        return "month";
-    }
+  void dispose() {
+    _clockTicker?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadLandingSnapshot() async {
@@ -66,8 +88,8 @@ class RecordingPageState extends State<RecordingPage> {
     });
 
     try {
-      final Map<String, dynamic> result = await BabyAIApi.instance
-          .quickLandingSnapshot(range: _rangeApiValue());
+      final Map<String, dynamic> result =
+          await BabyAIApi.instance.quickLandingSnapshot();
       if (!mounted) {
         return;
       }
@@ -84,6 +106,10 @@ class RecordingPageState extends State<RecordingPage> {
     }
   }
 
+  Future<void> refreshData() async {
+    await _loadLandingSnapshot();
+  }
+
   int? _asInt(dynamic value) {
     if (value is int) {
       return value;
@@ -97,100 +123,11 @@ class RecordingPageState extends State<RecordingPage> {
     return null;
   }
 
-  double? _asDouble(dynamic value) {
-    if (value is double) {
-      return value;
-    }
-    if (value is int) {
-      return value.toDouble();
-    }
-    if (value is String) {
-      return double.tryParse(value.trim());
-    }
-    return null;
-  }
-
   String? _asString(dynamic value) {
     if (value is String && value.trim().isNotEmpty) {
       return value.trim();
     }
     return null;
-  }
-
-  List<String> _asStringList(dynamic value) {
-    if (value is! List<dynamic>) {
-      return <String>[];
-    }
-    return value
-        .map((dynamic item) => item.toString().trim())
-        .where((String item) => item.isNotEmpty)
-        .toList();
-  }
-
-  List<double> _asDoubleList(dynamic value) {
-    if (value is! List<dynamic>) {
-      return <double>[];
-    }
-    return value
-        .map((dynamic item) => _asDouble(item))
-        .whereType<double>()
-        .toList();
-  }
-
-  Map<String, dynamic> _asStringDynamicMap(dynamic value) {
-    if (value is Map<String, dynamic>) {
-      return value;
-    }
-    if (value is Map) {
-      return value.map(
-        (dynamic key, dynamic mapValue) =>
-            MapEntry<String, dynamic>(key.toString(), mapValue),
-      );
-    }
-    return <String, dynamic>{};
-  }
-
-  Map<String, int> _asBandMap(dynamic value) {
-    if (value is! Map<dynamic, dynamic>) {
-      return <String, int>{
-        "night": 0,
-        "morning": 0,
-        "afternoon": 0,
-        "evening": 0,
-      };
-    }
-    return <String, int>{
-      "night": _asInt(value["night"]) ?? 0,
-      "morning": _asInt(value["morning"]) ?? 0,
-      "afternoon": _asInt(value["afternoon"]) ?? 0,
-      "evening": _asInt(value["evening"]) ?? 0,
-    };
-  }
-
-  String _formatTime(String? isoDateTime) {
-    if (isoDateTime == null) {
-      return "-";
-    }
-    try {
-      final DateTime dt = DateTime.parse(isoDateTime).toLocal();
-      final String hour = dt.hour.toString().padLeft(2, "0");
-      final String minute = dt.minute.toString().padLeft(2, "0");
-      return "$hour:$minute";
-    } catch (_) {
-      return isoDateTime;
-    }
-  }
-
-  String _formatDuration(int? minutes) {
-    if (minutes == null) {
-      return "-";
-    }
-    final int hours = minutes ~/ 60;
-    final int mins = minutes % 60;
-    if (hours == 0) {
-      return "${mins}m";
-    }
-    return "${hours}h ${mins}m";
   }
 
   int? _intFromPrefill(Map<String, dynamic> prefill, String key) {
@@ -224,7 +161,7 @@ class RecordingPageState extends State<RecordingPage> {
       return null;
     }
     final RegExpMatch? match = RegExp(
-      r"(\d{1,4})\s*(ml|mL|ML|cc|㎖|밀리)",
+      r"(\d{1,4})\s*(ml|mL|ML|cc|밀리|미리)",
       caseSensitive: false,
     ).firstMatch(text);
     if (match == null) {
@@ -238,11 +175,11 @@ class RecordingPageState extends State<RecordingPage> {
       return null;
     }
     final RegExp hourRegExp = RegExp(
-      r"(\d{1,2})\s*(시간|hour|hours|hr|hrs)",
+      r"(\d{1,2})\s*(hour|hours|hr|hrs|h|시간)",
       caseSensitive: false,
     );
     final RegExp minuteRegExp = RegExp(
-      r"(\d{1,3})\s*(분|min|mins|minute|minutes)",
+      r"(\d{1,3})\s*(min|mins|minute|minutes|m|분)",
       caseSensitive: false,
     );
 
@@ -272,86 +209,257 @@ class RecordingPageState extends State<RecordingPage> {
     }
   }
 
-  Map<String, dynamic>? _openPrefillForTile(
-    HomeTileType tile,
-    Map<String, dynamic> snapshot,
-  ) {
-    Map<String, dynamic>? build({
-      required String eventIdKey,
-      required String startTimeKey,
-      required String valueKey,
-      String? memoKey,
-      Map<String, dynamic> extras = const <String, dynamic>{},
-    }) {
-      final String? eventId = _asString(snapshot[eventIdKey]);
-      if (eventId == null) {
-        return null;
-      }
-      final Map<String, dynamic> value =
-          _asStringDynamicMap(snapshot[valueKey]);
-      return <String, dynamic>{
-        "open_event_id": eventId,
-        eventIdKey: eventId,
-        startTimeKey: _asString(snapshot[startTimeKey]),
-        valueKey: value,
-        if (memoKey != null && _asString(snapshot[memoKey]) != null)
-          "memo": _asString(snapshot[memoKey]),
-        if (memoKey != null) memoKey: _asString(snapshot[memoKey]),
-        ...extras,
-      };
+  String _rangeLabel() {
+    final DateTime now = DateTime.now();
+    switch (widget.range) {
+      case RecordRange.day:
+        return "${now.year}-${now.month.toString().padLeft(2, "0")}-${now.day.toString().padLeft(2, "0")}";
+      case RecordRange.week:
+        final DateTime monday = now.subtract(Duration(days: now.weekday - 1));
+        final DateTime sunday = monday.add(const Duration(days: 6));
+        return "${monday.month}/${monday.day} - ${sunday.month}/${sunday.day}";
+      case RecordRange.month:
+        return "${now.year}-${now.month.toString().padLeft(2, "0")}";
     }
+  }
 
+  String _formatActivityClock(Duration duration) {
+    final int safeSeconds = duration.inSeconds < 0 ? 0 : duration.inSeconds;
+    final int hours = safeSeconds ~/ 3600;
+    final int minutes = (safeSeconds % 3600) ~/ 60;
+    final int seconds = safeSeconds % 60;
+    return "${hours.toString().padLeft(2, "0")} : "
+        "${minutes.toString().padLeft(2, "0")} : "
+        "${seconds.toString().padLeft(2, "0")}";
+  }
+
+  String _formatAmPm(DateTime value) {
+    final int hour24 = value.hour;
+    final int hour12 = hour24 % 12 == 0 ? 12 : hour24 % 12;
+    final String minute = value.minute.toString().padLeft(2, "0");
+    final String period = hour24 >= 12 ? "오후" : "오전";
+    return "$hour12:$minute $period";
+  }
+
+  String _formatDateTimeLabel(DateTime? value) {
+    if (value == null) {
+      return "-";
+    }
+    final String month = value.month.toString().padLeft(2, "0");
+    final String day = value.day.toString().padLeft(2, "0");
+    return "$month/$day ${_formatAmPm(value)}";
+  }
+
+  String _formatCompactDuration(Duration duration) {
+    final int safeSeconds = duration.inSeconds < 0 ? 0 : duration.inSeconds;
+    final int hours = safeSeconds ~/ 3600;
+    final int minutes = (safeSeconds % 3600) ~/ 60;
+    final int seconds = safeSeconds % 60;
+    return "${hours.toString().padLeft(2, "0")}:"
+        "${minutes.toString().padLeft(2, "0")}:"
+        "${seconds.toString().padLeft(2, "0")}";
+  }
+
+  String _timerActivityLabel(_TimerActivity activity) {
+    switch (activity) {
+      case _TimerActivity.sleep:
+        return "수면";
+      case _TimerActivity.formula:
+        return "수유";
+      case _TimerActivity.breastfeed:
+        return "모유";
+      case _TimerActivity.diaper:
+        return "기저귀";
+    }
+  }
+
+  String _timerActivityAsset(_TimerActivity activity) {
+    switch (activity) {
+      case _TimerActivity.sleep:
+        return AppSvgAsset.sleepCrescentYellow;
+      case _TimerActivity.formula:
+      case _TimerActivity.breastfeed:
+        return AppSvgAsset.feeding;
+      case _TimerActivity.diaper:
+        return AppSvgAsset.diaper;
+    }
+  }
+
+  Color _timerActivityAccent(_TimerActivity activity) {
+    switch (activity) {
+      case _TimerActivity.sleep:
+        return const Color(0xFF9B7AD8);
+      case _TimerActivity.formula:
+      case _TimerActivity.breastfeed:
+        return const Color(0xFF2D9CDB);
+      case _TimerActivity.diaper:
+        return const Color(0xFF1CA79A);
+    }
+  }
+
+  String _relativeAgo(String? isoDateTime) {
+    final DateTime? parsed = _parseIsoDateTime(isoDateTime);
+    if (parsed == null) {
+      return "-";
+    }
+    final Duration diff = _now.difference(parsed);
+    if (diff.inMinutes < 1) {
+      return "방금 전";
+    }
+    if (diff.inMinutes < 60) {
+      return "${diff.inMinutes}분 전";
+    }
+    if (diff.inHours < 24) {
+      return "${diff.inHours}시간 전";
+    }
+    return "${diff.inDays}일 전";
+  }
+
+  List<HomeTileType> _visibleTiles(AppThemeController controller) {
+    final List<HomeTileType> tiles = HomeTileType.values
+        .where((HomeTileType tile) => controller.isHomeTileEnabled(tile))
+        .toList();
+    if (tiles.isNotEmpty) {
+      return tiles;
+    }
+    return <HomeTileType>[
+      HomeTileType.formula,
+      HomeTileType.diaper,
+      HomeTileType.sleep,
+    ];
+  }
+
+  List<HomeTileType> _dashboardTiles(AppThemeController controller) {
+    final List<HomeTileType> base = _visibleTiles(controller);
+    const List<HomeTileType> fallbackOrder = <HomeTileType>[
+      HomeTileType.formula,
+      HomeTileType.breastfeed,
+      HomeTileType.sleep,
+      HomeTileType.diaper,
+      HomeTileType.weaning,
+      HomeTileType.medication,
+      HomeTileType.memo,
+    ];
+    for (final HomeTileType tile in fallbackOrder) {
+      if (!base.contains(tile)) {
+        base.add(tile);
+      }
+      if (base.length >= 6) {
+        break;
+      }
+    }
+    return base.take(6).toList();
+  }
+
+  String _dashboardTileAsset(HomeTileType tile) {
     switch (tile) {
       case HomeTileType.formula:
-        return build(
-          eventIdKey: "open_formula_event_id",
-          startTimeKey: "open_formula_start_time",
-          valueKey: "open_formula_value",
-          memoKey: "open_formula_memo",
-        );
       case HomeTileType.breastfeed:
-        return build(
-          eventIdKey: "open_breastfeed_event_id",
-          startTimeKey: "open_breastfeed_start_time",
-          valueKey: "open_breastfeed_value",
-          memoKey: "open_breastfeed_memo",
-        );
-      case HomeTileType.weaning:
-        return build(
-          eventIdKey: "open_weaning_event_id",
-          startTimeKey: "open_weaning_start_time",
-          valueKey: "open_weaning_value",
-          memoKey: "open_weaning_memo",
-        );
-      case HomeTileType.diaper:
-        return build(
-          eventIdKey: "open_diaper_event_id",
-          startTimeKey: "open_diaper_start_time",
-          valueKey: "open_diaper_value",
-          memoKey: "open_diaper_memo",
-          extras: <String, dynamic>{
-            if (_asString(snapshot["open_diaper_type"]) != null)
-              "diaper_type": _asString(snapshot["open_diaper_type"]),
-            if (_asString(snapshot["open_diaper_type"]) != null)
-              "open_diaper_type": _asString(snapshot["open_diaper_type"]),
-          },
-        );
+        return AppSvgAsset.feeding;
       case HomeTileType.sleep:
-        return build(
-          eventIdKey: "open_sleep_event_id",
-          startTimeKey: "open_sleep_start_time",
-          valueKey: "open_sleep_value",
-          memoKey: "open_sleep_memo",
-        );
+        return AppSvgAsset.sleepCrescentYellow;
+      case HomeTileType.diaper:
+        return AppSvgAsset.diaper;
+      case HomeTileType.weaning:
+        return AppSvgAsset.playCar;
       case HomeTileType.medication:
-        return build(
-          eventIdKey: "open_medication_event_id",
-          startTimeKey: "open_medication_start_time",
-          valueKey: "open_medication_value",
-          memoKey: "open_medication_memo",
-        );
+        return AppSvgAsset.medicine;
       case HomeTileType.memo:
-        return null;
+        return AppSvgAsset.clinicStethoscope;
+    }
+  }
+
+  String _dashboardTileLabel(HomeTileType tile) {
+    switch (tile) {
+      case HomeTileType.formula:
+        return "수유";
+      case HomeTileType.breastfeed:
+        return "모유";
+      case HomeTileType.sleep:
+        return "수면";
+      case HomeTileType.diaper:
+        return "기저귀";
+      case HomeTileType.weaning:
+        return "놀이";
+      case HomeTileType.medication:
+        return "투약";
+      case HomeTileType.memo:
+        return "진료";
+    }
+  }
+
+  Color _dashboardTileAccent(HomeTileType tile) {
+    switch (tile) {
+      case HomeTileType.formula:
+      case HomeTileType.breastfeed:
+        return const Color(0xFF2D9CDB);
+      case HomeTileType.sleep:
+        return const Color(0xFF9B7AD8);
+      case HomeTileType.diaper:
+        return const Color(0xFF1CA79A);
+      case HomeTileType.weaning:
+        return const Color(0xFFF09819);
+      case HomeTileType.medication:
+        return const Color(0xFFE84076);
+      case HomeTileType.memo:
+        return const Color(0xFFA546C9);
+    }
+  }
+
+  RecordEntryInput _buildTimerRecordInput({
+    required _TimerActivity activity,
+    required DateTime startAt,
+    required DateTime endAt,
+  }) {
+    final int durationSeconds = endAt.difference(startAt).inSeconds;
+    final int safeDurationSeconds = durationSeconds < 0 ? 0 : durationSeconds;
+    final int safeDurationMinutes = safeDurationSeconds ~/ 60;
+    switch (activity) {
+      case _TimerActivity.sleep:
+        return RecordEntryInput(
+          type: "SLEEP",
+          startTime: startAt,
+          endTime: endAt,
+          value: <String, dynamic>{
+            "duration_min": safeDurationMinutes,
+            "duration_sec": safeDurationSeconds,
+          },
+          metadata: const <String, dynamic>{"timer_activity": "SLEEP"},
+        );
+      case _TimerActivity.formula:
+        return RecordEntryInput(
+          type: "FORMULA",
+          startTime: startAt,
+          endTime: endAt,
+          value: <String, dynamic>{
+            "duration_min": safeDurationMinutes,
+            "duration_sec": safeDurationSeconds,
+          },
+          metadata: const <String, dynamic>{"timer_activity": "FORMULA"},
+        );
+      case _TimerActivity.breastfeed:
+        return RecordEntryInput(
+          type: "BREASTFEED",
+          startTime: startAt,
+          endTime: endAt,
+          value: <String, dynamic>{
+            "duration_min": safeDurationMinutes,
+            "duration_sec": safeDurationSeconds,
+          },
+          metadata: const <String, dynamic>{"timer_activity": "BREASTFEED"},
+        );
+      case _TimerActivity.diaper:
+        return RecordEntryInput(
+          type: "PEE",
+          startTime: startAt,
+          endTime: endAt,
+          value: <String, dynamic>{
+            "count": 1,
+            "duration_min": safeDurationMinutes,
+            "duration_sec": safeDurationSeconds,
+          },
+          metadata: const <String, dynamic>{"timer_activity": "PEE"},
+        );
     }
   }
 
@@ -364,46 +472,6 @@ class RecordingPageState extends State<RecordingPage> {
 
     switch (tile) {
       case HomeTileType.formula:
-        final String action =
-            (_stringFromPrefill(prefill, "entry_action") ?? "").toLowerCase();
-        final String? openFormulaEventId =
-            _stringFromPrefill(prefill, "open_event_id") ??
-                _stringFromPrefill(prefill, "open_formula_event_id");
-        if (openFormulaEventId != null && openFormulaEventId.isNotEmpty) {
-          final DateTime openStart = _parseIsoDateTime(
-                  _stringFromPrefill(prefill, "open_start_time") ??
-                      _stringFromPrefill(prefill, "open_formula_start_time")) ??
-              now;
-          final int amount = _intFromPrefill(prefill, "amount_ml") ??
-              _extractAmountMlFromText(query) ??
-              0;
-          return RecordEntryInput(
-            type: "FORMULA",
-            startTime: openStart,
-            endTime: now,
-            value: <String, dynamic>{
-              if (amount > 0) "ml": amount,
-              "duration_min":
-                  now.difference(openStart).inMinutes.clamp(0, 24 * 60),
-            },
-            lifecycleAction: RecordLifecycleAction.completeOpen,
-            targetEventId: openFormulaEventId,
-          );
-        }
-        if (action == "end" || action == "complete") {
-          return null;
-        }
-        if (action == "start") {
-          return RecordEntryInput(
-            type: "FORMULA",
-            startTime: now,
-            value: <String, dynamic>{
-              if (_intFromPrefill(prefill, "amount_ml") != null)
-                "ml": _intFromPrefill(prefill, "amount_ml"),
-            },
-            lifecycleAction: RecordLifecycleAction.startOnly,
-          );
-        }
         final int amount = _intFromPrefill(prefill, "amount_ml") ??
             _extractAmountMlFromText(query) ??
             0;
@@ -416,44 +484,6 @@ class RecordingPageState extends State<RecordingPage> {
           value: <String, dynamic>{"ml": amount},
         );
       case HomeTileType.breastfeed:
-        final String action =
-            (_stringFromPrefill(prefill, "entry_action") ?? "").toLowerCase();
-        final String? openBreastfeedEventId =
-            _stringFromPrefill(prefill, "open_event_id") ??
-                _stringFromPrefill(prefill, "open_breastfeed_event_id");
-        if (openBreastfeedEventId != null && openBreastfeedEventId.isNotEmpty) {
-          final DateTime openStart = _parseIsoDateTime(_stringFromPrefill(
-                      prefill, "open_start_time") ??
-                  _stringFromPrefill(prefill, "open_breastfeed_start_time")) ??
-              now;
-          final int duration = now.difference(openStart).inMinutes;
-          return RecordEntryInput(
-            type: "BREASTFEED",
-            startTime: openStart,
-            endTime: now,
-            value: <String, dynamic>{
-              "duration_min": duration < 0 ? 0 : duration,
-              if (_stringFromPrefill(prefill, "memo") != null)
-                "memo": _stringFromPrefill(prefill, "memo"),
-            },
-            lifecycleAction: RecordLifecycleAction.completeOpen,
-            targetEventId: openBreastfeedEventId,
-          );
-        }
-        if (action == "end" || action == "complete") {
-          return null;
-        }
-        if (action == "start") {
-          return RecordEntryInput(
-            type: "BREASTFEED",
-            startTime: now,
-            value: <String, dynamic>{
-              if (_stringFromPrefill(prefill, "memo") != null)
-                "memo": _stringFromPrefill(prefill, "memo"),
-            },
-            lifecycleAction: RecordLifecycleAction.startOnly,
-          );
-        }
         final int duration = _intFromPrefill(prefill, "duration_min") ??
             _extractDurationMinFromText(query) ??
             0;
@@ -464,159 +494,35 @@ class RecordingPageState extends State<RecordingPage> {
           value: <String, dynamic>{"duration_min": duration},
         );
       case HomeTileType.weaning:
-        final String action =
-            (_stringFromPrefill(prefill, "entry_action") ?? "").toLowerCase();
-        final String? openWeaningEventId =
-            _stringFromPrefill(prefill, "open_event_id") ??
-                _stringFromPrefill(prefill, "open_weaning_event_id");
-        final String memo = _stringFromPrefill(prefill, "memo") ?? query.trim();
-        final String weaningType =
-            (_stringFromPrefill(prefill, "weaning_type") ?? "meal")
-                .toLowerCase();
-        final int? grams = _intFromPrefill(prefill, "grams");
-        if (openWeaningEventId != null && openWeaningEventId.isNotEmpty) {
-          final DateTime openStart = _parseIsoDateTime(
-                  _stringFromPrefill(prefill, "open_start_time") ??
-                      _stringFromPrefill(prefill, "open_weaning_start_time")) ??
-              now;
-          return RecordEntryInput(
-            type: "MEMO",
-            startTime: openStart,
-            endTime: now,
-            value: <String, dynamic>{
-              "memo": memo.isEmpty ? "이유식" : memo,
-              "category": "WEANING",
-              "weaning_type": weaningType,
-              if (grams != null && grams > 0) "grams": grams,
-              "duration_min":
-                  now.difference(openStart).inMinutes.clamp(0, 24 * 60),
-            },
-            metadata: <String, dynamic>{
-              "entry_kind": "WEANING",
-              "weaning_type": weaningType,
-            },
-            lifecycleAction: RecordLifecycleAction.completeOpen,
-            targetEventId: openWeaningEventId,
-          );
-        }
-        if (action == "end" || action == "complete") {
-          return null;
-        }
-        if (action == "start") {
-          return RecordEntryInput(
-            type: "MEMO",
-            startTime: now,
-            value: <String, dynamic>{
-              if (memo.isNotEmpty) "memo": memo,
-              "category": "WEANING",
-              "weaning_type": weaningType,
-              if (grams != null && grams > 0) "grams": grams,
-            },
-            metadata: <String, dynamic>{
-              "entry_kind": "WEANING",
-              "weaning_type": weaningType,
-            },
-            lifecycleAction: RecordLifecycleAction.startOnly,
-          );
-        }
-        if (memo.isEmpty && grams == null) {
-          return null;
-        }
-        return RecordEntryInput(
-          type: "MEMO",
-          startTime: now,
-          value: <String, dynamic>{
-            "memo": memo.isEmpty ? "이유식" : memo,
-            "category": "WEANING",
-            "weaning_type": weaningType,
-            if (grams != null && grams > 0) "grams": grams,
-          },
-          metadata: <String, dynamic>{
-            "entry_kind": "WEANING",
-            "weaning_type": weaningType,
-          },
-        );
+        return null;
       case HomeTileType.diaper:
-        final String action =
-            (_stringFromPrefill(prefill, "entry_action") ?? "").toLowerCase();
-        final String? openDiaperEventId =
-            _stringFromPrefill(prefill, "open_event_id") ??
-                _stringFromPrefill(prefill, "open_diaper_event_id");
-        String diaperType = (_stringFromPrefill(prefill, "diaper_type") ??
-                _stringFromPrefill(prefill, "open_diaper_type") ??
-                "")
-            .toUpperCase();
+        String diaperType =
+            (_stringFromPrefill(prefill, "diaper_type") ?? "").toUpperCase();
         if (diaperType != "PEE" && diaperType != "POO") {
           final String lowered = query.toLowerCase();
-          if (lowered.contains("대변") ||
-              lowered.contains("응가") ||
-              lowered.contains("똥") ||
-              lowered.contains("poo") ||
-              lowered.contains("poop")) {
+          if (lowered.contains("poo") ||
+              lowered.contains("poop") ||
+              lowered.contains("대변") ||
+              lowered.contains("응가")) {
             diaperType = "POO";
-          } else if (lowered.contains("소변") ||
-              lowered.contains("오줌") ||
-              lowered.contains("pee") ||
-              lowered.contains("urine")) {
+          } else if (lowered.contains("pee") ||
+              lowered.contains("urine") ||
+              lowered.contains("소변") ||
+              lowered.contains("오줌")) {
             diaperType = "PEE";
           } else {
             return null;
           }
         }
-        if (openDiaperEventId != null && openDiaperEventId.isNotEmpty) {
-          final DateTime openStart = _parseIsoDateTime(
-                  _stringFromPrefill(prefill, "open_start_time") ??
-                      _stringFromPrefill(prefill, "open_diaper_start_time")) ??
-              now;
-          return RecordEntryInput(
-            type: diaperType,
-            startTime: openStart,
-            endTime: now,
-            value: <String, dynamic>{
-              "count": 1,
-              "diaper_type": diaperType,
-              "duration_min":
-                  now.difference(openStart).inMinutes.clamp(0, 24 * 60),
-            },
-            lifecycleAction: RecordLifecycleAction.completeOpen,
-            targetEventId: openDiaperEventId,
-          );
-        }
-        if (action == "end" || action == "complete") {
-          return null;
-        }
-        if (action == "start") {
-          return RecordEntryInput(
-            type: diaperType,
-            startTime: now,
-            value: <String, dynamic>{
-              "count": 1,
-              "diaper_type": diaperType,
-            },
-            lifecycleAction: RecordLifecycleAction.startOnly,
-          );
-        }
         return RecordEntryInput(
           type: diaperType,
           startTime: now,
-          value: <String, dynamic>{
-            "count": 1,
-            "diaper_type": diaperType,
-          },
+          value: const <String, dynamic>{"count": 1},
         );
       case HomeTileType.sleep:
-        final String? openSleepEventId = _stringFromPrefill(
-              prefill,
-              "open_event_id",
-            ) ??
-            _stringFromPrefill(prefill, "open_sleep_event_id");
         final String action =
             (_stringFromPrefill(prefill, "sleep_action") ?? "").toLowerCase();
-        final String genericAction =
-            (_stringFromPrefill(prefill, "entry_action") ?? "").toLowerCase();
-        final String resolvedAction =
-            action.isNotEmpty ? action : genericAction;
-        if (resolvedAction == "start") {
+        if (action == "start") {
           return RecordEntryInput(
             type: "SLEEP",
             startTime: now,
@@ -624,13 +530,12 @@ class RecordingPageState extends State<RecordingPage> {
               "duration_min": 0,
               "sleep_action": "START",
             },
-            lifecycleAction: RecordLifecycleAction.startOnly,
           );
         }
-        if (resolvedAction == "end" || resolvedAction == "complete") {
+        if (action == "end") {
           final DateTime? storedStart = _parseIsoDateTime(
-                  _stringFromPrefill(prefill, "sleep_start_time") ??
-                      _stringFromPrefill(prefill, "open_sleep_start_time")) ??
+                _stringFromPrefill(prefill, "sleep_start_time"),
+              ) ??
               AppSessionStore.pendingSleepStart?.toLocal();
           final DateTime start = storedStart == null || storedStart.isAfter(now)
               ? now
@@ -644,11 +549,6 @@ class RecordingPageState extends State<RecordingPage> {
               "duration_min": duration < 0 ? 0 : duration,
               "sleep_action": "END",
             },
-            lifecycleAction:
-                openSleepEventId != null && openSleepEventId.isNotEmpty
-                    ? RecordLifecycleAction.completeOpen
-                    : RecordLifecycleAction.createClosed,
-            targetEventId: openSleepEventId,
           );
         }
         final int duration = _intFromPrefill(prefill, "duration_min") ??
@@ -661,52 +561,13 @@ class RecordingPageState extends State<RecordingPage> {
           value: <String, dynamic>{"duration_min": duration},
         );
       case HomeTileType.medication:
-        final String action =
-            (_stringFromPrefill(prefill, "entry_action") ?? "").toLowerCase();
-        final String? openMedicationEventId =
-            _stringFromPrefill(prefill, "open_event_id") ??
-                _stringFromPrefill(prefill, "open_medication_event_id");
         final String? name = _stringFromPrefill(prefill, "medication_name") ??
-            _stringFromPrefill(prefill, "name") ??
             _stringFromPrefill(prefill, "memo") ??
             _stringFromPrefill(prefill, "query");
-        final int? dose = _intFromPrefill(prefill, "dose");
-        if (openMedicationEventId != null && openMedicationEventId.isNotEmpty) {
-          final DateTime openStart = _parseIsoDateTime(_stringFromPrefill(
-                      prefill, "open_start_time") ??
-                  _stringFromPrefill(prefill, "open_medication_start_time")) ??
-              now;
-          return RecordEntryInput(
-            type: "MEDICATION",
-            startTime: openStart,
-            endTime: now,
-            value: <String, dynamic>{
-              if (name != null && name.isNotEmpty) "name": name,
-              if (dose != null && dose > 0) "dose": dose,
-              "duration_min":
-                  now.difference(openStart).inMinutes.clamp(0, 24 * 60),
-            },
-            lifecycleAction: RecordLifecycleAction.completeOpen,
-            targetEventId: openMedicationEventId,
-          );
-        }
-        if (action == "end" || action == "complete") {
-          return null;
-        }
-        if (action == "start") {
-          return RecordEntryInput(
-            type: "MEDICATION",
-            startTime: now,
-            value: <String, dynamic>{
-              if (name != null && name.isNotEmpty) "name": name,
-              if (dose != null && dose > 0) "dose": dose,
-            },
-            lifecycleAction: RecordLifecycleAction.startOnly,
-          );
-        }
         if (name == null || name.isEmpty) {
           return null;
         }
+        final int? dose = _intFromPrefill(prefill, "dose");
         return RecordEntryInput(
           type: "MEDICATION",
           startTime: now,
@@ -730,80 +591,50 @@ class RecordingPageState extends State<RecordingPage> {
   }
 
   Future<void> _persistSleepMarker(RecordEntryInput input) async {
-    if (input.type == "SLEEP") {
-      if (input.lifecycleAction == RecordLifecycleAction.startOnly) {
-        await AppSessionStore.setPendingSleepStart(input.startTime.toUtc());
-      } else {
-        await AppSessionStore.setPendingSleepStart(null);
-      }
+    if (input.type != "SLEEP") {
+      return;
     }
-    if (input.type == "FORMULA") {
-      if (input.lifecycleAction == RecordLifecycleAction.startOnly) {
-        await AppSessionStore.setPendingFormulaStart(input.startTime.toUtc());
-      } else {
-        await AppSessionStore.setPendingFormulaStart(null);
-      }
+    if (input.endTime == null) {
+      await AppSessionStore.setPendingSleepStart(input.startTime.toUtc());
+    } else {
+      await AppSessionStore.setPendingSleepStart(null);
     }
   }
 
-  Future<void> _saveEntryInput(
+  Future<bool> _saveEntryInput(
     RecordEntryInput input, {
     String? successMessage,
   }) async {
     setState(() => _entrySaving = true);
+    bool saved = false;
     try {
-      switch (input.lifecycleAction) {
-        case RecordLifecycleAction.startOnly:
-          await BabyAIApi.instance.startManualEvent(
-            type: input.type,
-            startTime: input.startTime,
-            value: input.value,
-            metadata: input.metadata,
-          );
-          break;
-        case RecordLifecycleAction.completeOpen:
-          final String targetEventId = (input.targetEventId ?? "").trim();
-          if (targetEventId.isEmpty) {
-            throw ApiFailure("Missing in-progress event id to complete.");
-          }
-          await BabyAIApi.instance.completeManualEvent(
-            eventId: targetEventId,
-            endTime: input.endTime,
-            value: input.value,
-            metadata: input.metadata,
-          );
-          break;
-        case RecordLifecycleAction.createClosed:
-          await BabyAIApi.instance.createManualEvent(
-            type: input.type,
-            startTime: input.startTime,
-            endTime: input.endTime,
-            value: input.value,
-            metadata: input.metadata,
-          );
-          break;
-      }
+      await BabyAIApi.instance.createManualEvent(
+        type: input.type,
+        startTime: input.startTime,
+        endTime: input.endTime,
+        value: input.value,
+        metadata: input.metadata,
+      );
       await _persistSleepMarker(input);
       await _loadLandingSnapshot();
       if (!mounted) {
-        return;
+        return false;
       }
+      saved = true;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
             successMessage ??
-                tr(
-                  context,
-                  ko: "기록이 저장되었습니다.",
-                  en: "Record saved.",
-                  es: "Registro guardado.",
-                ),
+                tr(context,
+                    ko: "기록이 저장되었어요.",
+                    en: "Record saved.",
+                    es: "Registro guardado."),
           ),
         ),
       );
     } catch (error) {
       if (!mounted) {
-        return;
+        return false;
       }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(error.toString())),
@@ -813,6 +644,87 @@ class RecordingPageState extends State<RecordingPage> {
         setState(() => _entrySaving = false);
       }
     }
+    return saved;
+  }
+
+  Future<void> _startSelectedTimer() async {
+    if (_entrySaving || _activeTimerStartedAt != null) {
+      return;
+    }
+    final DateTime startedAt = DateTime.now();
+    final _TimerActivity selected = _selectedTimerActivity;
+    setState(() {
+      _activeTimerActivity = selected;
+      _activeTimerStartedAt = startedAt;
+    });
+    if (selected == _TimerActivity.sleep) {
+      await AppSessionStore.setPendingSleepStart(startedAt.toUtc());
+    }
+  }
+
+  Future<void> _stopActiveTimer() async {
+    if (_entrySaving ||
+        _activeTimerStartedAt == null ||
+        _activeTimerActivity == null) {
+      return;
+    }
+    final DateTime startAt = _activeTimerStartedAt!;
+    final DateTime endAt = DateTime.now();
+    final _TimerActivity activity = _activeTimerActivity!;
+    final RecordEntryInput input = _buildTimerRecordInput(
+      activity: activity,
+      startAt: startAt,
+      endAt: endAt,
+    );
+    final bool saved = await _saveEntryInput(
+      input,
+      successMessage: tr(
+        context,
+        ko: "${_timerActivityLabel(activity)} 타이머 기록이 저장되었어요.",
+        en: "Timer record saved.",
+        es: "Registro de temporizador guardado.",
+      ),
+    );
+    if (!mounted || !saved) {
+      return;
+    }
+    setState(() {
+      _latestTimerEntry = _CompletedTimerEntry(
+        activity: activity,
+        startAt: startAt,
+        endAt: endAt,
+      );
+      _activeTimerActivity = null;
+      _activeTimerStartedAt = null;
+    });
+  }
+
+  Widget _buildTimerInfoItem({
+    required ColorScheme color,
+    required String label,
+    required String value,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            color: color.onSurfaceVariant,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          value,
+          style: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
+    );
   }
 
   Future<void> _openQuickEntry(
@@ -835,19 +747,17 @@ class RecordingPageState extends State<RecordingPage> {
     Map<String, dynamic>? prefill,
     bool autoSubmit = false,
   }) async {
-    final Map<String, dynamic> mergedPrefill = <String, dynamic>{
-      ...?_openPrefillForTile(tile, _snapshot ?? const <String, dynamic>{}),
-      ...?prefill,
-    };
+    final Map<String, dynamic> normalizedPrefill =
+        prefill ?? <String, dynamic>{};
     if (autoSubmit) {
       final RecordEntryInput? autoInput =
-          _buildAutoEntryFromPrefill(tile, mergedPrefill);
+          _buildAutoEntryFromPrefill(tile, normalizedPrefill);
       if (autoInput != null) {
         await _saveEntryInput(
           autoInput,
           successMessage: tr(
             context,
-            ko: "어시스턴트 명령으로 기록했어요.",
+            ko: "어시스턴트 명령으로 저장했어요.",
             en: "Saved from assistant command.",
             es: "Guardado desde comando del asistente.",
           ),
@@ -855,900 +765,443 @@ class RecordingPageState extends State<RecordingPage> {
         return;
       }
     }
-    await _openQuickEntry(tile, prefill: mergedPrefill);
-  }
-
-  Widget _tileMetaLine(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 2),
-      child: Row(
-        children: <Widget>[
-          Expanded(
-            flex: 6,
-            child: Text(
-              label,
-              style: TextStyle(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-                fontSize: 11.5,
-              ),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          const SizedBox(width: 6),
-          Flexible(
-            flex: 4,
-            child: Text(
-              value,
-              style:
-                  const TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.end,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _metricTile({
-    required String title,
-    required String headline,
-    required IconData icon,
-    List<Widget> meta = const <Widget>[],
-    VoidCallback? onTap,
-  }) {
-    final ColorScheme color = Theme.of(context).colorScheme;
-    return Material(
-      color: color.surfaceContainerHigh,
-      borderRadius: BorderRadius.circular(16),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Row(
-                children: <Widget>[
-                  Icon(icon, size: 30),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      title,
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    headline,
-                    style: const TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.w800,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              ),
-              if (meta.isNotEmpty) ...<Widget>[
-                const SizedBox(height: 6),
-                ...meta,
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _graphChip(String label, double value) {
-    final ColorScheme color = Theme.of(context).colorScheme;
-    return Container(
-      margin: const EdgeInsets.only(right: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: color.surfaceContainerHighest.withValues(alpha: 0.35),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Text(
-        "$label ${value.round()}ml",
-        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 11.5),
-      ),
-    );
+    await _openQuickEntry(tile, prefill: prefill);
   }
 
   @override
   Widget build(BuildContext context) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    final AppThemeController controller = AppSettingsScope.of(context);
     final Map<String, dynamic> snapshot = _snapshot ?? <String, dynamic>{};
-    final AppThemeController? settings = AppSettingsScope.maybeOf(context);
-    final Map<String, int> formulaBands =
-        _asBandMap(snapshot["formula_amount_by_time_band_ml"]);
+    final List<HomeTileType> tiles = _dashboardTiles(controller);
+    final int aiBalance = _asInt(snapshot["ai_credit_balance"]) ?? 0;
+    final int aiGraceUsed = _asInt(snapshot["ai_grace_used_today"]) ?? 0;
+    final int aiGraceLimit = _asInt(snapshot["ai_grace_limit"]) ?? 3;
 
-    final bool isDay = widget.range == RecordRange.day;
-    final bool isWeek = widget.range == RecordRange.week;
-    final bool isMonth = widget.range == RecordRange.month;
+    final String greeting = _now.hour < 12
+        ? "좋은 아침이에요,"
+        : (_now.hour < 18 ? "좋은 오후예요," : "편안한 저녁이에요,");
+    final String babyName = _asString(snapshot["baby_name"]) ?? "우리 아기";
+    final String lastFormulaAgo =
+        _relativeAgo(_asString(snapshot["last_formula_time"]));
+    final String lastDiaperAgo =
+        _relativeAgo(_asString(snapshot["last_diaper_time"]));
 
-    final int formulaTotal = _asInt(snapshot["formula_total_ml"]) ??
-        formulaBands.values.fold<int>(0, (int sum, int value) => sum + value);
-    final int formulaCount = _asInt(snapshot["formula_count"]) ?? 0;
-    final int breastfeedCount = _asInt(snapshot["breastfeed_count"]) ?? 0;
-    final int feedingsCount =
-        _asInt(snapshot["feedings_count"]) ?? (formulaCount + breastfeedCount);
-    final int weaningCount = _asInt(snapshot["weaning_count"]) ?? 0;
-    final int diaperPeeCount = _asInt(snapshot["diaper_pee_count"]) ?? 0;
-    final int diaperPooCount = _asInt(snapshot["diaper_poo_count"]) ?? 0;
-    final int medicationCount = _asInt(snapshot["medication_count"]) ?? 0;
-
-    final double avgFormulaPerDay =
-        _asDouble(snapshot["avg_formula_ml_per_day"]) ??
-            formulaTotal.toDouble();
-    final double avgFeedingsPerDay =
-        _asDouble(snapshot["avg_feedings_per_day"]) ?? feedingsCount.toDouble();
-    final double avgSleepPerDayMin =
-        _asDouble(snapshot["avg_sleep_minutes_per_day"]) ?? 0;
-    final double avgNapPerDayMin =
-        _asDouble(snapshot["avg_nap_minutes_per_day"]) ?? 0;
-    final double avgNightPerDayMin =
-        _asDouble(snapshot["avg_night_sleep_minutes_per_day"]) ?? 0;
-    final double avgPeePerDay = _asDouble(snapshot["avg_diaper_pee_per_day"]) ??
-        diaperPeeCount.toDouble();
-    final double avgPooPerDay = _asDouble(snapshot["avg_diaper_poo_per_day"]) ??
-        diaperPooCount.toDouble();
-
-    final String lastFormula =
-        _formatTime(_asString(snapshot["last_formula_time"]));
-    final String lastBreastfeed =
-        _formatTime(_asString(snapshot["last_breastfeed_time"]));
-    final String recentSleep =
-        _formatTime(_asString(snapshot["recent_sleep_time"]));
-    final String recentSleepDuration =
-        _formatDuration(_asInt(snapshot["recent_sleep_duration_min"]));
-    final String lastSleepEnd =
-        _formatTime(_asString(snapshot["last_sleep_end_time"]));
-    final String lastPee = _formatTime(_asString(snapshot["last_pee_time"]));
-    final String lastPoo = _formatTime(_asString(snapshot["last_poo_time"]));
-    final String lastWeaning =
-        _formatTime(_asString(snapshot["last_weaning_time"]));
-
-    final String? openFormulaEventId =
-        _asString(snapshot["open_formula_event_id"]);
-    final String? openFormulaStart =
-        _asString(snapshot["open_formula_start_time"]);
-    final String? openBreastfeedEventId =
-        _asString(snapshot["open_breastfeed_event_id"]);
-    final String? openBreastfeedStart =
-        _asString(snapshot["open_breastfeed_start_time"]);
-    final String? openSleepEventId = _asString(snapshot["open_sleep_event_id"]);
-    final String? openSleepStart = _asString(snapshot["open_sleep_start_time"]);
-    final String? openDiaperEventId =
-        _asString(snapshot["open_diaper_event_id"]);
-    final String? openDiaperStart =
-        _asString(snapshot["open_diaper_start_time"]);
-    final String? openDiaperType = _asString(snapshot["open_diaper_type"]);
-    final String? openWeaningEventId =
-        _asString(snapshot["open_weaning_event_id"]);
-    final String? openWeaningStart =
-        _asString(snapshot["open_weaning_start_time"]);
-    final String? openMedicationEventId =
-        _asString(snapshot["open_medication_event_id"]);
-    final String? openMedicationStart =
-        _asString(snapshot["open_medication_start_time"]);
-
-    final Map<String, dynamic>? formulaOpenPrefill =
-        _openPrefillForTile(HomeTileType.formula, snapshot);
-    final Map<String, dynamic>? breastfeedOpenPrefill =
-        _openPrefillForTile(HomeTileType.breastfeed, snapshot);
-    final Map<String, dynamic>? sleepOpenPrefill =
-        _openPrefillForTile(HomeTileType.sleep, snapshot);
-    final Map<String, dynamic>? diaperOpenPrefill =
-        _openPrefillForTile(HomeTileType.diaper, snapshot);
-    final Map<String, dynamic>? weaningOpenPrefill =
-        _openPrefillForTile(HomeTileType.weaning, snapshot);
-    final Map<String, dynamic>? medicationOpenPrefill =
-        _openPrefillForTile(HomeTileType.medication, snapshot);
-
-    final String specialMemo = _asString(snapshot["special_memo"]) ??
-        tr(
-          context,
-          ko: "선택 범위에 특별 메모가 없습니다.",
-          en: "No special memo in this range.",
-          es: "No hay nota especial en este rango.",
-        );
-    final bool showSpecialMemo = settings?.showSpecialMemo ?? true;
-
-    Map<String, dynamic>? latestFeedingOpenPrefill;
-    HomeTileType latestFeedingTile = HomeTileType.formula;
-    DateTime? latestFeedingOpenStart;
-    if (openFormulaEventId != null && openFormulaStart != null) {
-      latestFeedingOpenPrefill = formulaOpenPrefill;
-      latestFeedingTile = HomeTileType.formula;
-      latestFeedingOpenStart = _parseIsoDateTime(openFormulaStart);
-    }
-    if (openBreastfeedEventId != null && openBreastfeedStart != null) {
-      final DateTime? breastStart = _parseIsoDateTime(openBreastfeedStart);
-      if (latestFeedingOpenStart == null ||
-          (breastStart != null &&
-              breastStart.isAfter(latestFeedingOpenStart))) {
-        latestFeedingOpenPrefill = breastfeedOpenPrefill;
-        latestFeedingTile = HomeTileType.breastfeed;
-        latestFeedingOpenStart = breastStart;
-      }
-    }
-    final DateTime? latestClosedFeeding = <DateTime?>[
-      _parseIsoDateTime(_asString(snapshot["last_formula_time"])),
-      _parseIsoDateTime(_asString(snapshot["last_breastfeed_time"])),
-    ].whereType<DateTime>().fold<DateTime?>(
-          null,
-          (DateTime? current, DateTime item) =>
-              current == null || item.isAfter(current) ? item : current,
-        );
-    final String latestFeedingInputTime = latestFeedingOpenStart != null
-        ? _formatTime(latestFeedingOpenStart.toIso8601String())
-        : (latestClosedFeeding != null
-            ? _formatTime(latestClosedFeeding.toIso8601String())
-            : "-");
-    final String latestSleepInputTime = openSleepStart != null
-        ? _formatTime(openSleepStart)
-        : (recentSleep != "-" ? recentSleep : "-");
-
-    final List<String> graphLabels =
-        _asStringList(snapshot["feeding_graph_labels"]);
-    final List<double> graphPointsRaw =
-        _asDoubleList(snapshot["feeding_graph_points"]);
-    final int graphCount = graphLabels.length < graphPointsRaw.length
-        ? graphLabels.length
-        : graphPointsRaw.length;
-    final List<String> graphLabelsSafe =
-        graphCount == 0 ? <String>["-"] : graphLabels.sublist(0, graphCount);
-    final List<double> graphPoints =
-        graphCount == 0 ? <double>[0] : graphPointsRaw.sublist(0, graphCount);
-
-    String decimalLabel(double value) {
-      if (value.isNaN || value.isInfinite) {
-        return "0";
-      }
-      final double rounded = (value * 10).roundToDouble() / 10;
-      if ((rounded - rounded.roundToDouble()).abs() < 0.05) {
-        return rounded.round().toString();
-      }
-      return rounded.toStringAsFixed(1);
-    }
-
-    final String formulaHeadline =
-        isDay ? "$formulaTotal ml" : "${decimalLabel(avgFormulaPerDay)} ml";
-    final String sleepHeadline = isDay
-        ? recentSleepDuration
-        : _formatDuration(avgSleepPerDayMin.round());
-    final String diaperHeadline = isMonth
-        ? "${decimalLabel(avgPooPerDay)} / ${decimalLabel(avgPeePerDay)}"
-        : "$diaperPooCount / $diaperPeeCount";
-
-    final String graphTitle = isDay
-        ? tr(context,
-            ko: "수유 텀별 수유량",
-            en: "Feeding amount by session",
-            es: "Cantidad por sesion")
-        : isWeek
-            ? tr(context,
-                ko: "1일 총 수유량 (주간)",
-                en: "Daily total feeding (week)",
-                es: "Total diario (semana)")
-            : tr(context,
-                ko: "일자별 총 수유량 (월간)",
-                en: "Daily total feeding (month)",
-                es: "Total diario (mes)");
-    final String graphHint = isMonth
-        ? tr(
-            context,
-            ko: "월 화면은 일자별 총 수유량 추이를 제공합니다.",
-            en: "Month view shows daily total feeding trend.",
-            es: "La vista mensual muestra tendencia diaria de formula.",
-          )
-        : "";
+    final bool timerRunning =
+        _activeTimerActivity != null && _activeTimerStartedAt != null;
+    final _TimerActivity cardActivity =
+        timerRunning ? _activeTimerActivity! : _selectedTimerActivity;
+    final DateTime? timerStartAt =
+        timerRunning ? _activeTimerStartedAt : _latestTimerEntry?.startAt;
+    final DateTime? timerEndAt = timerRunning ? null : _latestTimerEntry?.endAt;
+    final Duration timerDuration = timerRunning
+        ? _now.difference(_activeTimerStartedAt!)
+        : (_latestTimerEntry?.duration ?? Duration.zero);
+    final String timerDurationLabel =
+        (timerRunning || _latestTimerEntry != null)
+            ? _formatCompactDuration(timerDuration)
+            : "-";
+    final String activityTitle = timerRunning
+        ? "${_timerActivityLabel(cardActivity)} 진행 중"
+        : _timerActivityLabel(cardActivity);
+    final String activityClock = _formatActivityClock(timerDuration);
+    final String activitySubtitle = timerRunning
+        ? "시작 ${_formatAmPm(_activeTimerStartedAt!)}"
+        : (_latestTimerEntry == null
+            ? "활동을 선택하고 시작 버튼을 눌러 주세요."
+            : "최근 완료 ${_formatAmPm(_latestTimerEntry!.endAt)}");
 
     return RefreshIndicator(
       onRefresh: _loadLandingSnapshot,
       child: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+        padding: const EdgeInsets.fromLTRB(16, 20, 16, 24),
         children: <Widget>[
-          if (_snapshotLoading || _entrySaving) const LinearProgressIndicator(),
-          if (_snapshotError != null) ...<Widget>[
-            const SizedBox(height: 8),
-            Text(
-              _snapshotError!,
-              style: TextStyle(
-                color: Theme.of(context).colorScheme.error,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
-          if (showSpecialMemo) ...<Widget>[
-            Card(
-              child: ListTile(
-                leading: const Icon(Icons.sticky_note_2_outlined),
-                title: Text(
-                  tr(
-                    context,
-                    ko: "특별 메모",
-                    en: "Special memo",
-                    es: "Nota especial",
+          Row(
+            children: <Widget>[
+              const CircleAvatar(
+                radius: 26,
+                backgroundColor: Color(0xFFFFF2D9),
+                child: Center(
+                  child: AppSvgIcon(
+                    AppSvgAsset.profile,
+                    size: 24,
                   ),
                 ),
-                subtitle: Text(specialMemo),
               ),
-            ),
-            const SizedBox(height: 10),
-          ],
-          Builder(
-            builder: (BuildContext context) {
-              final AppThemeController? settings =
-                  AppSettingsScope.maybeOf(context);
-              final int tileColumns =
-                  (settings?.homeTileColumns ?? 2).clamp(1, 3);
-              const List<HomeTileType> fallbackOrder = <HomeTileType>[
-                HomeTileType.formula,
-                HomeTileType.sleep,
-                HomeTileType.diaper,
-                HomeTileType.weaning,
-                HomeTileType.medication,
-              ];
-              final List<HomeTileType> orderedTiles =
-                  settings?.homeTileOrder ?? fallbackOrder;
-              final List<Widget> tiles = <Widget>[];
-
-              bool isEnabled(HomeTileType tile) =>
-                  settings?.isHomeTileEnabled(tile) ?? true;
-
-              void addTileGroup(HomeTileType tile) {
-                switch (tile) {
-                  case HomeTileType.formula:
-                    if (!isEnabled(HomeTileType.formula)) {
-                      return;
-                    }
-                    tiles.add(
-                      _metricTile(
-                        title:
-                            tr(context, ko: "분유", en: "Formula", es: "Formula"),
-                        headline: formulaHeadline,
-                        icon: Icons.local_drink_outlined,
-                        meta: <Widget>[
-                          _tileMetaLine(
-                            isDay
-                                ? tr(context,
-                                    ko: "총 수유량", en: "Total", es: "Total")
-                                : tr(
-                                    context,
-                                    ko: "1일 평균 수유량",
-                                    en: "Avg/day amount",
-                                    es: "Promedio diario",
-                                  ),
-                            isDay
-                                ? "$formulaTotal ml"
-                                : "${decimalLabel(avgFormulaPerDay)} ml",
-                          ),
-                          _tileMetaLine(
-                            isDay
-                                ? tr(
-                                    context,
-                                    ko: "수유 횟수",
-                                    en: "Feedings",
-                                    es: "Tomas",
-                                  )
-                                : tr(
-                                    context,
-                                    ko: "1일 평균 수유 횟수",
-                                    en: "Avg/day feedings",
-                                    es: "Promedio de tomas",
-                                  ),
-                            isDay
-                                ? "$feedingsCount"
-                                : decimalLabel(avgFeedingsPerDay),
-                          ),
-                          _tileMetaLine(
-                            tr(
-                              context,
-                              ko: "마지막 분유/모유",
-                              en: "Last formula/breast",
-                              es: "Ultima formula/lactancia",
-                            ),
-                            "$lastFormula / $lastBreastfeed",
-                          ),
-                          if (openFormulaEventId != null)
-                            _tileMetaLine(
-                              tr(
-                                context,
-                                ko: "진행중 시작",
-                                en: "In-progress start",
-                                es: "Inicio en progreso",
-                              ),
-                              _formatTime(openFormulaStart),
-                            ),
-                          if (openBreastfeedEventId != null)
-                            _tileMetaLine(
-                              tr(
-                                context,
-                                ko: "모유 진행중 시작",
-                                en: "Breastfeed in-progress",
-                                es: "Lactancia en progreso",
-                              ),
-                              _formatTime(openBreastfeedStart),
-                            ),
-                        ],
-                        onTap: _entrySaving
-                            ? null
-                            : () => _openQuickEntry(
-                                  HomeTileType.formula,
-                                  prefill: formulaOpenPrefill,
-                                ),
-                      ),
-                    );
-                    tiles.add(
-                      _metricTile(
-                        title: tr(
-                          context,
-                          ko: "마지막 수유 입력",
-                          en: "Last feeding input",
-                          es: "Ultimo registro de toma",
-                        ),
-                        headline: latestFeedingInputTime,
-                        icon: Icons.history_toggle_off_outlined,
-                        meta: <Widget>[
-                          _tileMetaLine(
-                            tr(
-                              context,
-                              ko: "빠른 수정",
-                              en: "Quick edit",
-                              es: "Edicion rapida",
-                            ),
-                            latestFeedingOpenPrefill != null
-                                ? tr(
-                                    context,
-                                    ko: "진행 중 기록 열기",
-                                    en: "Open in-progress log",
-                                    es: "Abrir registro en progreso",
-                                  )
-                                : tr(
-                                    context,
-                                    ko: "종료 기록은 통계(일)에서 수정",
-                                    en: "Edit closed logs in Day stats",
-                                    es: "Editar cerrados en estadisticas diarias",
-                                  ),
-                          ),
-                        ],
-                        onTap: _entrySaving
-                            ? null
-                            : () async {
-                                if (latestFeedingOpenPrefill != null) {
-                                  await _openQuickEntry(
-                                    latestFeedingTile,
-                                    prefill: latestFeedingOpenPrefill,
-                                  );
-                                  return;
-                                }
-                                if (!context.mounted) {
-                                  return;
-                                }
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                      tr(
-                                        context,
-                                        ko: "종료된 수유 기록 수정은 통계 탭의 일 화면에서 가능합니다.",
-                                        en: "Edit closed feeding logs in Statistics > Day.",
-                                        es: "Edite tomas cerradas en Estadisticas > Dia.",
-                                      ),
-                                    ),
-                                  ),
-                                );
-                              },
-                      ),
-                    );
-                    return;
-                  case HomeTileType.sleep:
-                    if (!isEnabled(HomeTileType.sleep)) {
-                      return;
-                    }
-                    tiles.add(
-                      _metricTile(
-                        title: tr(context, ko: "수면", en: "Sleep", es: "Sueno"),
-                        headline: sleepHeadline,
-                        icon: Icons.bedtime_outlined,
-                        meta: <Widget>[
-                          _tileMetaLine(
-                            isDay
-                                ? tr(context,
-                                    ko: "최근 잠 지속",
-                                    en: "Duration",
-                                    es: "Duracion")
-                                : tr(
-                                    context,
-                                    ko: "1일 평균 수면 시간",
-                                    en: "Avg/day sleep",
-                                    es: "Sueno diario",
-                                  ),
-                            isDay
-                                ? recentSleepDuration
-                                : _formatDuration(avgSleepPerDayMin.round()),
-                          ),
-                          _tileMetaLine(
-                            isDay
-                                ? tr(
-                                    context,
-                                    ko: "마지막 잠 종료",
-                                    en: "Last sleep end",
-                                    es: "Fin del sueno",
-                                  )
-                                : tr(
-                                    context,
-                                    ko: "1일 평균 낮잠 지속",
-                                    en: "Avg/day nap",
-                                    es: "Siesta diaria",
-                                  ),
-                            isDay
-                                ? lastSleepEnd
-                                : _formatDuration(avgNapPerDayMin.round()),
-                          ),
-                          _tileMetaLine(
-                            isDay
-                                ? tr(
-                                    context,
-                                    ko: "최근 잠 시작",
-                                    en: "Recent sleep start",
-                                    es: "Inicio reciente",
-                                  )
-                                : tr(
-                                    context,
-                                    ko: "1일 평균 밤잠 지속",
-                                    en: "Avg/day night sleep",
-                                    es: "Sueno nocturno diario",
-                                  ),
-                            isDay
-                                ? recentSleep
-                                : _formatDuration(avgNightPerDayMin.round()),
-                          ),
-                          if (openSleepEventId != null)
-                            _tileMetaLine(
-                              tr(
-                                context,
-                                ko: "진행중 시작",
-                                en: "In-progress start",
-                                es: "Inicio en progreso",
-                              ),
-                              _formatTime(openSleepStart),
-                            ),
-                        ],
-                        onTap: _entrySaving
-                            ? null
-                            : () => _openQuickEntry(
-                                  HomeTileType.sleep,
-                                  prefill: sleepOpenPrefill,
-                                ),
-                      ),
-                    );
-                    tiles.add(
-                      _metricTile(
-                        title: tr(
-                          context,
-                          ko: "마지막 수면 입력",
-                          en: "Last sleep input",
-                          es: "Ultimo registro de sueno",
-                        ),
-                        headline: latestSleepInputTime,
-                        icon: Icons.timelapse_outlined,
-                        meta: <Widget>[
-                          _tileMetaLine(
-                            tr(
-                              context,
-                              ko: "빠른 수정",
-                              en: "Quick edit",
-                              es: "Edicion rapida",
-                            ),
-                            openSleepEventId != null
-                                ? tr(
-                                    context,
-                                    ko: "진행 중 기록 열기",
-                                    en: "Open in-progress log",
-                                    es: "Abrir registro en progreso",
-                                  )
-                                : tr(
-                                    context,
-                                    ko: "종료 기록은 통계(일)에서 수정",
-                                    en: "Edit closed logs in Day stats",
-                                    es: "Editar cerrados en estadisticas diarias",
-                                  ),
-                          ),
-                        ],
-                        onTap: _entrySaving
-                            ? null
-                            : () async {
-                                if (sleepOpenPrefill != null) {
-                                  await _openQuickEntry(
-                                    HomeTileType.sleep,
-                                    prefill: sleepOpenPrefill,
-                                  );
-                                  return;
-                                }
-                                if (!context.mounted) {
-                                  return;
-                                }
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                      tr(
-                                        context,
-                                        ko: "종료된 수면 기록 수정은 통계 탭의 일 화면에서 가능합니다.",
-                                        en: "Edit closed sleep logs in Statistics > Day.",
-                                        es: "Edite suenos cerrados en Estadisticas > Dia.",
-                                      ),
-                                    ),
-                                  ),
-                                );
-                              },
-                      ),
-                    );
-                    return;
-                  case HomeTileType.diaper:
-                    if (!isEnabled(HomeTileType.diaper)) {
-                      return;
-                    }
-                    tiles.add(
-                      _metricTile(
-                        title:
-                            tr(context, ko: "기저귀", en: "Diaper", es: "Panal"),
-                        headline: diaperHeadline,
-                        icon: Icons.baby_changing_station_outlined,
-                        meta: <Widget>[
-                          _tileMetaLine(
-                            isMonth
-                                ? tr(
-                                    context,
-                                    ko: "1일 평균 대변 횟수",
-                                    en: "Avg/day poo",
-                                    es: "Promedio heces",
-                                  )
-                                : isWeek
-                                    ? tr(
-                                        context,
-                                        ko: "주 총 대변 횟수",
-                                        en: "Weekly poo total",
-                                        es: "Total heces semana",
-                                      )
-                                    : tr(
-                                        context,
-                                        ko: "마지막 대변",
-                                        en: "Last poo",
-                                        es: "Ultimas heces",
-                                      ),
-                            isMonth
-                                ? decimalLabel(avgPooPerDay)
-                                : isWeek
-                                    ? "$diaperPooCount"
-                                    : lastPoo,
-                          ),
-                          _tileMetaLine(
-                            isMonth
-                                ? tr(
-                                    context,
-                                    ko: "1일 평균 소변 횟수",
-                                    en: "Avg/day pee",
-                                    es: "Promedio orina",
-                                  )
-                                : isWeek
-                                    ? tr(
-                                        context,
-                                        ko: "주 총 소변 횟수",
-                                        en: "Weekly pee total",
-                                        es: "Total orina semana",
-                                      )
-                                    : tr(
-                                        context,
-                                        ko: "마지막 소변",
-                                        en: "Last pee",
-                                        es: "Ultima orina",
-                                      ),
-                            isMonth
-                                ? decimalLabel(avgPeePerDay)
-                                : isWeek
-                                    ? "$diaperPeeCount"
-                                    : lastPee,
-                          ),
-                          if (openDiaperEventId != null)
-                            _tileMetaLine(
-                              tr(
-                                context,
-                                ko: "진행중 시작",
-                                en: "In-progress start",
-                                es: "Inicio en progreso",
-                              ),
-                              "${openDiaperType ?? "-"} ${_formatTime(openDiaperStart)}",
-                            ),
-                        ],
-                        onTap: _entrySaving
-                            ? null
-                            : () => _openQuickEntry(
-                                  HomeTileType.diaper,
-                                  prefill: diaperOpenPrefill,
-                                ),
-                      ),
-                    );
-                    return;
-                  case HomeTileType.weaning:
-                    if (!isEnabled(HomeTileType.weaning)) {
-                      return;
-                    }
-                    tiles.add(
-                      _metricTile(
-                        title: tr(context,
-                            ko: "이유식", en: "Weaning", es: "Destete"),
-                        headline: lastWeaning,
-                        icon: Icons.rice_bowl_outlined,
-                        meta: <Widget>[
-                          _tileMetaLine(
-                            tr(context, ko: "오늘 횟수", en: "Count", es: "Conteo"),
-                            "$weaningCount",
-                          ),
-                          if (openWeaningEventId != null)
-                            _tileMetaLine(
-                              tr(
-                                context,
-                                ko: "진행중 시작",
-                                en: "In-progress start",
-                                es: "Inicio en progreso",
-                              ),
-                              _formatTime(openWeaningStart),
-                            ),
-                        ],
-                        onTap: _entrySaving
-                            ? null
-                            : () => _openQuickEntry(
-                                  HomeTileType.weaning,
-                                  prefill: weaningOpenPrefill,
-                                ),
-                      ),
-                    );
-                    return;
-                  case HomeTileType.medication:
-                    if (!isEnabled(HomeTileType.medication)) {
-                      return;
-                    }
-                    tiles.add(
-                      _metricTile(
-                        title: tr(
-                          context,
-                          ko: "투약",
-                          en: "Medication",
-                          es: "Medicacion",
-                        ),
-                        headline: _formatTime(
-                            _asString(snapshot["last_medication_time"])),
-                        icon: Icons.medication_outlined,
-                        meta: <Widget>[
-                          _tileMetaLine(
-                            tr(context, ko: "오늘 횟수", en: "Count", es: "Conteo"),
-                            "$medicationCount",
-                          ),
-                          if (openMedicationEventId != null)
-                            _tileMetaLine(
-                              tr(
-                                context,
-                                ko: "진행중 시작",
-                                en: "In-progress start",
-                                es: "Inicio en progreso",
-                              ),
-                              _formatTime(openMedicationStart),
-                            ),
-                        ],
-                        onTap: _entrySaving
-                            ? null
-                            : () => _openQuickEntry(
-                                  HomeTileType.medication,
-                                  prefill: medicationOpenPrefill,
-                                ),
-                      ),
-                    );
-                    return;
-                  case HomeTileType.breastfeed:
-                  case HomeTileType.memo:
-                    return;
-                }
-              }
-
-              final Set<HomeTileType> added = <HomeTileType>{};
-              for (final HomeTileType tile in orderedTiles) {
-                if (added.contains(tile)) {
-                  continue;
-                }
-                added.add(tile);
-                addTileGroup(tile);
-              }
-              for (final HomeTileType tile in fallbackOrder) {
-                if (added.contains(tile)) {
-                  continue;
-                }
-                added.add(tile);
-                addTileGroup(tile);
-              }
-
-              return GridView(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: tileColumns,
-                  crossAxisSpacing: 10,
-                  mainAxisSpacing: 10,
-                  childAspectRatio: tileColumns == 1
-                      ? 2.05
-                      : tileColumns == 3
-                          ? 0.9
-                          : 1.1,
-                ),
-                children: tiles,
-              );
-            },
-          ),
-          const SizedBox(height: 10),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(
-                    graphTitle,
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 8),
-                  if (graphHint.isNotEmpty) Text(graphHint),
-                  if (!isDay) ...<Widget>[
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
                     Text(
-                      "${tr(context, ko: "밤", en: "Night", es: "Noche")}: ${formulaBands["night"]} / "
-                      "${tr(context, ko: "아침", en: "Morning", es: "Manana")}: ${formulaBands["morning"]} / "
-                      "${tr(context, ko: "오후", en: "Afternoon", es: "Tarde")}: ${formulaBands["afternoon"]} / "
-                      "${tr(context, ko: "저녁", en: "Evening", es: "Noche")}: ${formulaBands["evening"]}",
+                      greeting,
+                      style: TextStyle(
+                        color: color.onSurfaceVariant,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      babyName,
+                      style: const TextStyle(
+                        fontSize: 30,
+                        fontWeight: FontWeight.w700,
+                        height: 1.1,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      _rangeLabel(),
+                      style: TextStyle(
+                        color: color.onSurfaceVariant,
+                        fontSize: 12,
+                      ),
                     ),
                   ],
-                  const SizedBox(height: 10),
-                  SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      children: List<Widget>.generate(
-                        graphPoints.length,
-                        (int index) => _graphChip(
-                          index < graphLabelsSafe.length
-                              ? graphLabelsSafe[index]
-                              : "-",
-                          graphPoints[index],
+                ),
+              ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: <Widget>[
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color:
+                          color.surfaceContainerHighest.withValues(alpha: 0.72),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: <Widget>[
+                        Text(
+                          "AI $aiBalance cr",
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 12,
+                          ),
                         ),
-                      ),
+                        Text(
+                          "Grace $aiGraceUsed/$aiGraceLimit",
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: color.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(height: 10),
-                  SizedBox(
-                    height: 120,
-                    child: SimpleLineChart(
-                      points: graphPoints,
-                      lineColor: const Color(0xFF8C8ED4),
-                      fillColor: const Color(0xFF8C8ED4).withValues(alpha: 0.2),
+                  const SizedBox(height: 8),
+                  Material(
+                    color: color.surfaceContainerHighest.withValues(alpha: 0.7),
+                    shape: const CircleBorder(),
+                    child: IconButton(
+                      onPressed: _snapshotLoading ? null : _loadLandingSnapshot,
+                      icon: const Icon(Icons.refresh_rounded),
                     ),
                   ),
                 ],
               ),
+            ],
+          ),
+          if (_snapshotLoading || _entrySaving) ...<Widget>[
+            const SizedBox(height: 12),
+            const LinearProgressIndicator(minHeight: 3),
+          ],
+          if (_snapshotError != null) ...<Widget>[
+            const SizedBox(height: 10),
+            Text(
+              _snapshotError!,
+              style: TextStyle(color: color.error, fontWeight: FontWeight.w600),
+            ),
+          ],
+          const SizedBox(height: 18),
+          Row(
+            children: <Widget>[
+              const Text(
+                "타이머",
+                style: TextStyle(fontSize: 30, fontWeight: FontWeight.w700),
+              ),
+              const Spacer(),
+              Text(
+                "실시간 추적",
+                style: TextStyle(
+                    color: color.primary, fontWeight: FontWeight.w600),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(34),
+              border: Border.all(color: const Color(0xFFE7DECF)),
+            ),
+            child: Column(
+              children: <Widget>[
+                Row(
+                  children: <Widget>[
+                    Container(
+                      width: 52,
+                      height: 52,
+                      decoration: BoxDecoration(
+                        color: _timerActivityAccent(cardActivity)
+                            .withValues(alpha: 0.16),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Center(
+                        child: AppSvgIcon(
+                          _timerActivityAsset(cardActivity),
+                          color: _timerActivityAccent(cardActivity),
+                          size: 22,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Text(
+                            activityTitle,
+                            style: const TextStyle(
+                              fontSize: 28,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            activitySubtitle,
+                            style: TextStyle(
+                              color: color.onSurfaceVariant,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Text(
+                      activityClock,
+                      style: TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.w700,
+                        color: color.primary,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children:
+                      _TimerActivity.values.map((_TimerActivity activity) {
+                    final bool selected = _selectedTimerActivity == activity;
+                    final Color accent = _timerActivityAccent(activity);
+                    return ChoiceChip(
+                      selected: selected,
+                      label: Text(_timerActivityLabel(activity)),
+                      avatar: AppSvgIcon(
+                        _timerActivityAsset(activity),
+                        size: 15,
+                        color: selected
+                            ? color.onPrimaryContainer
+                            : color.onSurfaceVariant,
+                      ),
+                      labelStyle: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: selected
+                            ? color.onPrimaryContainer
+                            : color.onSurfaceVariant,
+                      ),
+                      selectedColor: accent.withValues(alpha: 0.22),
+                      side: BorderSide(
+                        color: selected
+                            ? accent.withValues(alpha: 0.6)
+                            : color.outline.withValues(alpha: 0.32),
+                      ),
+                      onSelected: (_entrySaving || timerRunning)
+                          ? null
+                          : (bool value) {
+                              if (!value) {
+                                return;
+                              }
+                              setState(() => _selectedTimerActivity = activity);
+                            },
+                    );
+                  }).toList(growable: false),
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color:
+                        color.surfaceContainerHighest.withValues(alpha: 0.35),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Row(
+                    children: <Widget>[
+                      Expanded(
+                        child: _buildTimerInfoItem(
+                          color: color,
+                          label: "시작시각",
+                          value: _formatDateTimeLabel(timerStartAt),
+                        ),
+                      ),
+                      Container(
+                        width: 1,
+                        height: 40,
+                        color: color.outline.withValues(alpha: 0.2),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: _buildTimerInfoItem(
+                          color: color,
+                          label: "종료시각",
+                          value: _formatDateTimeLabel(timerEndAt),
+                        ),
+                      ),
+                      Container(
+                        width: 1,
+                        height: 40,
+                        color: color.outline.withValues(alpha: 0.2),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: _buildTimerInfoItem(
+                          color: color,
+                          label: "총 시간",
+                          value: timerDurationLabel,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: FilledButton.icon(
+                        onPressed: (_entrySaving || timerRunning)
+                            ? null
+                            : _startSelectedTimer,
+                        icon: const Icon(Icons.play_arrow_rounded, size: 20),
+                        label: const Text("시작"),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: color.primary,
+                          foregroundColor: color.onPrimary,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          textStyle: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: (_entrySaving || !timerRunning)
+                            ? null
+                            : _stopActiveTimer,
+                        icon: const Icon(Icons.stop_rounded, size: 20),
+                        label: const Text("종료"),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: color.error,
+                          side: BorderSide(
+                            color: color.error.withValues(alpha: 0.5),
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          textStyle: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 20),
+          const Text(
+            "빠른 기록",
+            style: TextStyle(fontSize: 30, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 12),
+          GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: tiles.length,
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 2,
+              mainAxisSpacing: 14,
+              crossAxisSpacing: 14,
+              childAspectRatio: 1.02,
+            ),
+            itemBuilder: (BuildContext context, int index) {
+              final HomeTileType tile = tiles[index];
+              final Color accent = _dashboardTileAccent(tile);
+              return Material(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(34),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(34),
+                  onTap: _entrySaving ? null : () => _openQuickEntry(tile),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 14),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: <Widget>[
+                        Container(
+                          width: 64,
+                          height: 64,
+                          decoration: BoxDecoration(
+                            color: accent.withValues(alpha: 0.15),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Center(
+                            child: AppSvgIcon(
+                              _dashboardTileAsset(tile),
+                              color: accent,
+                              size: 24,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          _dashboardTileLabel(tile),
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 18),
           Text(
-            "${tr(context, ko: "기록 요약", en: "Records summary", es: "Resumen")}: "
-            "${tr(context, ko: "분유", en: "Formula", es: "Formula")} $formulaCount, "
-            "${tr(context, ko: "모유", en: "Breastfeed", es: "Lactancia")} $breastfeedCount, "
-            "${tr(context, ko: "이유식", en: "Weaning", es: "Destete")} $weaningCount, "
-            "${tr(context, ko: "투약", en: "Medication", es: "Medicacion")} $medicationCount",
+            "마지막 수유: $lastFormulaAgo · 기저귀 교체: $lastDiaperAgo",
             style: TextStyle(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
+              color: color.onSurfaceVariant,
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
             ),
           ),
         ],
