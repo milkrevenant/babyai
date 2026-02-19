@@ -13,11 +13,9 @@ import "../../core/widgets/app_svg_icon.dart";
 class ChatPage extends StatefulWidget {
   const ChatPage({
     super.key,
-    this.onOpenHistory,
     this.onHistoryChanged,
   });
 
-  final VoidCallback? onOpenHistory;
   final VoidCallback? onHistoryChanged;
 
   @override
@@ -51,6 +49,46 @@ class ChatPageState extends State<ChatPage> {
 
   List<_ChatMessage> get _messages =>
       _activeThreadOrNull?.messages ?? const <_ChatMessage>[];
+
+  String? get activeSessionId => _activeThreadOrNull?.sessionId;
+
+  String get activeThreadTitle =>
+      (_activeThreadOrNull?.title ?? "New conversation").trim();
+
+  Future<void> applyLocalSessionTitle(String sessionId, String title) async {
+    final String normalizedId = sessionId.trim();
+    final String normalizedTitle = title.trim();
+    if (normalizedId.isEmpty || normalizedTitle.isEmpty) {
+      return;
+    }
+    final int idx = _findThreadIndexBySessionId(normalizedId);
+    if (idx < 0 || !mounted) {
+      return;
+    }
+    setState(() {
+      _threads[idx].title = normalizedTitle;
+    });
+  }
+
+  Future<void> hideSessionLocally(String sessionId) async {
+    final String normalizedId = sessionId.trim();
+    if (normalizedId.isEmpty || !mounted) {
+      return;
+    }
+    setState(() {
+      _threads.removeWhere(
+        (_ChatThread thread) => (thread.sessionId ?? "").trim() == normalizedId,
+      );
+      if (_threads.isEmpty) {
+        _activeThreadIndex = 0;
+      } else if (_activeThreadIndex >= _threads.length) {
+        _activeThreadIndex = _threads.length - 1;
+      }
+    });
+    if (_threads.isEmpty) {
+      await _createNewThread();
+    }
+  }
 
   @override
   void initState() {
@@ -477,14 +515,6 @@ class ChatPageState extends State<ChatPage> {
     }
   }
 
-  String _formatDatePill(DateTime dateTime) {
-    final int rawHour = dateTime.hour;
-    final int hour12 = rawHour % 12 == 0 ? 12 : rawHour % 12;
-    final String minute = dateTime.minute.toString().padLeft(2, "0");
-    final String period = rawHour >= 12 ? "PM" : "AM";
-    return "Today, $hour12:$minute $period";
-  }
-
   int? _mapInt(Map<String, dynamic>? source, String key) {
     if (source == null) {
       return null;
@@ -655,13 +685,9 @@ class ChatPageState extends State<ChatPage> {
 
   Widget _buildChatPanel({
     required BuildContext context,
-    required bool isWide,
   }) {
     final ThemeData theme = Theme.of(context);
     final ColorScheme color = theme.colorScheme;
-    final DateTime dateSource =
-        _messages.isEmpty ? DateTime.now() : _messages.first.createdAt;
-    final _ChatThread? active = _activeThreadOrNull;
 
     return Container(
       decoration: BoxDecoration(
@@ -676,70 +702,17 @@ class ChatPageState extends State<ChatPage> {
       ),
       child: Column(
         children: <Widget>[
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
-            child: Row(
-              children: <Widget>[
-                if (widget.onOpenHistory != null)
-                  IconButton(
-                    onPressed: widget.onOpenHistory,
-                    icon: const Icon(Icons.menu_rounded),
-                    tooltip: "Open chat history",
-                  ),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: isWide
-                        ? CrossAxisAlignment.start
-                        : CrossAxisAlignment.center,
-                    children: <Widget>[
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: <Widget>[
-                          const AppSvgIcon(
-                            AppSvgAsset.aiChatSparkles,
-                            size: 18,
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            "Parenting Assistant",
-                            style: theme.textTheme.titleLarge?.copyWith(
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ],
-                      ),
-                      Text(
-                        active?.title ?? "New conversation",
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: color.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                IconButton(
-                  onPressed: _loading ? null : _createNewThread,
-                  icon: const Icon(Icons.edit_square),
-                  tooltip: "New chat",
-                ),
-              ],
-            ),
-          ),
           Expanded(
             child: _hasActiveThread
                 ? ListView.builder(
                     controller: _scrollController,
                     padding: const EdgeInsets.fromLTRB(14, 6, 14, 10),
-                    itemCount: _messages.length + (_loading ? 2 : 1),
+                    itemCount: _messages.length + (_loading ? 1 : 0),
                     itemBuilder: (BuildContext context, int index) {
-                      if (index == 0) {
-                        return _DatePill(label: _formatDatePill(dateSource));
-                      }
-                      final int messageIndex = index - 1;
-                      if (_loading && messageIndex == _messages.length) {
+                      if (_loading && index == _messages.length) {
                         return const _TypingBubble();
                       }
-                      return _MessageBubble(message: _messages[messageIndex]);
+                      return _MessageBubble(message: _messages[index]);
                     },
                   )
                 : Center(
@@ -817,8 +790,13 @@ class ChatPageState extends State<ChatPage> {
                     _isListening
                         ? Icons.mic_off_outlined
                         : Icons.mic_none_rounded,
+                    size: 20,
                   ),
                   color: color.primary,
+                  style: IconButton.styleFrom(
+                    minimumSize: const Size(34, 34),
+                    maximumSize: const Size(34, 34),
+                  ),
                   tooltip: "Voice input",
                 ),
                 Expanded(
@@ -840,19 +818,19 @@ class ChatPageState extends State<ChatPage> {
                 ),
                 IconButton.filledTonal(
                   onPressed: _loading ? null : _createNewThread,
-                  icon: const Icon(Icons.add),
+                  icon: const Icon(Icons.add, size: 19),
                   style: IconButton.styleFrom(
-                    minimumSize: const Size(38, 38),
-                    maximumSize: const Size(38, 38),
+                    minimumSize: const Size(34, 34),
+                    maximumSize: const Size(34, 34),
                   ),
                 ),
                 const SizedBox(width: 8),
                 IconButton.filled(
                   onPressed: _loading ? null : _sendCustomQuestion,
-                  icon: const Icon(Icons.arrow_upward),
+                  icon: const Icon(Icons.arrow_upward, size: 18),
                   style: IconButton.styleFrom(
-                    minimumSize: const Size(44, 44),
-                    maximumSize: const Size(44, 44),
+                    minimumSize: const Size(36, 36),
+                    maximumSize: const Size(36, 36),
                   ),
                 ),
               ],
@@ -865,12 +843,7 @@ class ChatPageState extends State<ChatPage> {
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (BuildContext context, BoxConstraints constraints) {
-        final bool isWide = constraints.maxWidth >= 920;
-        return _buildChatPanel(context: context, isWide: isWide);
-      },
-    );
+    return _buildChatPanel(context: context);
   }
 }
 
@@ -940,35 +913,6 @@ class _QuickActionPill extends StatelessWidget {
                     ?.copyWith(fontWeight: FontWeight.w600),
               ),
             ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _DatePill extends StatelessWidget {
-  const _DatePill({required this.label});
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    final ColorScheme color = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 14),
-      child: Align(
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: color.surfaceContainerHighest.withValues(alpha: 0.58),
-            borderRadius: BorderRadius.circular(999),
-          ),
-          child: Text(
-            label,
-            style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                  color: color.onSurfaceVariant,
-                ),
           ),
         ),
       ),

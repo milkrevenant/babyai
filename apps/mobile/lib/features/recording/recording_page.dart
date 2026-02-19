@@ -36,9 +36,11 @@ class RecordingPage extends StatefulWidget {
   const RecordingPage({
     super.key,
     required this.range,
+    this.onBabyNameChanged,
   });
 
   final RecordRange range;
+  final ValueChanged<String>? onBabyNameChanged;
 
   @override
   State<RecordingPage> createState() => RecordingPageState();
@@ -55,6 +57,7 @@ class RecordingPageState extends State<RecordingPage> {
   _TimerActivity _selectedTimerActivity = _TimerActivity.sleep;
   _TimerActivity? _activeTimerActivity;
   DateTime? _activeTimerStartedAt;
+  String? _activeTimerEventId;
   _CompletedTimerEntry? _latestTimerEntry;
 
   @override
@@ -62,10 +65,16 @@ class RecordingPageState extends State<RecordingPage> {
     super.initState();
     final DateTime? pendingSleepStart =
         AppSessionStore.pendingSleepStart?.toLocal();
+    final DateTime? pendingFormulaStart =
+        AppSessionStore.pendingFormulaStart?.toLocal();
     if (pendingSleepStart != null) {
       _selectedTimerActivity = _TimerActivity.sleep;
       _activeTimerActivity = _TimerActivity.sleep;
       _activeTimerStartedAt = pendingSleepStart;
+    } else if (pendingFormulaStart != null) {
+      _selectedTimerActivity = _TimerActivity.formula;
+      _activeTimerActivity = _TimerActivity.formula;
+      _activeTimerStartedAt = pendingFormulaStart;
     }
     _clockTicker = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) {
@@ -98,7 +107,18 @@ class RecordingPageState extends State<RecordingPage> {
       if (!mounted) {
         return;
       }
-      setState(() => _snapshot = result);
+      final String? babyName = _asString(result["baby_name"]);
+      setState(() {
+        _snapshot = result;
+        if (_activeTimerActivity != null &&
+            (_activeTimerEventId == null || _activeTimerEventId!.isEmpty)) {
+          _activeTimerEventId =
+              _openEventIdForTimerActivity(result, _activeTimerActivity!);
+        }
+      });
+      if (babyName != null && babyName.isNotEmpty) {
+        widget.onBabyNameChanged?.call(babyName);
+      }
     } catch (error) {
       if (!mounted) {
         return;
@@ -211,20 +231,6 @@ class RecordingPageState extends State<RecordingPage> {
       return DateTime.parse(value).toLocal();
     } catch (_) {
       return null;
-    }
-  }
-
-  String _rangeLabel() {
-    final DateTime now = DateTime.now();
-    switch (widget.range) {
-      case RecordRange.day:
-        return "${now.year}-${now.month.toString().padLeft(2, "0")}-${now.day.toString().padLeft(2, "0")}";
-      case RecordRange.week:
-        final DateTime monday = now.subtract(Duration(days: now.weekday - 1));
-        final DateTime sunday = monday.add(const Duration(days: 6));
-        return "${monday.month}/${monday.day} - ${sunday.month}/${sunday.day}";
-      case RecordRange.month:
-        return "${now.year}-${now.month.toString().padLeft(2, "0")}";
     }
   }
 
@@ -849,14 +855,55 @@ class RecordingPageState extends State<RecordingPage> {
     return "$m분";
   }
 
+  HomeTileType _homeTileForTimerActivity(_TimerActivity activity) {
+    switch (activity) {
+      case _TimerActivity.sleep:
+        return HomeTileType.sleep;
+      case _TimerActivity.formula:
+        return HomeTileType.formula;
+      case _TimerActivity.breastfeed:
+        return HomeTileType.breastfeed;
+      case _TimerActivity.diaper:
+        return HomeTileType.diaper;
+    }
+  }
+
+  String _eventTypeForTimerActivity(_TimerActivity activity) {
+    switch (activity) {
+      case _TimerActivity.sleep:
+        return "SLEEP";
+      case _TimerActivity.formula:
+        return "FORMULA";
+      case _TimerActivity.breastfeed:
+        return "BREASTFEED";
+      case _TimerActivity.diaper:
+        return "PEE";
+    }
+  }
+
+  String? _openEventIdForTimerActivity(
+    Map<String, dynamic> snapshot,
+    _TimerActivity activity,
+  ) {
+    final String? key = _openEventIdKey(_homeTileForTimerActivity(activity));
+    if (key == null) {
+      return null;
+    }
+    return _asString(snapshot[key]);
+  }
+
   RecordEntryInput _buildTimerRecordInput({
     required _TimerActivity activity,
     required DateTime startAt,
     required DateTime endAt,
+    String? openEventId,
   }) {
     final int durationSeconds = endAt.difference(startAt).inSeconds;
     final int safeDurationSeconds = durationSeconds < 0 ? 0 : durationSeconds;
     final int safeDurationMinutes = safeDurationSeconds ~/ 60;
+    final String normalizedOpenEventId = (openEventId ?? "").trim();
+    final bool useOpenLifecycle =
+        activity != _TimerActivity.diaper && normalizedOpenEventId.isNotEmpty;
     switch (activity) {
       case _TimerActivity.sleep:
         return RecordEntryInput(
@@ -868,6 +915,10 @@ class RecordingPageState extends State<RecordingPage> {
             "duration_sec": safeDurationSeconds,
           },
           metadata: const <String, dynamic>{"timer_activity": "SLEEP"},
+          lifecycleAction: useOpenLifecycle
+              ? RecordLifecycleAction.completeOpen
+              : RecordLifecycleAction.createClosed,
+          targetEventId: useOpenLifecycle ? normalizedOpenEventId : null,
         );
       case _TimerActivity.formula:
         return RecordEntryInput(
@@ -879,6 +930,10 @@ class RecordingPageState extends State<RecordingPage> {
             "duration_sec": safeDurationSeconds,
           },
           metadata: const <String, dynamic>{"timer_activity": "FORMULA"},
+          lifecycleAction: useOpenLifecycle
+              ? RecordLifecycleAction.completeOpen
+              : RecordLifecycleAction.createClosed,
+          targetEventId: useOpenLifecycle ? normalizedOpenEventId : null,
         );
       case _TimerActivity.breastfeed:
         return RecordEntryInput(
@@ -890,6 +945,10 @@ class RecordingPageState extends State<RecordingPage> {
             "duration_sec": safeDurationSeconds,
           },
           metadata: const <String, dynamic>{"timer_activity": "BREASTFEED"},
+          lifecycleAction: useOpenLifecycle
+              ? RecordLifecycleAction.completeOpen
+              : RecordLifecycleAction.createClosed,
+          targetEventId: useOpenLifecycle ? normalizedOpenEventId : null,
         );
       case _TimerActivity.diaper:
         return RecordEntryInput(
@@ -1126,13 +1185,52 @@ class RecordingPageState extends State<RecordingPage> {
     }
     final DateTime startedAt = DateTime.now();
     final _TimerActivity selected = _selectedTimerActivity;
+    String? openEventId;
+    if (selected != _TimerActivity.diaper) {
+      setState(() => _entrySaving = true);
+      try {
+        final Map<String, dynamic> started =
+            await BabyAIApi.instance.startManualEvent(
+          type: _eventTypeForTimerActivity(selected),
+          startTime: startedAt,
+          value: const <String, dynamic>{},
+          metadata: <String, dynamic>{
+            "timer_activity": _eventTypeForTimerActivity(selected),
+          },
+        );
+        final String parsedEventId =
+            (started["event_id"] ?? "").toString().trim();
+        if (parsedEventId.isNotEmpty) {
+          openEventId = parsedEventId;
+        }
+      } catch (error) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(error.toString())),
+          );
+          setState(() => _entrySaving = false);
+        }
+        return;
+      } finally {
+        if (mounted) {
+          setState(() => _entrySaving = false);
+        }
+      }
+    }
+    if (!mounted) {
+      return;
+    }
     setState(() {
       _activeTimerActivity = selected;
       _activeTimerStartedAt = startedAt;
+      _activeTimerEventId = openEventId;
     });
     if (selected == _TimerActivity.sleep) {
       await AppSessionStore.setPendingSleepStart(startedAt.toUtc());
+    } else if (selected == _TimerActivity.formula) {
+      await AppSessionStore.setPendingFormulaStart(startedAt.toUtc());
     }
+    await _loadLandingSnapshot();
   }
 
   Future<void> _stopActiveTimer() async {
@@ -1148,6 +1246,7 @@ class RecordingPageState extends State<RecordingPage> {
       activity: activity,
       startAt: startAt,
       endAt: endAt,
+      openEventId: _activeTimerEventId,
     );
     final bool saved = await _saveEntryInput(
       input,
@@ -1169,6 +1268,7 @@ class RecordingPageState extends State<RecordingPage> {
       );
       _activeTimerActivity = null;
       _activeTimerStartedAt = null;
+      _activeTimerEventId = null;
     });
   }
 
@@ -1356,11 +1456,6 @@ class RecordingPageState extends State<RecordingPage> {
           es: "No hay nota especial registrada.",
         );
 
-    final String greeting = _now.hour < 12
-        ? "좋은 아침이에요,"
-        : (_now.hour < 18 ? "좋은 오후예요," : "편안한 저녁이에요,");
-    final String babyName = _asString(snapshot["baby_name"]) ?? "우리 아기";
-
     final bool timerRunning =
         _activeTimerActivity != null && _activeTimerStartedAt != null;
     final _TimerActivity cardActivity =
@@ -1380,7 +1475,7 @@ class RecordingPageState extends State<RecordingPage> {
         : _timerActivityLabel(cardActivity);
     final String activityClock = _formatActivityClock(timerDuration);
     final String activitySubtitle = timerRunning
-        ? "시작 ${_formatAmPm(_activeTimerStartedAt!)}"
+        ? ""
         : (_latestTimerEntry == null
             ? "활동을 선택하고 시작 버튼을 눌러 주세요."
             : "최근 완료 ${_formatAmPm(_latestTimerEntry!.endAt)}");
@@ -1388,95 +1483,36 @@ class RecordingPageState extends State<RecordingPage> {
     return RefreshIndicator(
       onRefresh: _loadLandingSnapshot,
       child: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 20, 16, 24),
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
         children: <Widget>[
-          Row(
-            children: <Widget>[
-              const CircleAvatar(
-                radius: 26,
-                backgroundColor: Color(0xFFFFF2D9),
-                child: Center(
-                  child: AppSvgIcon(
-                    AppSvgAsset.profile,
-                    size: 24,
-                  ),
-                ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: color.surfaceContainerHighest.withValues(alpha: 0.72),
+                borderRadius: BorderRadius.circular(999),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                      greeting,
-                      style: TextStyle(
-                        color: color.onSurfaceVariant,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      babyName,
-                      style: const TextStyle(
-                        fontSize: 30,
-                        fontWeight: FontWeight.w700,
-                        height: 1.1,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      _rangeLabel(),
-                      style: TextStyle(
-                        color: color.onSurfaceVariant,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Column(
+              child: Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: <Widget>[
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(
-                      color:
-                          color.surfaceContainerHighest.withValues(alpha: 0.72),
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: <Widget>[
-                        Text(
-                          "AI $aiBalance cr",
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w700,
-                            fontSize: 12,
-                          ),
-                        ),
-                        Text(
-                          "Grace $aiGraceUsed/$aiGraceLimit",
-                          style: TextStyle(
-                            fontSize: 10,
-                            color: color.onSurfaceVariant,
-                          ),
-                        ),
-                      ],
+                  Text(
+                    "AI $aiBalance cr",
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12,
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  Material(
-                    color: color.surfaceContainerHighest.withValues(alpha: 0.7),
-                    shape: const CircleBorder(),
-                    child: IconButton(
-                      onPressed: _snapshotLoading ? null : _loadLandingSnapshot,
-                      icon: const Icon(Icons.refresh_rounded),
+                  Text(
+                    "Grace $aiGraceUsed/$aiGraceLimit",
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: color.onSurfaceVariant,
                     ),
                   ),
                 ],
               ),
-            ],
+            ),
           ),
           if (_snapshotLoading || _entrySaving) ...<Widget>[
             const SizedBox(height: 12),
@@ -1529,15 +1565,17 @@ class RecordingPageState extends State<RecordingPage> {
                               fontWeight: FontWeight.w700,
                             ),
                           ),
-                          const SizedBox(height: 2),
-                          Text(
-                            activitySubtitle,
-                            style: TextStyle(
-                              color: color.onSurfaceVariant,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w500,
+                          if (activitySubtitle.isNotEmpty) ...<Widget>[
+                            const SizedBox(height: 2),
+                            Text(
+                              activitySubtitle,
+                              style: TextStyle(
+                                color: color.onSurfaceVariant,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
+                              ),
                             ),
-                          ),
+                          ],
                         ],
                       ),
                     ),
@@ -1552,45 +1590,59 @@ class RecordingPageState extends State<RecordingPage> {
                   ],
                 ),
                 const SizedBox(height: 12),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children:
-                      _TimerActivity.values.map((_TimerActivity activity) {
-                    final bool selected = _selectedTimerActivity == activity;
-                    final Color accent = _timerActivityAccent(activity);
-                    return ChoiceChip(
-                      selected: selected,
-                      label: Text(_timerActivityLabel(activity)),
-                      avatar: AppSvgIcon(
-                        _timerActivityAsset(activity),
-                        size: 15,
-                        color: selected
-                            ? color.onPrimaryContainer
-                            : color.onSurfaceVariant,
-                      ),
-                      labelStyle: TextStyle(
-                        fontWeight: FontWeight.w600,
-                        color: selected
-                            ? color.onPrimaryContainer
-                            : color.onSurfaceVariant,
-                      ),
-                      selectedColor: accent.withValues(alpha: 0.22),
-                      side: BorderSide(
-                        color: selected
-                            ? accent.withValues(alpha: 0.6)
-                            : color.outline.withValues(alpha: 0.32),
-                      ),
-                      onSelected: (_entrySaving || timerRunning)
-                          ? null
-                          : (bool value) {
-                              if (!value) {
-                                return;
-                              }
-                              setState(() => _selectedTimerActivity = activity);
-                            },
-                    );
-                  }).toList(growable: false),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children:
+                        _TimerActivity.values.map((_TimerActivity activity) {
+                      final bool selected = _selectedTimerActivity == activity;
+                      final Color accent = _timerActivityAccent(activity);
+                      return Padding(
+                        padding: const EdgeInsets.only(right: 6),
+                        child: ChoiceChip(
+                          visualDensity: VisualDensity.compact,
+                          materialTapTargetSize:
+                              MaterialTapTargetSize.shrinkWrap,
+                          selected: selected,
+                          labelPadding:
+                              const EdgeInsets.symmetric(horizontal: 6),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 4),
+                          label: Text(_timerActivityLabel(activity)),
+                          avatar: AppSvgIcon(
+                            _timerActivityAsset(activity),
+                            size: 14,
+                            color: selected
+                                ? color.onPrimaryContainer
+                                : color.onSurfaceVariant,
+                          ),
+                          labelStyle: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: selected
+                                ? color.onPrimaryContainer
+                                : color.onSurfaceVariant,
+                          ),
+                          selectedColor: accent.withValues(alpha: 0.22),
+                          side: BorderSide(
+                            color: selected
+                                ? accent.withValues(alpha: 0.6)
+                                : color.outline.withValues(alpha: 0.32),
+                          ),
+                          onSelected: (_entrySaving || timerRunning)
+                              ? null
+                              : (bool value) {
+                                  if (!value) {
+                                    return;
+                                  }
+                                  setState(
+                                    () => _selectedTimerActivity = activity,
+                                  );
+                                },
+                        ),
+                      );
+                    }).toList(growable: false),
+                  ),
                 ),
                 const SizedBox(height: 12),
                 Container(

@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type resolvedBabyProfile struct {
@@ -313,6 +314,16 @@ func (a *App) latestFeedingTime(ctx context.Context, babyID string) (*time.Time,
 		 ORDER BY "startTime" DESC LIMIT 1`,
 		babyID,
 	).Scan(&latest)
+	if err != nil && isUndefinedColumnError(err) {
+		err = a.db.QueryRow(
+			ctx,
+			`SELECT "startTime" FROM "Event"
+			 WHERE "babyId" = $1
+			   AND type IN ('FORMULA', 'BREASTFEED')
+			 ORDER BY "startTime" DESC LIMIT 1`,
+			babyID,
+		).Scan(&latest)
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -321,6 +332,11 @@ func (a *App) latestFeedingTime(ctx context.Context, babyID string) (*time.Time,
 	}
 	latestUTC := latest.UTC()
 	return &latestUTC, nil
+}
+
+func isUndefinedColumnError(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "42703"
 }
 
 func calculateFeedingRecommendation(

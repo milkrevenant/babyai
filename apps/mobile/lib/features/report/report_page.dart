@@ -164,6 +164,30 @@ class ReportPageState extends State<ReportPage> {
     return _statsByDay[dayUtc] ?? _DayStats.empty(dayUtc);
   }
 
+  String _selectedRangeDateLabel() {
+    String ymd(DateTime dayUtc) {
+      final DateTime local = dayUtc.toLocal();
+      final String y = local.year.toString().padLeft(4, "0");
+      final String m = local.month.toString().padLeft(2, "0");
+      final String d = local.day.toString().padLeft(2, "0");
+      return "$y-$m-$d";
+    }
+
+    switch (_selected) {
+      case ReportRange.daily:
+        return ymd(_todayUtc);
+      case ReportRange.weekly:
+        final DateTime start = _weekStartUtc;
+        final DateTime end = _weekStartUtc.add(const Duration(days: 6));
+        return "${ymd(start)} ~ ${ymd(end)}";
+      case ReportRange.monthly:
+        final DateTime local = _monthStartUtc.toLocal();
+        final String y = local.year.toString().padLeft(4, "0");
+        final String m = local.month.toString().padLeft(2, "0");
+        return "$y-$m";
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final List<_DayStats> weekDays = List<_DayStats>.generate(
@@ -194,6 +218,15 @@ class ReportPageState extends State<ReportPage> {
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         children: <Widget>[
+          Text(
+            _selectedRangeDateLabel(),
+            style: TextStyle(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+              fontSize: 12.5,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 8),
           if (_loading) ...<Widget>[
             const SizedBox(height: 2),
             const LinearProgressIndicator(minHeight: 3),

@@ -654,8 +654,6 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
               _profileDropdown<String>(
                 initialValue: _sex,
                 label: tr(context, ko: "성별", en: "Sex", es: "Sexo"),
-                maxWidth: 168,
-                isExpanded: false,
                 items: <DropdownMenuItem<String>>[
                   DropdownMenuItem(
                       value: "unknown", child: Text(_sexLabel("unknown"))),

@@ -514,9 +514,15 @@ func (a *App) createManualEvent(c *gin.Context) {
 		payload.EndTime,
 		value,
 	); err != nil {
-		log.Printf("projectEventToPRDTables failed event_id=%s baby_id=%s event_type=%s err=%v", eventID, baby.ID, eventType, err)
-		writeError(c, http.StatusInternalServerError, "Failed to project PRD event")
-		return
+		// Keep the primary event write successful even when optional PRD projection
+		// tables are temporarily unavailable or schema-mismatched in local/dev.
+		log.Printf(
+			"projectEventToPRDTables warning event_id=%s baby_id=%s event_type=%s err=%v",
+			eventID,
+			baby.ID,
+			eventType,
+			err,
+		)
 	}
 
 	if err := recordAuditLog(
@@ -1011,6 +1017,25 @@ func (a *App) completeManualEvent(c *gin.Context) {
 			"event_id": eventID,
 		})
 		return
+	}
+
+	resolvedEndUTC := resolvedEnd.UTC()
+	if err := a.projectEventToPRDTables(
+		c.Request.Context(),
+		tx,
+		baby.ID,
+		eventType,
+		startTime.UTC(),
+		&resolvedEndUTC,
+		value,
+	); err != nil {
+		log.Printf(
+			"projectEventToPRDTables warning on complete event_id=%s baby_id=%s event_type=%s err=%v",
+			eventID,
+			baby.ID,
+			eventType,
+			err,
+		)
 	}
 
 	if err := recordAuditLog(

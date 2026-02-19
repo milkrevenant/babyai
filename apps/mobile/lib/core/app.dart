@@ -2,6 +2,7 @@ import "dart:async";
 import "dart:convert";
 
 import "package:flutter/material.dart";
+import "package:flutter/services.dart";
 
 import "assistant/assistant_intent_bridge.dart";
 import "../features/chat/chat_page.dart";
@@ -117,7 +118,7 @@ class _BabyAIAppState extends State<BabyAIApp> {
           ? const Color(0xFF090B10)
           : const Color(0xFFF1F1F1),
       navigationBarTheme: NavigationBarThemeData(
-        height: 66,
+        height: 54,
         backgroundColor: brightness == Brightness.dark
             ? colorScheme.surface
             : const Color(0xFFF9F8F6),
@@ -225,8 +226,11 @@ class _HomeShellState extends State<_HomeShell> {
   String? _chatHistoryError;
   List<_ChatHistoryItem> _chatHistory = <_ChatHistoryItem>[];
   String? _selectedChatSessionId;
+  String _homeBabyName = "우리 아기";
+  final Set<String> _pinnedChatSessionIds = <String>{};
+  final Set<String> _hiddenChatSessionIds = <String>{};
+  final Map<String, String> _chatRenamedTitles = <String, String>{};
 
-  RecordRange _recordRange = RecordRange.week;
   ReportRange _reportRange = ReportRange.daily;
   MarketSection _marketSection = MarketSection.used;
   CommunitySection _communitySection = CommunitySection.free;
@@ -647,6 +651,9 @@ class _HomeShellState extends State<_HomeShell> {
         if (sessionId.isEmpty) {
           continue;
         }
+        if (_hiddenChatSessionIds.contains(sessionId)) {
+          continue;
+        }
         final String title = (item["title"] ?? "").toString().trim();
         final String preview = (item["preview"] ?? "").toString().trim();
         final DateTime updatedAt = DateTime.tryParse(
@@ -657,16 +664,34 @@ class _HomeShellState extends State<_HomeShell> {
         parsed.add(
           _ChatHistoryItem(
             sessionId: sessionId,
-            title: title.isEmpty ? "New conversation" : title,
+            title: _chatRenamedTitles[sessionId]?.trim().isNotEmpty == true
+                ? _chatRenamedTitles[sessionId]!
+                : (title.isEmpty ? "New conversation" : title),
             preview: preview,
             updatedAt: updatedAt,
           ),
         );
       }
+      parsed.sort((_ChatHistoryItem a, _ChatHistoryItem b) {
+        final bool aPinned = _pinnedChatSessionIds.contains(a.sessionId);
+        final bool bPinned = _pinnedChatSessionIds.contains(b.sessionId);
+        if (aPinned != bPinned) {
+          return aPinned ? -1 : 1;
+        }
+        return b.updatedAt.compareTo(a.updatedAt);
+      });
       if (!mounted) {
         return;
       }
-      setState(() => _chatHistory = parsed);
+      setState(() {
+        _chatHistory = parsed;
+        final String? selected = _selectedChatSessionId;
+        if (selected != null &&
+            _chatHistory
+                .every((_ChatHistoryItem it) => it.sessionId != selected)) {
+          _selectedChatSessionId = null;
+        }
+      });
     } catch (error) {
       if (!mounted) {
         return;
@@ -689,6 +714,189 @@ class _HomeShellState extends State<_HomeShell> {
       return "${local.hour.toString().padLeft(2, "0")}:$minute";
     }
     return "${local.month}/${local.day}";
+  }
+
+  _ChatHistoryItem? _chatHistoryItemById(String sessionId) {
+    for (final _ChatHistoryItem item in _chatHistory) {
+      if (item.sessionId == sessionId) {
+        return item;
+      }
+    }
+    return null;
+  }
+
+  Future<void> _openActiveChatOptionsFromTopBar() async {
+    final String activeId = (_chatPageKey.currentState?.activeSessionId ??
+            _selectedChatSessionId ??
+            "")
+        .trim();
+    if (activeId.isEmpty) {
+      return;
+    }
+    final _ChatHistoryItem item = _chatHistoryItemById(activeId) ??
+        _ChatHistoryItem(
+          sessionId: activeId,
+          title: _chatPageKey.currentState?.activeThreadTitle ??
+              "New conversation",
+          preview: "",
+          updatedAt: DateTime.now(),
+        );
+    await _showChatSessionActions(item);
+  }
+
+  Future<void> _showChatSessionActions(_ChatHistoryItem item) async {
+    if (!mounted) {
+      return;
+    }
+    final BuildContext dialogContext = context;
+    final bool pinned = _pinnedChatSessionIds.contains(item.sessionId);
+    final String action = await showModalBottomSheet<String>(
+          context: dialogContext,
+          showDragHandle: true,
+          builder: (BuildContext context) {
+            final ColorScheme color = Theme.of(context).colorScheme;
+            return SafeArea(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  ListTile(
+                    leading: const Icon(Icons.share_outlined),
+                    title: Text(
+                        tr(context, ko: "공유", en: "Share", es: "Compartir")),
+                    onTap: () => Navigator.of(context).pop("share"),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.drive_file_rename_outline),
+                    title: Text(
+                      tr(context, ko: "이름 바꾸기", en: "Rename", es: "Renombrar"),
+                    ),
+                    onTap: () => Navigator.of(context).pop("rename"),
+                  ),
+                  ListTile(
+                    leading:
+                        Icon(pinned ? Icons.push_pin : Icons.push_pin_outlined),
+                    title: Text(
+                      pinned
+                          ? tr(context,
+                              ko: "고정 해제", en: "Unpin", es: "Desfijar")
+                          : tr(context,
+                              ko: "채팅 고정", en: "Pin chat", es: "Fijar chat"),
+                    ),
+                    onTap: () => Navigator.of(context).pop("pin"),
+                  ),
+                  ListTile(
+                    leading: Icon(Icons.delete_outline, color: color.error),
+                    title: Text(
+                      tr(context, ko: "삭제", en: "Delete", es: "Eliminar"),
+                      style: TextStyle(
+                        color: color.error,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    onTap: () => Navigator.of(context).pop("delete"),
+                  ),
+                ],
+              ),
+            );
+          },
+        ) ??
+        "";
+    if (action.isEmpty || !mounted) {
+      return;
+    }
+    switch (action) {
+      case "share":
+        await Clipboard.setData(
+          ClipboardData(text: "babyai://chat/${item.sessionId}"),
+        );
+        if (!mounted) {
+          return;
+        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              tr(
+                context,
+                ko: "채팅 링크를 클립보드에 복사했어요.",
+                en: "Chat link copied to clipboard.",
+                es: "Enlace copiado al portapapeles.",
+              ),
+            ),
+          ),
+        );
+        return;
+      case "rename":
+        await _renameChatSession(item);
+        return;
+      case "pin":
+        setState(() {
+          if (_pinnedChatSessionIds.contains(item.sessionId)) {
+            _pinnedChatSessionIds.remove(item.sessionId);
+          } else {
+            _pinnedChatSessionIds.add(item.sessionId);
+          }
+        });
+        await _loadChatHistory();
+        return;
+      case "delete":
+        setState(() {
+          _hiddenChatSessionIds.add(item.sessionId);
+          _pinnedChatSessionIds.remove(item.sessionId);
+          _chatRenamedTitles.remove(item.sessionId);
+          if (_selectedChatSessionId == item.sessionId) {
+            _selectedChatSessionId = null;
+          }
+        });
+        await _chatPageKey.currentState?.hideSessionLocally(item.sessionId);
+        await _loadChatHistory();
+        return;
+      default:
+        return;
+    }
+  }
+
+  Future<void> _renameChatSession(_ChatHistoryItem item) async {
+    final TextEditingController controller =
+        TextEditingController(text: item.title);
+    final String? updated = await showDialog<String>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text(tr(context,
+              ko: "채팅 이름 바꾸기", en: "Rename chat", es: "Renombrar chat")),
+          content: TextField(
+            controller: controller,
+            maxLength: 80,
+            decoration: InputDecoration(
+              hintText:
+                  tr(context, ko: "새 이름", en: "New title", es: "Nuevo titulo"),
+            ),
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(tr(context, ko: "취소", en: "Cancel", es: "Cancelar")),
+            ),
+            FilledButton(
+              onPressed: () =>
+                  Navigator.of(context).pop(controller.text.trim()),
+              child: Text(tr(context, ko: "저장", en: "Save", es: "Guardar")),
+            ),
+          ],
+        );
+      },
+    );
+    controller.dispose();
+    final String nextTitle = (updated ?? "").trim();
+    if (nextTitle.isEmpty) {
+      return;
+    }
+    setState(() {
+      _chatRenamedTitles[item.sessionId] = nextTitle;
+    });
+    await _chatPageKey.currentState
+        ?.applyLocalSessionTitle(item.sessionId, nextTitle);
+    await _loadChatHistory();
   }
 
   void _openChatHistoryDrawer() {
@@ -747,18 +955,18 @@ class _HomeShellState extends State<_HomeShell> {
         label: "home",
       ),
     ];
-    if (widget.themeController.isBottomMenuEnabled(AppBottomMenu.chat)) {
-      tabs.add(const _BottomMenuTab(
-        pageIndex: _chatPage,
-        iconAsset: AppSvgAsset.aiChatSparkles,
-        label: "chat",
-      ));
-    }
     if (widget.themeController.isBottomMenuEnabled(AppBottomMenu.statistics)) {
       tabs.add(const _BottomMenuTab(
         pageIndex: _statisticsPage,
         iconAsset: AppSvgAsset.stats,
         label: "statistics",
+      ));
+    }
+    if (widget.themeController.isBottomMenuEnabled(AppBottomMenu.chat)) {
+      tabs.add(const _BottomMenuTab(
+        pageIndex: _chatPage,
+        iconAsset: AppSvgAsset.aiChatSparkles,
+        label: "chat",
       ));
     }
     if (widget.themeController.isBottomMenuEnabled(AppBottomMenu.market)) {
@@ -781,7 +989,11 @@ class _HomeShellState extends State<_HomeShell> {
   Widget _buildCurrentPage() {
     switch (_index) {
       case _homePage:
-        return RecordingPage(key: _recordPageKey, range: _recordRange);
+        return RecordingPage(
+          key: _recordPageKey,
+          range: RecordRange.day,
+          onBabyNameChanged: _onHomeBabyNameChanged,
+        );
       case _chatPage:
         return ChatPage(
           key: _chatPageKey,
@@ -807,7 +1019,10 @@ class _HomeShellState extends State<_HomeShell> {
       case _communityPage:
         return CommunityPage(section: _communitySection);
       default:
-        return RecordingPage(range: _recordRange);
+        return RecordingPage(
+          range: RecordRange.day,
+          onBabyNameChanged: _onHomeBabyNameChanged,
+        );
     }
   }
 
@@ -1034,6 +1249,10 @@ class _HomeShellState extends State<_HomeShell> {
     );
     _selectedChatSessionId = null;
     _chatHistory = <_ChatHistoryItem>[];
+    _homeBabyName = "우리 아기";
+    _pinnedChatSessionIds.clear();
+    _hiddenChatSessionIds.clear();
+    _chatRenamedTitles.clear();
   }
 
   Future<void> _loginWithGoogleToken() async {
@@ -1149,12 +1368,6 @@ class _HomeShellState extends State<_HomeShell> {
     unawaited(AppSessionStore.persistRuntimeState());
   }
 
-  void _onTopRefreshPressed() {
-    if (_index == _statisticsPage) {
-      _reportPageKey.currentState?.refreshData();
-    }
-  }
-
   void _setReportRange(ReportRange next) {
     if (_reportRange != next) {
       setState(() => _reportRange = next);
@@ -1162,28 +1375,58 @@ class _HomeShellState extends State<_HomeShell> {
     _reportPageKey.currentState?.setRange(next);
   }
 
+  void _onHomeBabyNameChanged(String name) {
+    final String normalized = name.trim();
+    if (normalized.isEmpty || normalized == _homeBabyName) {
+      return;
+    }
+    if (mounted) {
+      setState(() => _homeBabyName = normalized);
+    }
+  }
+
+  String _todayYmdLabel() {
+    final DateTime now = DateTime.now();
+    final String y = now.year.toString().padLeft(4, "0");
+    final String m = now.month.toString().padLeft(2, "0");
+    final String d = now.day.toString().padLeft(2, "0");
+    return "$y-$m-$d";
+  }
+
   Widget _buildHeaderControls(BuildContext context) {
     switch (_index) {
       case _homePage:
-        return Wrap(
-          spacing: 8,
-          children: <Widget>[
-            _HeaderChoice(
-              selected: _recordRange == RecordRange.day,
-              label: tr(context, ko: "일", en: "Day", es: "Dia"),
-              onTap: () => setState(() => _recordRange = RecordRange.day),
-            ),
-            _HeaderChoice(
-              selected: _recordRange == RecordRange.week,
-              label: tr(context, ko: "주", en: "Week", es: "Semana"),
-              onTap: () => setState(() => _recordRange = RecordRange.week),
-            ),
-            _HeaderChoice(
-              selected: _recordRange == RecordRange.month,
-              label: tr(context, ko: "월", en: "Month", es: "Mes"),
-              onTap: () => setState(() => _recordRange = RecordRange.month),
-            ),
-          ],
+        return Container(
+          height: 36,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          decoration: BoxDecoration(
+            color: Theme.of(context)
+                .colorScheme
+                .surfaceContainerHighest
+                .withValues(
+                  alpha: 0.45,
+                ),
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              const CircleAvatar(
+                radius: 11,
+                backgroundColor: Color(0xFFFFF2D9),
+                child: AppSvgIcon(AppSvgAsset.profile, size: 12),
+              ),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  _homeBabyName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+            ],
+          ),
         );
       case _photosPage:
         return const _HeaderHint(label: "Settings");
@@ -1256,43 +1499,49 @@ class _HomeShellState extends State<_HomeShell> {
         final ReportRange selectedRange =
             _reportPageKey.currentState?.selectedRange ?? _reportRange;
         return Wrap(
-          spacing: 6,
+          spacing: 5,
           children: <Widget>[
             _HeaderChoice(
               selected: selectedRange == ReportRange.daily,
-              label: tr(context, ko: "Daily", en: "Daily", es: "Diario"),
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+              label: tr(context, ko: "일", en: "Day", es: "Dia"),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
               onTap: () => _setReportRange(ReportRange.daily),
             ),
             _HeaderChoice(
               selected: selectedRange == ReportRange.weekly,
-              label: tr(context, ko: "Weekly", en: "Weekly", es: "Semanal"),
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+              label: tr(context, ko: "주", en: "Week", es: "Semana"),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
               onTap: () => _setReportRange(ReportRange.weekly),
             ),
             _HeaderChoice(
               selected: selectedRange == ReportRange.monthly,
-              label: tr(context, ko: "Monthly", en: "Monthly", es: "Mensual"),
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+              label: tr(context, ko: "월", en: "Month", es: "Mes"),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
               onTap: () => _setReportRange(ReportRange.monthly),
             ),
           ],
         );
       case _chatPage:
       default:
+        final String chatTitle =
+            (_chatPageKey.currentState?.activeThreadTitle ?? "").trim();
         return _HeaderHint(
-            label:
-                tr(context, ko: "대화", en: "Conversation", es: "Conversacion"));
+          label: chatTitle.isNotEmpty
+              ? chatTitle
+              : tr(context, ko: "대화", en: "Conversation", es: "Conversacion"),
+        );
     }
   }
 
   PreferredSizeWidget _buildTopBar(BuildContext context) {
     final ColorScheme color = Theme.of(context).colorScheme;
+    final String ymd = _todayYmdLabel();
     return AppBar(
       automaticallyImplyLeading: false,
-      toolbarHeight: 72,
+      toolbarHeight: 56,
       elevation: 0,
       scrolledUnderElevation: 0,
+      systemOverlayStyle: SystemUiOverlayStyle.dark,
       backgroundColor: Colors.transparent,
       surfaceTintColor: Colors.transparent,
       shape: RoundedRectangleBorder(
@@ -1317,10 +1566,34 @@ class _HomeShellState extends State<_HomeShell> {
           _RoundTopButton(icon: Icons.menu, onTap: _openChatHistoryDrawer),
           const SizedBox(width: 8),
           Expanded(child: _buildHeaderControls(context)),
-          if (_index == _statisticsPage) ...<Widget>[
-            const SizedBox(width: 8),
-            _RoundTopButton(icon: Icons.refresh, onTap: _onTopRefreshPressed),
+          if (_index == _chatPage) ...<Widget>[
+            const SizedBox(width: 6),
+            _RoundTopButton(
+              icon: Icons.edit_square,
+              onTap: () => unawaited(_createNewChatFromDrawer()),
+            ),
+            const SizedBox(width: 4),
+            _RoundTopButton(
+              icon: Icons.more_vert,
+              onTap: _openActiveChatOptionsFromTopBar,
+            ),
           ],
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+            decoration: BoxDecoration(
+              color: color.surfaceContainerHighest.withValues(alpha: 0.45),
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Text(
+              ymd,
+              style: TextStyle(
+                color: color.onSurfaceVariant,
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -1335,7 +1608,7 @@ class _HomeShellState extends State<_HomeShell> {
     if (iconAsset != null) {
       return AppSvgIcon(
         iconAsset,
-        size: 22,
+        size: 20,
         color: color,
       );
     }
@@ -1344,7 +1617,7 @@ class _HomeShellState extends State<_HomeShell> {
     final IconData icon = selected
         ? (tab.selectedIconData ?? fallbackIcon ?? Icons.circle_outlined)
         : (fallbackIcon ?? Icons.circle_outlined);
-    return Icon(icon, size: 22, color: color);
+    return Icon(icon, size: 20, color: color);
   }
 
   @override
@@ -1463,6 +1736,8 @@ class _HomeShellState extends State<_HomeShell> {
                                 onTap: () => unawaited(
                                   _openChatSessionFromDrawer(item.sessionId),
                                 ),
+                                onLongPress: () =>
+                                    unawaited(_showChatSessionActions(item)),
                                 leading: CircleAvatar(
                                   radius: 16,
                                   backgroundColor:
@@ -1490,12 +1765,26 @@ class _HomeShellState extends State<_HomeShell> {
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                 ),
-                                trailing: Text(
-                                  _formatChatHistoryTime(item.updatedAt),
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: color.onSurfaceVariant,
-                                  ),
+                                trailing: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: <Widget>[
+                                    if (_pinnedChatSessionIds
+                                        .contains(item.sessionId)) ...<Widget>[
+                                      Icon(
+                                        Icons.push_pin,
+                                        size: 14,
+                                        color: color.primary,
+                                      ),
+                                      const SizedBox(width: 4),
+                                    ],
+                                    Text(
+                                      _formatChatHistoryTime(item.updatedAt),
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: color.onSurfaceVariant,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               );
                             },
@@ -1598,7 +1887,7 @@ class _RoundTopButton extends StatelessWidget {
       child: InkWell(
         customBorder: const CircleBorder(),
         onTap: onTap,
-        child: SizedBox(width: 40, height: 40, child: Icon(icon, size: 20)),
+        child: SizedBox(width: 32, height: 32, child: Icon(icon, size: 17)),
       ),
     );
   }
