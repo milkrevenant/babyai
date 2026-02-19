@@ -343,202 +343,195 @@ Aviso de recopilacion y uso de privacidad de BabyAI
   Widget build(BuildContext context) {
     final ColorScheme color = Theme.of(context).colorScheme;
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
-    return Scaffold(
-      appBar: AppBar(),
-      body: AnimatedBuilder(
-        animation: themeController,
-        builder: (BuildContext context, _) {
-          return ListView(
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
-            children: <Widget>[
-              Card(
-                margin: EdgeInsets.zero,
-                elevation: 0,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
-                  child: Column(
-                    children: <Widget>[
-                      CircleAvatar(
-                        radius: 36,
-                        backgroundColor: color.primary
-                            .withValues(alpha: isDark ? 0.28 : 0.18),
-                        child: Text(
-                          _accountInitials(),
-                          style: Theme.of(context)
-                              .textTheme
-                              .headlineSmall
-                              ?.copyWith(
-                                fontWeight: FontWeight.w700,
-                                color: color.primary,
-                              ),
-                        ),
+    return AnimatedBuilder(
+      animation: themeController,
+      builder: (BuildContext context, _) {
+        return ListView(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+          children: <Widget>[
+            Card(
+              margin: EdgeInsets.zero,
+              elevation: 0,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
+                child: Column(
+                  children: <Widget>[
+                    CircleAvatar(
+                      radius: 36,
+                      backgroundColor:
+                          color.primary.withValues(alpha: isDark ? 0.28 : 0.18),
+                      child: Text(
+                        _accountInitials(),
+                        style:
+                            Theme.of(context).textTheme.headlineSmall?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                  color: color.primary,
+                                ),
                       ),
-                      const SizedBox(height: 12),
-                      Text(
-                        accountName,
-                        style: Theme.of(context)
-                            .textTheme
-                            .titleLarge
-                            ?.copyWith(fontWeight: FontWeight.w700),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        accountEmail,
-                        style: TextStyle(color: color.onSurfaceVariant),
-                      ),
-                      const SizedBox(height: 12),
-                      OutlinedButton.icon(
-                        onPressed: () => onManageChildProfile(),
-                        icon: const Icon(Icons.edit_outlined),
-                        label: Text(tr(context,
-                            ko: "프로필 편집", en: "Edit profile", es: "Editar")),
-                      ),
-                    ],
-                  ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      accountName,
+                      style: Theme.of(context)
+                          .textTheme
+                          .titleLarge
+                          ?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      accountEmail,
+                      style: TextStyle(color: color.onSurfaceVariant),
+                    ),
+                    const SizedBox(height: 12),
+                    OutlinedButton.icon(
+                      onPressed: () => onManageChildProfile(),
+                      icon: const Icon(Icons.edit_outlined),
+                      label: Text(tr(context,
+                          ko: "프로필 편집", en: "Edit profile", es: "Editar")),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 18),
-              _sectionTitle(
-                context,
-                tr(context,
-                    ko: "개인화", en: "Personalization", es: "Personalizacion"),
-              ),
-              _sectionCard(
-                context: context,
-                children: <Widget>[
-                  _sectionRow(
-                    context: context,
-                    icon: Icons.mood_outlined,
-                    title: tr(context,
-                        ko: "개인 맞춤 설정",
-                        en: "Personal preferences",
-                        es: "Preferencias personales"),
-                    subtitle: tr(context,
-                        ko: "언어, 테마, 폰트, 강조 색상",
-                        en: "Language, theme, font, accent tone",
-                        es: "Idioma, tema, fuente, color"),
-                    onTap: () => _openPersonalizationSettings(context),
-                  ),
-                  Divider(
-                    height: 1,
-                    indent: 16,
-                    endIndent: 16,
-                    color: _sectionDividerColor(context),
-                  ),
-                  _sectionRow(
-                    context: context,
-                    icon: Icons.apps_outlined,
-                    title: tr(context, ko: "앱", en: "App", es: "App"),
-                    subtitle: tr(context,
-                        ko: "하단 메뉴, 홈 타일 구성",
-                        en: "Bottom menu and home tiles",
-                        es: "Menu inferior y tiles"),
-                    onTap: () => _openAppSettings(context),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 14),
-              _sectionTitle(
-                context,
-                tr(context, ko: "계정", en: "Account", es: "Cuenta"),
-              ),
-              _sectionCard(
-                context: context,
-                children: <Widget>[
-                  _sectionRow(
-                    context: context,
-                    icon: Icons.badge_outlined,
-                    title: tr(context,
-                        ko: "계정 및 아이 프로필",
-                        en: "Account and child profile",
-                        es: "Cuenta y perfil del bebe"),
-                    subtitle: tr(context,
-                        ko: "로그인 상태, 아이 등록/수정",
-                        en: "Login status and child profile",
-                        es: "Estado de sesion y perfil"),
-                    onTap: () => _openAccountSettings(context),
-                  ),
-                  Divider(
-                    height: 1,
-                    indent: 16,
-                    endIndent: 16,
-                    color: _sectionDividerColor(context),
-                  ),
-                  _sectionRow(
-                    context: context,
-                    icon: Icons.workspace_premium_outlined,
-                    title: tr(context,
-                        ko: "구독 안내 / 플랜",
-                        en: "Subscription Plans",
-                        es: "Planes de suscripcion"),
-                    subtitle: tr(context,
-                        ko: "무료/유료 플랜 비교 및 선택",
-                        en: "Compare free and paid plans",
-                        es: "Compara planes gratis y de pago"),
-                    onTap: () => _openSubscriptionPlans(context),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 14),
-              _sectionTitle(
-                context,
-                tr(context, ko: "지원", en: "Support", es: "Soporte"),
-              ),
-              _sectionCard(
-                context: context,
-                children: <Widget>[
-                  _sectionRow(
-                    context: context,
-                    icon: Icons.support_agent_outlined,
-                    title: tr(context,
-                        ko: "고객센터",
-                        en: "Customer Center",
-                        es: "Centro de ayuda"),
-                    subtitle: tr(context,
-                        ko: "문의 및 FAQ",
-                        en: "Support and FAQ",
-                        es: "Soporte y FAQ"),
-                    onTap: () => _showCustomerCenter(context),
-                  ),
-                  Divider(
-                    height: 1,
-                    indent: 16,
-                    endIndent: 16,
-                    color: _sectionDividerColor(context),
-                  ),
-                  _sectionRow(
-                    context: context,
-                    icon: Icons.privacy_tip_outlined,
-                    title: tr(context,
-                        ko: "개인정보 수집 약관",
-                        en: "Privacy Terms",
-                        es: "Terminos de privacidad"),
-                    subtitle: tr(context,
-                        ko: "수집 항목 및 이용 목적",
-                        en: "Collection and usage details",
-                        es: "Detalle de recopilacion y uso"),
-                    onTap: () => _showPrivacyTerms(context),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 18),
-              FilledButton.tonalIcon(
-                style: FilledButton.styleFrom(
-                  foregroundColor:
-                      isGoogleLoggedIn ? color.error : color.onPrimaryContainer,
+            ),
+            const SizedBox(height: 18),
+            _sectionTitle(
+              context,
+              tr(context,
+                  ko: "개인화", en: "Personalization", es: "Personalizacion"),
+            ),
+            _sectionCard(
+              context: context,
+              children: <Widget>[
+                _sectionRow(
+                  context: context,
+                  icon: Icons.mood_outlined,
+                  title: tr(context,
+                      ko: "개인 맞춤 설정",
+                      en: "Personal preferences",
+                      es: "Preferencias personales"),
+                  subtitle: tr(context,
+                      ko: "언어, 테마, 폰트, 강조 색상",
+                      en: "Language, theme, font, accent tone",
+                      es: "Idioma, tema, fuente, color"),
+                  onTap: () => _openPersonalizationSettings(context),
                 ),
-                onPressed: isGoogleLoggedIn ? onGoogleLogout : onGoogleLogin,
-                icon: Icon(isGoogleLoggedIn ? Icons.logout : Icons.login),
-                label: Text(
-                  isGoogleLoggedIn
-                      ? tr(context, ko: "로그아웃", en: "Logout", es: "Salir")
-                      : tr(context, ko: "로그인", en: "Login", es: "Entrar"),
+                Divider(
+                  height: 1,
+                  indent: 16,
+                  endIndent: 16,
+                  color: _sectionDividerColor(context),
                 ),
+                _sectionRow(
+                  context: context,
+                  icon: Icons.apps_outlined,
+                  title: tr(context, ko: "앱", en: "App", es: "App"),
+                  subtitle: tr(context,
+                      ko: "하단 메뉴, 홈 타일 구성",
+                      en: "Bottom menu and home tiles",
+                      es: "Menu inferior y tiles"),
+                  onTap: () => _openAppSettings(context),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            _sectionTitle(
+              context,
+              tr(context, ko: "계정", en: "Account", es: "Cuenta"),
+            ),
+            _sectionCard(
+              context: context,
+              children: <Widget>[
+                _sectionRow(
+                  context: context,
+                  icon: Icons.badge_outlined,
+                  title: tr(context,
+                      ko: "계정 및 아이 프로필",
+                      en: "Account and child profile",
+                      es: "Cuenta y perfil del bebe"),
+                  subtitle: tr(context,
+                      ko: "로그인 상태, 아이 등록/수정",
+                      en: "Login status and child profile",
+                      es: "Estado de sesion y perfil"),
+                  onTap: () => _openAccountSettings(context),
+                ),
+                Divider(
+                  height: 1,
+                  indent: 16,
+                  endIndent: 16,
+                  color: _sectionDividerColor(context),
+                ),
+                _sectionRow(
+                  context: context,
+                  icon: Icons.workspace_premium_outlined,
+                  title: tr(context,
+                      ko: "구독 안내 / 플랜",
+                      en: "Subscription Plans",
+                      es: "Planes de suscripcion"),
+                  subtitle: tr(context,
+                      ko: "무료/유료 플랜 비교 및 선택",
+                      en: "Compare free and paid plans",
+                      es: "Compara planes gratis y de pago"),
+                  onTap: () => _openSubscriptionPlans(context),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            _sectionTitle(
+              context,
+              tr(context, ko: "지원", en: "Support", es: "Soporte"),
+            ),
+            _sectionCard(
+              context: context,
+              children: <Widget>[
+                _sectionRow(
+                  context: context,
+                  icon: Icons.support_agent_outlined,
+                  title: tr(context,
+                      ko: "고객센터", en: "Customer Center", es: "Centro de ayuda"),
+                  subtitle: tr(context,
+                      ko: "문의 및 FAQ",
+                      en: "Support and FAQ",
+                      es: "Soporte y FAQ"),
+                  onTap: () => _showCustomerCenter(context),
+                ),
+                Divider(
+                  height: 1,
+                  indent: 16,
+                  endIndent: 16,
+                  color: _sectionDividerColor(context),
+                ),
+                _sectionRow(
+                  context: context,
+                  icon: Icons.privacy_tip_outlined,
+                  title: tr(context,
+                      ko: "개인정보 수집 약관",
+                      en: "Privacy Terms",
+                      es: "Terminos de privacidad"),
+                  subtitle: tr(context,
+                      ko: "수집 항목 및 이용 목적",
+                      en: "Collection and usage details",
+                      es: "Detalle de recopilacion y uso"),
+                  onTap: () => _showPrivacyTerms(context),
+                ),
+              ],
+            ),
+            const SizedBox(height: 18),
+            FilledButton.tonalIcon(
+              style: FilledButton.styleFrom(
+                foregroundColor:
+                    isGoogleLoggedIn ? color.error : color.onPrimaryContainer,
               ),
-            ],
-          );
-        },
-      ),
+              onPressed: isGoogleLoggedIn ? onGoogleLogout : onGoogleLogin,
+              icon: Icon(isGoogleLoggedIn ? Icons.logout : Icons.login),
+              label: Text(
+                isGoogleLoggedIn
+                    ? tr(context, ko: "로그아웃", en: "Logout", es: "Salir")
+                    : tr(context, ko: "로그인", en: "Login", es: "Entrar"),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }

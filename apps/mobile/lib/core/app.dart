@@ -118,7 +118,7 @@ class _BabyAIAppState extends State<BabyAIApp> {
           ? const Color(0xFF090B10)
           : const Color(0xFFF1F1F1),
       navigationBarTheme: NavigationBarThemeData(
-        height: 54,
+        height: 50,
         backgroundColor: brightness == Brightness.dark
             ? colorScheme.surface
             : const Color(0xFFF9F8F6),
@@ -227,6 +227,7 @@ class _HomeShellState extends State<_HomeShell> {
   List<_ChatHistoryItem> _chatHistory = <_ChatHistoryItem>[];
   String? _selectedChatSessionId;
   String _homeBabyName = "우리 아기";
+  String? _homeBabyPhotoUrl;
   final Set<String> _pinnedChatSessionIds = <String>{};
   final Set<String> _hiddenChatSessionIds = <String>{};
   final Map<String, String> _chatRenamedTitles = <String, String>{};
@@ -744,6 +745,25 @@ class _HomeShellState extends State<_HomeShell> {
     await _showChatSessionActions(item);
   }
 
+  Future<void> _renameActiveChatFromTopBar() async {
+    final String activeId = (_chatPageKey.currentState?.activeSessionId ??
+            _selectedChatSessionId ??
+            "")
+        .trim();
+    if (activeId.isEmpty) {
+      return;
+    }
+    final _ChatHistoryItem item = _chatHistoryItemById(activeId) ??
+        _ChatHistoryItem(
+          sessionId: activeId,
+          title: _chatPageKey.currentState?.activeThreadTitle ??
+              "New conversation",
+          preview: "",
+          updatedAt: DateTime.now(),
+        );
+    await _renameChatSession(item);
+  }
+
   Future<void> _showChatSessionActions(_ChatHistoryItem item) async {
     if (!mounted) {
       return;
@@ -993,6 +1013,7 @@ class _HomeShellState extends State<_HomeShell> {
           key: _recordPageKey,
           range: RecordRange.day,
           onBabyNameChanged: _onHomeBabyNameChanged,
+          onBabyPhotoChanged: _onHomeBabyPhotoChanged,
         );
       case _chatPage:
         return ChatPage(
@@ -1022,6 +1043,7 @@ class _HomeShellState extends State<_HomeShell> {
         return RecordingPage(
           range: RecordRange.day,
           onBabyNameChanged: _onHomeBabyNameChanged,
+          onBabyPhotoChanged: _onHomeBabyPhotoChanged,
         );
     }
   }
@@ -1385,12 +1407,130 @@ class _HomeShellState extends State<_HomeShell> {
     }
   }
 
+  void _onHomeBabyPhotoChanged(String? photoUrl) {
+    final String trimmed = (photoUrl ?? "").trim();
+    final String? normalized = trimmed.isEmpty ? null : trimmed;
+    if (normalized == _homeBabyPhotoUrl) {
+      return;
+    }
+    if (mounted) {
+      setState(() => _homeBabyPhotoUrl = normalized);
+    }
+  }
+
+  Widget _buildHomeBabyAvatar(BuildContext context) {
+    final String? photoUrl = _homeBabyPhotoUrl;
+    if (photoUrl == null || photoUrl.isEmpty) {
+      return const CircleAvatar(
+        radius: 11,
+        backgroundColor: Color(0xFFFFF2D9),
+        child: AppSvgIcon(AppSvgAsset.profile, size: 12),
+      );
+    }
+    return CircleAvatar(
+      radius: 11,
+      backgroundColor: const Color(0xFFFFF2D9),
+      child: ClipOval(
+        child: Image.network(
+          photoUrl,
+          width: 22,
+          height: 22,
+          fit: BoxFit.cover,
+          errorBuilder: (BuildContext _, Object __, StackTrace? ___) {
+            return const SizedBox(
+              width: 22,
+              height: 22,
+              child: Center(
+                child: AppSvgIcon(AppSvgAsset.profile, size: 12),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
   String _todayYmdLabel() {
     final DateTime now = DateTime.now();
     final String y = now.year.toString().padLeft(4, "0");
     final String m = now.month.toString().padLeft(2, "0");
     final String d = now.day.toString().padLeft(2, "0");
     return "$y-$m-$d";
+  }
+
+  String _topBarDateLabel() {
+    if (_index == _statisticsPage) {
+      final String? reportLabel =
+          _reportPageKey.currentState?.navigationDateLabel;
+      if (reportLabel != null && reportLabel.trim().isNotEmpty) {
+        return reportLabel.trim();
+      }
+    }
+    return _todayYmdLabel();
+  }
+
+  Future<void> _pickStatisticsDateFromTopBar() async {
+    if (_index != _statisticsPage) {
+      return;
+    }
+    final ReportPageState? reportState = _reportPageKey.currentState;
+    final ReportRange range = reportState?.selectedRange ?? _reportRange;
+    final DateTime now = DateTime.now();
+    final DateTime firstDate = DateTime(now.year - 12, 1, 1);
+    final DateTime lastDate = DateTime(now.year + 3, 12, 31);
+    final DateTime rawInitial = reportState?.datePickerInitialDateLocal ?? now;
+    final DateTime initialDate = rawInitial.isBefore(firstDate)
+        ? firstDate
+        : (rawInitial.isAfter(lastDate) ? lastDate : rawInitial);
+    final bool Function(DateTime)? selectableDayPredicate;
+    switch (range) {
+      case ReportRange.daily:
+        selectableDayPredicate = null;
+      case ReportRange.weekly:
+        selectableDayPredicate =
+            (DateTime day) => day.weekday == DateTime.monday;
+      case ReportRange.monthly:
+        selectableDayPredicate = (DateTime day) => day.day == 1;
+    }
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: initialDate,
+      firstDate: firstDate,
+      lastDate: lastDate,
+      selectableDayPredicate: selectableDayPredicate,
+      helpText: tr(
+        context,
+        ko: range == ReportRange.weekly
+            ? "통계 주 선택 (월요일)"
+            : range == ReportRange.monthly
+                ? "통계 월 선택 (1일)"
+                : "통계 날짜 선택",
+        en: range == ReportRange.weekly
+            ? "Choose statistics week (Monday)"
+            : range == ReportRange.monthly
+                ? "Choose statistics month (day 1)"
+                : "Choose statistics date",
+        es: range == ReportRange.weekly
+            ? "Elegir semana (lunes)"
+            : range == ReportRange.monthly
+                ? "Elegir mes (dia 1)"
+                : "Elegir fecha",
+      ),
+    );
+    if (!mounted || picked == null) {
+      return;
+    }
+    switch (range) {
+      case ReportRange.daily:
+        await reportState?.setFocusDate(picked);
+      case ReportRange.weekly:
+        await reportState?.setFocusWeekStart(picked);
+      case ReportRange.monthly:
+        await reportState?.setFocusMonthStart(picked);
+    }
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   Widget _buildHeaderControls(BuildContext context) {
@@ -1411,11 +1551,7 @@ class _HomeShellState extends State<_HomeShell> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              const CircleAvatar(
-                radius: 11,
-                backgroundColor: Color(0xFFFFF2D9),
-                child: AppSvgIcon(AppSvgAsset.profile, size: 12),
-              ),
+              _buildHomeBabyAvatar(context),
               const SizedBox(width: 8),
               Flexible(
                 child: Text(
@@ -1529,24 +1665,25 @@ class _HomeShellState extends State<_HomeShell> {
           label: chatTitle.isNotEmpty
               ? chatTitle
               : tr(context, ko: "대화", en: "Conversation", es: "Conversacion"),
+          onTap: () => unawaited(_renameActiveChatFromTopBar()),
+          showEditIcon: true,
         );
     }
   }
 
   PreferredSizeWidget _buildTopBar(BuildContext context) {
     final ColorScheme color = Theme.of(context).colorScheme;
-    final String ymd = _todayYmdLabel();
+    final String ymd = _topBarDateLabel();
     return AppBar(
       automaticallyImplyLeading: false,
-      toolbarHeight: 56,
+      toolbarHeight: 52,
       elevation: 0,
       scrolledUnderElevation: 0,
       systemOverlayStyle: SystemUiOverlayStyle.dark,
       backgroundColor: Colors.transparent,
       surfaceTintColor: Colors.transparent,
-      shape: RoundedRectangleBorder(
-        borderRadius: const BorderRadius.vertical(bottom: Radius.circular(24)),
-        side: BorderSide(color: color.outlineVariant.withValues(alpha: 0.28)),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(bottom: Radius.circular(24)),
       ),
       flexibleSpace: DecoratedBox(
         decoration: BoxDecoration(
@@ -1554,9 +1691,10 @@ class _HomeShellState extends State<_HomeShell> {
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
             colors: <Color>[
-              color.surface.withValues(alpha: 0.98),
-              color.surface.withValues(alpha: 0.82),
+              color.surface.withValues(alpha: 1.0),
+              color.surface.withValues(alpha: 0.0),
             ],
+            stops: const <double>[0, 1],
           ),
         ),
       ),
@@ -1579,18 +1717,40 @@ class _HomeShellState extends State<_HomeShell> {
             ),
           ],
           const SizedBox(width: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-            decoration: BoxDecoration(
-              color: color.surfaceContainerHighest.withValues(alpha: 0.45),
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
               borderRadius: BorderRadius.circular(999),
-            ),
-            child: Text(
-              ymd,
-              style: TextStyle(
-                color: color.onSurfaceVariant,
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
+              onTap: _index == _statisticsPage
+                  ? () => unawaited(_pickStatisticsDateFromTopBar())
+                  : null,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: color.surfaceContainerHighest.withValues(alpha: 0.45),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    Text(
+                      ymd,
+                      style: TextStyle(
+                        color: color.onSurfaceVariant,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    if (_index == _statisticsPage) ...<Widget>[
+                      const SizedBox(width: 4),
+                      Icon(
+                        Icons.keyboard_arrow_down_rounded,
+                        size: 14,
+                        color: color.onSurfaceVariant,
+                      ),
+                    ],
+                  ],
+                ),
               ),
             ),
           ),
@@ -1639,7 +1799,9 @@ class _HomeShellState extends State<_HomeShell> {
     final int selectedBottomIndex = bottomTabs.indexWhere(
       (_BottomMenuTab tab) => tab.pageIndex == _index,
     );
-    final bool showBottomNav = selectedBottomIndex >= 0;
+    final bool showBottomNav = bottomTabs.isNotEmpty;
+    final int selectedBottomIndexResolved =
+        selectedBottomIndex >= 0 ? selectedBottomIndex : 0;
 
     return Scaffold(
       key: _scaffoldKey,
@@ -1668,29 +1830,11 @@ class _HomeShellState extends State<_HomeShell> {
                     IconButton(
                       onPressed: _chatHistoryLoading
                           ? null
-                          : () => unawaited(_loadChatHistory()),
-                      icon: const Icon(Icons.refresh_rounded),
-                      tooltip: "Refresh history",
+                          : () => unawaited(_createNewChatFromDrawer()),
+                      icon: const Icon(Icons.add_comment_outlined),
+                      tooltip: "New conversation",
                     ),
                   ],
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    onPressed: () => unawaited(_createNewChatFromDrawer()),
-                    icon: const Icon(Icons.add_comment_outlined),
-                    label: Text(
-                      tr(
-                        context,
-                        ko: "새 채팅",
-                        en: "New conversation",
-                        es: "Nueva conversacion",
-                      ),
-                    ),
-                  ),
                 ),
               ),
               if (_chatHistoryError != null)
@@ -1795,11 +1939,11 @@ class _HomeShellState extends State<_HomeShell> {
           ),
         ),
       ),
-      body: SafeArea(child: _buildCurrentPage()),
+      body: SafeArea(top: false, child: _buildCurrentPage()),
       bottomNavigationBar: showBottomNav
           ? NavigationBar(
               labelBehavior: NavigationDestinationLabelBehavior.alwaysHide,
-              selectedIndex: selectedBottomIndex,
+              selectedIndex: selectedBottomIndexResolved,
               onDestinationSelected: (int i) {
                 _setIndex(bottomTabs[i].pageIndex);
               },
@@ -1931,22 +2075,53 @@ class _HeaderChoice extends StatelessWidget {
 }
 
 class _HeaderHint extends StatelessWidget {
-  const _HeaderHint({required this.label});
+  const _HeaderHint({
+    required this.label,
+    this.onTap,
+    this.showEditIcon = false,
+  });
 
   final String label;
+  final VoidCallback? onTap;
+  final bool showEditIcon;
 
   @override
   Widget build(BuildContext context) {
     final ColorScheme color = Theme.of(context).colorScheme;
-    return Container(
+    final Widget content = Container(
       height: 40,
-      alignment: Alignment.centerLeft,
       padding: const EdgeInsets.symmetric(horizontal: 12),
       decoration: BoxDecoration(
         color: color.surfaceContainerHighest.withValues(alpha: 0.45),
         borderRadius: BorderRadius.circular(999),
       ),
-      child: Text(label, overflow: TextOverflow.ellipsis),
+      child: Row(
+        children: <Widget>[
+          Expanded(
+            child: Text(label, overflow: TextOverflow.ellipsis),
+          ),
+          if (showEditIcon) ...<Widget>[
+            const SizedBox(width: 6),
+            Icon(
+              Icons.edit_outlined,
+              size: 14,
+              color: color.onSurfaceVariant,
+            ),
+          ],
+        ],
+      ),
+    );
+
+    if (onTap == null) {
+      return content;
+    }
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: onTap,
+        child: content,
+      ),
     );
   }
 }

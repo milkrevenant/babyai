@@ -23,11 +23,13 @@ class _CompletedTimerEntry {
     required this.activity,
     required this.startAt,
     required this.endAt,
+    this.eventId,
   });
 
   final _TimerActivity activity;
   final DateTime startAt;
   final DateTime endAt;
+  final String? eventId;
 
   Duration get duration => endAt.difference(startAt);
 }
@@ -37,10 +39,12 @@ class RecordingPage extends StatefulWidget {
     super.key,
     required this.range,
     this.onBabyNameChanged,
+    this.onBabyPhotoChanged,
   });
 
   final RecordRange range;
   final ValueChanged<String>? onBabyNameChanged;
+  final ValueChanged<String?>? onBabyPhotoChanged;
 
   @override
   State<RecordingPage> createState() => RecordingPageState();
@@ -108,6 +112,11 @@ class RecordingPageState extends State<RecordingPage> {
         return;
       }
       final String? babyName = _asString(result["baby_name"]);
+      final String? babyPhoto = _asString(result["baby_profile_photo_url"]) ??
+          _asString(result["profile_photo_url"]) ??
+          _asString(result["baby_photo_url"]) ??
+          _asString(result["avatar_url"]) ??
+          _asString(result["image_url"]);
       setState(() {
         _snapshot = result;
         if (_activeTimerActivity != null &&
@@ -119,6 +128,7 @@ class RecordingPageState extends State<RecordingPage> {
       if (babyName != null && babyName.isNotEmpty) {
         widget.onBabyNameChanged?.call(babyName);
       }
+      widget.onBabyPhotoChanged?.call(babyPhoto);
     } catch (error) {
       if (!mounted) {
         return;
@@ -1112,39 +1122,47 @@ class RecordingPageState extends State<RecordingPage> {
   Future<bool> _saveEntryInput(
     RecordEntryInput input, {
     String? successMessage,
+    ValueChanged<String?>? onSavedEventId,
   }) async {
     setState(() => _entrySaving = true);
     bool saved = false;
+    String? savedEventId;
     try {
       switch (input.lifecycleAction) {
         case RecordLifecycleAction.startOnly:
-          await BabyAIApi.instance.startManualEvent(
+          final Map<String, dynamic> response =
+              await BabyAIApi.instance.startManualEvent(
             type: input.type,
             startTime: input.startTime,
             value: input.value,
             metadata: input.metadata,
           );
+          savedEventId = _asString(response["event_id"]);
           break;
         case RecordLifecycleAction.completeOpen:
           final String targetEventId = (input.targetEventId ?? "").trim();
           if (targetEventId.isEmpty) {
             throw ApiFailure("Missing in-progress event id to complete.");
           }
-          await BabyAIApi.instance.completeManualEvent(
+          final Map<String, dynamic> response =
+              await BabyAIApi.instance.completeManualEvent(
             eventId: targetEventId,
             endTime: input.endTime,
             value: input.value,
             metadata: input.metadata,
           );
+          savedEventId = _asString(response["event_id"]) ?? targetEventId;
           break;
         case RecordLifecycleAction.createClosed:
-          await BabyAIApi.instance.createManualEvent(
+          final Map<String, dynamic> response =
+              await BabyAIApi.instance.createManualEvent(
             type: input.type,
             startTime: input.startTime,
             endTime: input.endTime,
             value: input.value,
             metadata: input.metadata,
           );
+          savedEventId = _asString(response["event_id"]);
           break;
       }
       await _persistSleepMarker(input);
@@ -1153,6 +1171,7 @@ class RecordingPageState extends State<RecordingPage> {
         return false;
       }
       saved = true;
+      onSavedEventId?.call(savedEventId);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -1234,13 +1253,36 @@ class RecordingPageState extends State<RecordingPage> {
   }
 
   Future<void> _stopActiveTimer() async {
+    await _stopActiveTimerAt();
+  }
+
+  Future<void> _stopActiveTimerAt({
+    DateTime? customEndAt,
+  }) async {
     if (_entrySaving ||
         _activeTimerStartedAt == null ||
         _activeTimerActivity == null) {
       return;
     }
     final DateTime startAt = _activeTimerStartedAt!;
-    final DateTime endAt = DateTime.now();
+    final DateTime endAt = customEndAt ?? DateTime.now();
+    if (endAt.isBefore(startAt)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              tr(
+                context,
+                ko: "종료 시각은 시작 시각보다 뒤여야 합니다.",
+                en: "End time must be after start time.",
+                es: "La hora de fin debe ser posterior al inicio.",
+              ),
+            ),
+          ),
+        );
+      }
+      return;
+    }
     final _TimerActivity activity = _activeTimerActivity!;
     final RecordEntryInput input = _buildTimerRecordInput(
       activity: activity,
@@ -1248,6 +1290,7 @@ class RecordingPageState extends State<RecordingPage> {
       endAt: endAt,
       openEventId: _activeTimerEventId,
     );
+    String? savedEventId;
     final bool saved = await _saveEntryInput(
       input,
       successMessage: tr(
@@ -1256,15 +1299,23 @@ class RecordingPageState extends State<RecordingPage> {
         en: "Timer record saved.",
         es: "Registro de temporizador guardado.",
       ),
+      onSavedEventId: (String? eventId) {
+        savedEventId = eventId;
+      },
     );
     if (!mounted || !saved) {
       return;
     }
+    final String normalizedSavedEventId = (savedEventId ?? "").trim();
+    final String fallbackOpenEventId = (_activeTimerEventId ?? "").trim();
     setState(() {
       _latestTimerEntry = _CompletedTimerEntry(
         activity: activity,
         startAt: startAt,
         endAt: endAt,
+        eventId: normalizedSavedEventId.isNotEmpty
+            ? normalizedSavedEventId
+            : (fallbackOpenEventId.isNotEmpty ? fallbackOpenEventId : null),
       );
       _activeTimerActivity = null;
       _activeTimerStartedAt = null;
@@ -1272,31 +1323,355 @@ class RecordingPageState extends State<RecordingPage> {
     });
   }
 
+  Future<DateTime?> _pickTimerTime(DateTime base) async {
+    final TimeOfDay? picked = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(base),
+      helpText: tr(
+        context,
+        ko: "시간 선택",
+        en: "Select time",
+        es: "Seleccionar hora",
+      ),
+    );
+    if (picked == null) {
+      return null;
+    }
+    return DateTime(
+      base.year,
+      base.month,
+      base.day,
+      picked.hour,
+      picked.minute,
+    );
+  }
+
+  Future<void> _editTimerStartTime() async {
+    if (_entrySaving) {
+      return;
+    }
+    final bool timerRunning =
+        _activeTimerStartedAt != null && _activeTimerActivity != null;
+    if (!timerRunning && _latestTimerEntry == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            tr(
+              context,
+              ko: "수정할 최근 기록이 없습니다.",
+              en: "You can edit start time after timer starts.",
+              es: "Puedes editar la hora de inicio después de iniciar el temporizador.",
+            ),
+          ),
+        ),
+      );
+      return;
+    }
+    if (timerRunning) {
+      final String openEventId = (_activeTimerEventId ?? "").trim();
+      if (_activeTimerActivity != _TimerActivity.diaper && openEventId.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              tr(
+                context,
+                ko: "진행 중 항목은 종료 후 시작 시각을 수정해 주세요.",
+                en: "Edit start time after stopping the running event.",
+                es: "Edita la hora de inicio después de detener el evento.",
+              ),
+            ),
+          ),
+        );
+        return;
+      }
+    }
+    final DateTime currentStart =
+        timerRunning ? _activeTimerStartedAt! : _latestTimerEntry!.startAt;
+    final DateTime? picked = await _pickTimerTime(currentStart);
+    if (!mounted || picked == null) {
+      return;
+    }
+    if (timerRunning) {
+      final DateTime now = DateTime.now();
+      if (picked.isAfter(now)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              tr(
+                context,
+                ko: "시작 시각은 현재 시각보다 늦을 수 없습니다.",
+                en: "Start time cannot be in the future.",
+                es: "La hora de inicio no puede ser en el futuro.",
+              ),
+            ),
+          ),
+        );
+        return;
+      }
+      final _TimerActivity activity = _activeTimerActivity!;
+      setState(() => _activeTimerStartedAt = picked);
+      if (activity == _TimerActivity.sleep) {
+        await AppSessionStore.setPendingSleepStart(picked.toUtc());
+      } else if (activity == _TimerActivity.formula) {
+        await AppSessionStore.setPendingFormulaStart(picked.toUtc());
+      }
+      await _loadLandingSnapshot();
+      return;
+    }
+
+    final _CompletedTimerEntry latest = _latestTimerEntry!;
+    final String eventId = (latest.eventId ?? "").trim();
+    if (eventId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            tr(
+              context,
+              ko: "방금 종료한 기록만 바로 수정할 수 있어요.",
+              en: "Only recently completed events can be edited here.",
+              es: "Solo puedes editar aqui eventos completados recientemente.",
+            ),
+          ),
+        ),
+      );
+      return;
+    }
+    if (picked.isAfter(latest.endAt)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            tr(
+              context,
+              ko: "시작 시각은 종료 시각보다 늦을 수 없습니다.",
+              en: "Start time must be before end time.",
+              es: "La hora de inicio debe ser anterior a la de fin.",
+            ),
+          ),
+        ),
+      );
+      return;
+    }
+
+    setState(() => _entrySaving = true);
+    try {
+      await BabyAIApi.instance.updateManualEvent(
+        eventId: eventId,
+        startTime: picked,
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.toString())),
+      );
+      setState(() => _entrySaving = false);
+      return;
+    } finally {
+      if (mounted) {
+        setState(() => _entrySaving = false);
+      }
+    }
+    setState(() {
+      _latestTimerEntry = _CompletedTimerEntry(
+        activity: latest.activity,
+        startAt: picked,
+        endAt: latest.endAt,
+        eventId: latest.eventId,
+      );
+    });
+    await _loadLandingSnapshot();
+  }
+
+  Future<void> _editTimerEndTime() async {
+    if (_entrySaving) {
+      return;
+    }
+    final bool timerRunning =
+        _activeTimerStartedAt != null && _activeTimerActivity != null;
+    if (!timerRunning && _latestTimerEntry == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            tr(
+              context,
+              ko: "수정할 최근 기록이 없습니다.",
+              en: "You can set end time while timer is running.",
+              es: "Puedes establecer la hora de fin mientras el temporizador está activo.",
+            ),
+          ),
+        ),
+      );
+      return;
+    }
+    if (timerRunning) {
+      final DateTime startAt = _activeTimerStartedAt!;
+      final DateTime initial = DateTime.now().isBefore(startAt)
+          ? startAt.add(const Duration(minutes: 1))
+          : DateTime.now();
+      final DateTime? picked = await _pickTimerTime(initial);
+      if (!mounted || picked == null) {
+        return;
+      }
+      final DateTime now = DateTime.now();
+      if (picked.isAfter(now)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              tr(
+                context,
+                ko: "종료 시각은 현재 시각보다 늦을 수 없습니다.",
+                en: "End time cannot be in the future.",
+                es: "La hora de fin no puede ser en el futuro.",
+              ),
+            ),
+          ),
+        );
+        return;
+      }
+      if (picked.isBefore(startAt)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              tr(
+                context,
+                ko: "종료 시각은 시작 시각보다 뒤여야 합니다.",
+                en: "End time must be after start time.",
+                es: "La hora de fin debe ser posterior al inicio.",
+              ),
+            ),
+          ),
+        );
+        return;
+      }
+      await _stopActiveTimerAt(customEndAt: picked);
+      return;
+    }
+
+    final _CompletedTimerEntry latest = _latestTimerEntry!;
+    final String eventId = (latest.eventId ?? "").trim();
+    if (eventId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            tr(
+              context,
+              ko: "방금 종료한 기록만 바로 수정할 수 있어요.",
+              en: "Only recently completed events can be edited here.",
+              es: "Solo puedes editar aqui eventos completados recientemente.",
+            ),
+          ),
+        ),
+      );
+      return;
+    }
+    final DateTime? picked = await _pickTimerTime(latest.endAt);
+    if (!mounted || picked == null) {
+      return;
+    }
+    final DateTime now = DateTime.now();
+    if (picked.isAfter(now)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            tr(
+              context,
+              ko: "종료 시각은 현재 시각보다 늦을 수 없습니다.",
+              en: "End time cannot be in the future.",
+              es: "La hora de fin no puede ser en el futuro.",
+            ),
+          ),
+        ),
+      );
+      return;
+    }
+    if (picked.isBefore(latest.startAt)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            tr(
+              context,
+              ko: "종료 시각은 시작 시각보다 뒤여야 합니다.",
+              en: "End time must be after start time.",
+              es: "La hora de fin debe ser posterior al inicio.",
+            ),
+          ),
+        ),
+      );
+      return;
+    }
+
+    setState(() => _entrySaving = true);
+    try {
+      await BabyAIApi.instance.updateManualEvent(
+        eventId: eventId,
+        endTime: picked,
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.toString())),
+      );
+      setState(() => _entrySaving = false);
+      return;
+    } finally {
+      if (mounted) {
+        setState(() => _entrySaving = false);
+      }
+    }
+    setState(() {
+      _latestTimerEntry = _CompletedTimerEntry(
+        activity: latest.activity,
+        startAt: latest.startAt,
+        endAt: picked,
+        eventId: latest.eventId,
+      );
+    });
+    await _loadLandingSnapshot();
+  }
+
   Widget _buildTimerInfoItem({
     required ColorScheme color,
     required String label,
     required String value,
+    VoidCallback? onTap,
   }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 11,
-            color: color.onSurfaceVariant,
-            fontWeight: FontWeight.w600,
+    final Widget content = Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 2),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 11,
+              color: color.onSurfaceVariant,
+              fontWeight: FontWeight.w600,
+            ),
           ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          value,
-          style: const TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w700,
+          const SizedBox(height: 4),
+          Text(
+            value,
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
+    );
+    if (onTap == null) {
+      return content;
+    }
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: content,
+      ),
     );
   }
 
@@ -1445,9 +1820,6 @@ class RecordingPageState extends State<RecordingPage> {
     final int tileColumns = controller.homeTileColumns.clamp(1, 3);
     final int maxMetaLines = tileColumns == 3 ? 3 : 4;
     final bool showSpecialMemo = controller.showSpecialMemo;
-    final int aiBalance = _asInt(snapshot["ai_credit_balance"]) ?? 0;
-    final int aiGraceUsed = _asInt(snapshot["ai_grace_used_today"]) ?? 0;
-    final int aiGraceLimit = _asInt(snapshot["ai_grace_limit"]) ?? 3;
     final String specialMemoText = _asString(snapshot["special_memo"]) ??
         tr(
           context,
@@ -1477,7 +1849,7 @@ class RecordingPageState extends State<RecordingPage> {
     final String activitySubtitle = timerRunning
         ? ""
         : (_latestTimerEntry == null
-            ? "활동을 선택하고 시작 버튼을 눌러 주세요."
+            ? ""
             : "최근 완료 ${_formatAmPm(_latestTimerEntry!.endAt)}");
 
     return RefreshIndicator(
@@ -1485,35 +1857,6 @@ class RecordingPageState extends State<RecordingPage> {
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
         children: <Widget>[
-          Align(
-            alignment: Alignment.centerRight,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: color.surfaceContainerHighest.withValues(alpha: 0.72),
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: <Widget>[
-                  Text(
-                    "AI $aiBalance cr",
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 12,
-                    ),
-                  ),
-                  Text(
-                    "Grace $aiGraceUsed/$aiGraceLimit",
-                    style: TextStyle(
-                      fontSize: 10,
-                      color: color.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
           if (_snapshotLoading || _entrySaving) ...<Widget>[
             const SizedBox(height: 12),
             const LinearProgressIndicator(minHeight: 3),
@@ -1660,6 +2003,7 @@ class RecordingPageState extends State<RecordingPage> {
                           color: color,
                           label: "시작시각",
                           value: _formatDateTimeLabel(timerStartAt),
+                          onTap: _editTimerStartTime,
                         ),
                       ),
                       Container(
@@ -1673,6 +2017,7 @@ class RecordingPageState extends State<RecordingPage> {
                           color: color,
                           label: "종료시각",
                           value: _formatDateTimeLabel(timerEndAt),
+                          onTap: _editTimerEndTime,
                         ),
                       ),
                       Container(

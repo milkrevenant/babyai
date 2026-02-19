@@ -228,33 +228,52 @@ func (a *App) onboardingParent(c *gin.Context) {
 }
 
 func buildOnboardingDummySeedEvents(nowUTC time.Time) []onboardingDummySeedEvent {
-	at := func(offset time.Duration) time.Time {
-		return nowUTC.Add(offset).UTC()
-	}
-	withEnd := func(start time.Time, duration time.Duration) *time.Time {
-		end := start.Add(duration).UTC()
-		return &end
+	// Image-based temporary dummy seed preset (timeline screenshot provided by user).
+	kst := time.FixedZone("KST", 9*60*60)
+	nowLocal := nowUTC.In(kst)
+	seedDay := time.Date(nowLocal.Year(), nowLocal.Month(), nowLocal.Day(), 0, 0, 0, 0, kst)
+	// If onboarding happens earlier in the day, shift to previous day so all preset events are in the past.
+	if nowLocal.Hour() < 16 {
+		seedDay = seedDay.AddDate(0, 0, -1)
 	}
 
-	sleepNightStart := at(-16 * time.Hour)
-	sleepNap1Start := at(-11 * time.Hour)
-	sleepNap2Start := at(-7 * time.Hour)
-	sleepNap3Start := at(-4 * time.Hour)
+	at := func(hour, minute int) time.Time {
+		return time.Date(
+			seedDay.Year(),
+			seedDay.Month(),
+			seedDay.Day(),
+			hour,
+			minute,
+			0,
+			0,
+			kst,
+		).UTC()
+	}
+	withEnd := func(startHour, startMinute, endHour, endMinute int) (time.Time, *time.Time) {
+		start := at(startHour, startMinute)
+		end := at(endHour, endMinute)
+		return start, &end
+	}
+
+	sleep1Start, sleep1End := withEnd(0, 57, 2, 35)
+	sleep2Start, sleep2End := withEnd(2, 38, 6, 13)
+	nap1Start, nap1End := withEnd(7, 45, 8, 47)
+	nap2Start, nap2End := withEnd(10, 23, 11, 7)
+	nap3Start, nap3End := withEnd(12, 51, 13, 21)
+	nap4Start, nap4End := withEnd(14, 58, 15, 21)
 
 	return []onboardingDummySeedEvent{
-		{Type: "SLEEP", StartTime: sleepNightStart, EndTime: withEnd(sleepNightStart, 3*time.Hour+20*time.Minute), Value: map[string]any{"sleep_type": "night"}},
-		{Type: "FORMULA", StartTime: at(-13*time.Hour - 30*time.Minute), Value: map[string]any{"ml": 145}},
-		{Type: "SLEEP", StartTime: sleepNap1Start, EndTime: withEnd(sleepNap1Start, 58*time.Minute), Value: map[string]any{"sleep_type": "nap"}},
-		{Type: "FORMULA", StartTime: at(-10 * time.Hour), Value: map[string]any{"ml": 125}},
-		{Type: "PEE", StartTime: at(-9*time.Hour - 35*time.Minute), Value: map[string]any{"count": 1}},
-		{Type: "FORMULA", StartTime: at(-8*time.Hour - 15*time.Minute), Value: map[string]any{"ml": 130}},
-		{Type: "POO", StartTime: at(-7*time.Hour - 50*time.Minute), Value: map[string]any{"count": 1}},
-		{Type: "SLEEP", StartTime: sleepNap2Start, EndTime: withEnd(sleepNap2Start, 42*time.Minute), Value: map[string]any{"sleep_type": "nap"}},
-		{Type: "FORMULA", StartTime: at(-6 * time.Hour), Value: map[string]any{"ml": 90}},
-		{Type: "SLEEP", StartTime: sleepNap3Start, EndTime: withEnd(sleepNap3Start, 36*time.Minute), Value: map[string]any{"sleep_type": "nap"}},
-		{Type: "FORMULA", StartTime: at(-2*time.Hour - 30*time.Minute), Value: map[string]any{"ml": 150}},
-		{Type: "MEDICATION", StartTime: at(-95 * time.Minute), Value: map[string]any{"name": "vitamin-d", "dose": "1drop"}},
-		{Type: "MEMO", StartTime: at(-75 * time.Minute), Value: map[string]any{"category": "WEANING", "memo": "쌀미음 70g"}},
+		{Type: "SLEEP", StartTime: sleep1Start, EndTime: sleep1End, Value: map[string]any{"sleep_type": "night"}},
+		{Type: "SLEEP", StartTime: sleep2Start, EndTime: sleep2End, Value: map[string]any{"sleep_type": "night"}},
+		{Type: "FORMULA", StartTime: at(6, 36), Value: map[string]any{"ml": 145}},
+		{Type: "SLEEP", StartTime: nap1Start, EndTime: nap1End, Value: map[string]any{"sleep_type": "nap"}},
+		{Type: "FORMULA", StartTime: at(9, 22), Value: map[string]any{"ml": 125}},
+		{Type: "SLEEP", StartTime: nap2Start, EndTime: nap2End, Value: map[string]any{"sleep_type": "nap"}},
+		{Type: "FORMULA", StartTime: at(11, 29), Value: map[string]any{"ml": 130}},
+		{Type: "SLEEP", StartTime: nap3Start, EndTime: nap3End, Value: map[string]any{"sleep_type": "nap"}},
+		{Type: "FORMULA", StartTime: at(13, 37), Value: map[string]any{"ml": 90}},
+		{Type: "SLEEP", StartTime: nap4Start, EndTime: nap4End, Value: map[string]any{"sleep_type": "nap"}},
+		{Type: "FORMULA", StartTime: at(15, 55), Value: map[string]any{"ml": 150}},
 	}
 }
 

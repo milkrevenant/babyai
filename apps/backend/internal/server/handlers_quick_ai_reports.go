@@ -678,6 +678,8 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
+		"baby_name":                       profile.Name,
+		"baby_profile_photo_url":          profile.ProfilePhotoURL,
 		"date":                            localNow.Format("2006-01-02"),
 		"range":                           rangeKey,
 		"range_label":                     rangeLabel,

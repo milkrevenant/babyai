@@ -42,6 +42,7 @@ class ReportPageState extends State<ReportPage> {
   String? _error;
 
   ReportRange _selected = ReportRange.daily;
+  // Anchor day used across daily/weekly/monthly views.
   DateTime _todayUtc = _utcDate(DateTime.now().toUtc());
   DateTime _weekStartUtc = _toWeekStart(_utcDate(DateTime.now().toUtc()));
   DateTime _monthStartUtc = DateTime.utc(
@@ -61,12 +62,68 @@ class ReportPageState extends State<ReportPage> {
   }
 
   ReportRange get selectedRange => _selected;
+  String get navigationDateLabel => _selectedRangeDateLabel();
+  DateTime get datePickerInitialDateLocal {
+    switch (_selected) {
+      case ReportRange.daily:
+        return _todayUtc.toLocal();
+      case ReportRange.weekly:
+        return _weekStartUtc.toLocal();
+      case ReportRange.monthly:
+        return _monthStartUtc.toLocal();
+    }
+  }
 
   void setRange(ReportRange next) {
     if (_selected == next) {
       return;
     }
     setState(() => _selected = next);
+  }
+
+  Future<void> setFocusDate(DateTime pickedDate) async {
+    final DateTime nextUtc = _utcDate(pickedDate.toUtc());
+    if (_isSameUtcDate(_todayUtc, nextUtc)) {
+      await _loadReports();
+      return;
+    }
+    setState(() {
+      _todayUtc = nextUtc;
+      _weekStartUtc = _toWeekStart(nextUtc);
+      _monthStartUtc = DateTime.utc(nextUtc.year, nextUtc.month, 1);
+    });
+    await _loadReports();
+  }
+
+  Future<void> setFocusWeekStart(DateTime pickedDate) async {
+    final DateTime pickedUtc = _utcDate(pickedDate.toUtc());
+    final DateTime weekStartUtc = _toWeekStart(pickedUtc);
+    if (_isSameUtcDate(_weekStartUtc, weekStartUtc)) {
+      await _loadReports();
+      return;
+    }
+    setState(() {
+      _todayUtc = weekStartUtc;
+      _weekStartUtc = weekStartUtc;
+      _monthStartUtc = DateTime.utc(weekStartUtc.year, weekStartUtc.month, 1);
+    });
+    await _loadReports();
+  }
+
+  Future<void> setFocusMonthStart(DateTime pickedDate) async {
+    final DateTime pickedUtc = _utcDate(pickedDate.toUtc());
+    final DateTime monthStartUtc =
+        DateTime.utc(pickedUtc.year, pickedUtc.month, 1);
+    if (_isSameUtcDate(_monthStartUtc, monthStartUtc)) {
+      await _loadReports();
+      return;
+    }
+    setState(() {
+      _todayUtc = monthStartUtc;
+      _weekStartUtc = _toWeekStart(monthStartUtc);
+      _monthStartUtc = monthStartUtc;
+    });
+    await _loadReports();
   }
 
   Future<void> refreshData() async {
@@ -79,23 +136,26 @@ class ReportPageState extends State<ReportPage> {
       _error = null;
     });
 
-    final DateTime nowUtc = _utcDate(DateTime.now().toUtc());
-    final DateTime weekStartUtc = _toWeekStart(nowUtc);
-    final DateTime monthStartUtc = DateTime.utc(nowUtc.year, nowUtc.month, 1);
+    final DateTime focusedDayUtc = _utcDate(_todayUtc.toUtc());
+    final DateTime weekStartUtc = _toWeekStart(focusedDayUtc);
+    final DateTime monthStartUtc =
+        DateTime.utc(focusedDayUtc.year, focusedDayUtc.month, 1);
+    final int monthDayCount =
+        DateUtils.getDaysInMonth(monthStartUtc.year, monthStartUtc.month);
 
     final List<DateTime> weekDays = List<DateTime>.generate(
       7,
       (int i) => weekStartUtc.add(Duration(days: i)),
     );
     final List<DateTime> monthDays = List<DateTime>.generate(
-      nowUtc.day,
+      monthDayCount,
       (int i) => monthStartUtc.add(Duration(days: i)),
     );
 
     final Map<String, DateTime> uniqueDays = <String, DateTime>{
       for (final DateTime day in monthDays) _dayKey(day): day,
       for (final DateTime day in weekDays) _dayKey(day): day,
-      _dayKey(nowUtc): nowUtc,
+      _dayKey(focusedDayUtc): focusedDayUtc,
     };
 
     try {
@@ -115,7 +175,7 @@ class ReportPageState extends State<ReportPage> {
       }
 
       setState(() {
-        _todayUtc = nowUtc;
+        _todayUtc = focusedDayUtc;
         _weekStartUtc = weekStartUtc;
         _monthStartUtc = monthStartUtc;
         _statsByDay = <DateTime, _DayStats>{
@@ -196,7 +256,7 @@ class ReportPageState extends State<ReportPage> {
       growable: false,
     );
     final List<_DayStats> monthDays = List<_DayStats>.generate(
-      _todayUtc.day,
+      DateUtils.getDaysInMonth(_monthStartUtc.year, _monthStartUtc.month),
       (int i) => _stats(_monthStartUtc.add(Duration(days: i))),
       growable: false,
     );
@@ -218,15 +278,6 @@ class ReportPageState extends State<ReportPage> {
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         children: <Widget>[
-          Text(
-            _selectedRangeDateLabel(),
-            style: TextStyle(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-              fontSize: 12.5,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 8),
           if (_loading) ...<Widget>[
             const SizedBox(height: 2),
             const LinearProgressIndicator(minHeight: 3),
@@ -319,6 +370,10 @@ String _dayKey(DateTime dayUtc) {
   final String m = dayUtc.month.toString().padLeft(2, "0");
   final String d = dayUtc.day.toString().padLeft(2, "0");
   return "$y-$m-$d";
+}
+
+bool _isSameUtcDate(DateTime a, DateTime b) {
+  return a.year == b.year && a.month == b.month && a.day == b.day;
 }
 
 class _DailyView extends StatelessWidget {

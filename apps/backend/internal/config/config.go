@@ -58,7 +58,7 @@ func Load() Config {
 		OpenAIModel:       getEnv("OPENAI_MODEL", "gpt-5-mini"),
 		OpenAIBaseURL:     getEnv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
 		AIMaxOutputTokens: getEnvInt("AI_MAX_OUTPUT_TOKENS", 600),
-		AITimeoutSeconds:  getEnvInt("AI_TIMEOUT_SECONDS", 20),
+		AITimeoutSeconds:  getEnvInt("AI_TIMEOUT_SECONDS", 60),
 	}
 }
 

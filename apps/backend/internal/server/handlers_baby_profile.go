@@ -23,6 +23,7 @@ type resolvedBabyProfile struct {
 	BirthDate             time.Time
 	AgeDays               int
 	Sex                   string
+	ProfilePhotoURL       string
 	WeightKg              *float64
 	FeedingMethod         string
 	FormulaBrand          string
@@ -268,15 +269,22 @@ func (a *App) resolveBabyProfile(
 		return resolvedBabyProfile{}, http.StatusInternalServerError, err
 	}
 	babySettings := readBabySettings(persona, baby.ID)
+	profilePhotoURL := strings.TrimSpace(toString(babySettings["profile_photo_url"]))
+	profilePhotoURL = coalesceNonEmpty(profilePhotoURL, strings.TrimSpace(toString(babySettings["baby_profile_photo_url"])))
+	profilePhotoURL = coalesceNonEmpty(profilePhotoURL, strings.TrimSpace(toString(babySettings["avatar_url"])))
+	profilePhotoURL = coalesceNonEmpty(profilePhotoURL, strings.TrimSpace(toString(babySettings["photo_url"])))
+	profilePhotoURL = coalesceNonEmpty(profilePhotoURL, strings.TrimSpace(toString(babySettings["image_url"])))
+	profilePhotoURL = coalesceNonEmpty(profilePhotoURL, strings.TrimSpace(toString(babySettings["picture"])))
 
 	profile := resolvedBabyProfile{
-		BabyID:      baby.ID,
-		HouseholdID: baby.HouseholdID,
-		Name:        name,
-		BirthDate:   birthDate.UTC(),
-		AgeDays:     ageDaysFromBirth(birthDate.UTC(), time.Now().UTC()),
-		Sex:         "unknown",
-		WeightKg:    mapFloatPointer(babySettings["weight_kg"]),
+		BabyID:          baby.ID,
+		HouseholdID:     baby.HouseholdID,
+		Name:            name,
+		BirthDate:       birthDate.UTC(),
+		AgeDays:         ageDaysFromBirth(birthDate.UTC(), time.Now().UTC()),
+		Sex:             "unknown",
+		ProfilePhotoURL: profilePhotoURL,
+		WeightKg:        mapFloatPointer(babySettings["weight_kg"]),
 		FeedingMethod: coalesceNonEmpty(
 			normalizeFeedingMethod(toString(babySettings["feeding_method"])),
 			"mixed",
@@ -430,6 +438,8 @@ func profileResponse(profile resolvedBabyProfile, recommendation feedingRecommen
 	return gin.H{
 		"baby_id":                         profile.BabyID,
 		"baby_name":                       profile.Name,
+		"profile_photo_url":               profile.ProfilePhotoURL,
+		"baby_profile_photo_url":          profile.ProfilePhotoURL,
 		"birth_date":                      profile.BirthDate.Format("2006-01-02"),
 		"age_days":                        profile.AgeDays,
 		"sex":                             profile.Sex,

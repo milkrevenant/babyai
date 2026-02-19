@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -42,6 +43,12 @@ type AIModelResponse struct {
 type AIClient interface {
 	Query(ctx context.Context, req AIModelRequest) (AIModelResponse, error)
 }
+
+const (
+	defaultAITimeoutSeconds = 60
+	defaultAIMaxOutputToken = 600
+	openAIRequestMaxRetries = 1
+)
 
 type OpenAIResponsesClient struct {
 	apiKey          string
@@ -97,7 +104,7 @@ func (m MockAIClient) Query(_ context.Context, req AIModelRequest) (AIModelRespo
 func NewOpenAIResponsesClient(cfg config.Config) *OpenAIResponsesClient {
 	timeoutSeconds := cfg.AITimeoutSeconds
 	if timeoutSeconds <= 0 {
-		timeoutSeconds = 20
+		timeoutSeconds = defaultAITimeoutSeconds
 	}
 	return &OpenAIResponsesClient{
 		apiKey:          strings.TrimSpace(cfg.OpenAIAPIKey),
@@ -182,8 +189,8 @@ func (c *OpenAIResponsesClient) Query(ctx context.Context, req AIModelRequest) (
 	}
 
 	maxTokens := c.maxOutputTokens
-	if maxTokens < 1200 {
-		maxTokens = 1200
+	if maxTokens <= 0 {
+		maxTokens = defaultAIMaxOutputToken
 	}
 
 	callResponses := func(input []inputBlock) (int, []byte, error) {
@@ -231,8 +238,37 @@ func (c *OpenAIResponsesClient) Query(ctx context.Context, req AIModelRequest) (
 		return response.StatusCode, responseBody, nil
 	}
 
+	callResponsesWithRetry := func(input []inputBlock) (int, []byte, error) {
+		maxAttempts := openAIRequestMaxRetries + 1
+		for attempt := 1; attempt <= maxAttempts; attempt++ {
+			statusCode, responseBody, err := callResponses(input)
+			if err != nil {
+				shouldRetry := attempt < maxAttempts && isRetryableTransportError(err)
+				if !shouldRetry {
+					return 0, nil, err
+				}
+				log.Printf("openai request retry transport_error attempt=%d/%d err=%v", attempt, maxAttempts, err)
+				if waitErr := waitRetryBackoff(ctx, attempt); waitErr != nil {
+					return 0, nil, waitErr
+				}
+				continue
+			}
+
+			shouldRetry := attempt < maxAttempts && isRetryableStatusCode(statusCode)
+			if !shouldRetry {
+				return statusCode, responseBody, nil
+			}
+			log.Printf("openai request retry status_error attempt=%d/%d status=%d", attempt, maxAttempts, statusCode)
+			if waitErr := waitRetryBackoff(ctx, attempt); waitErr != nil {
+				return 0, nil, waitErr
+			}
+		}
+
+		return 0, nil, errors.New("openai request exhausted retries")
+	}
+
 	input := buildInput(true)
-	statusCode, responseBody, err := callResponses(input)
+	statusCode, responseBody, err := callResponsesWithRetry(input)
 	if err != nil {
 		return AIModelResponse{}, err
 	}
@@ -244,7 +280,7 @@ func (c *OpenAIResponsesClient) Query(ctx context.Context, req AIModelRequest) (
 			strings.Contains(bodyText, "Supported values are: 'output_text' and 'refusal'")
 		if shouldRetryWithoutAssistant {
 			retryInput := buildInput(false)
-			retryStatusCode, retryResponseBody, retryErr := callResponses(retryInput)
+			retryStatusCode, retryResponseBody, retryErr := callResponsesWithRetry(retryInput)
 			if retryErr == nil && retryStatusCode >= 200 && retryStatusCode < 300 {
 				statusCode = retryStatusCode
 				responseBody = retryResponseBody
@@ -356,6 +392,60 @@ func truncateForLog(value string, limit int) string {
 		return trimmed
 	}
 	return trimmed[:limit] + "...(truncated)"
+}
+
+func isRetryableStatusCode(statusCode int) bool {
+	switch statusCode {
+	case http.StatusRequestTimeout, http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+func isRetryableTransportError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+
+	lowered := strings.ToLower(strings.TrimSpace(err.Error()))
+	if lowered == "" {
+		return false
+	}
+	return strings.Contains(lowered, "timeout") ||
+		strings.Contains(lowered, "temporarily unavailable") ||
+		strings.Contains(lowered, "connection reset by peer")
+}
+
+func waitRetryBackoff(ctx context.Context, attempt int) error {
+	if attempt < 1 {
+		attempt = 1
+	}
+	delay := time.Duration(attempt) * 500 * time.Millisecond
+	if delay > 1500*time.Millisecond {
+		delay = 1500 * time.Millisecond
+	}
+
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func isMaxOutputTokenIncomplete(parsed map[string]any) bool {

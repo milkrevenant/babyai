@@ -58,7 +58,7 @@ Optional:
 - `OPENAI_MODEL` (default `gpt-5-mini`)
 - `OPENAI_BASE_URL` (default `https://api.openai.com/v1`)
 - `AI_MAX_OUTPUT_TOKENS` (default `600`)
-- `AI_TIMEOUT_SECONDS` (default `20`)
+- `AI_TIMEOUT_SECONDS` (default `60`)
 
 Required for real AI routes in non-test env:
 - `OPENAI_API_KEY`
@@ -82,7 +82,7 @@ OPENAI_API_KEY=<your-openai-api-key>
 OPENAI_MODEL=gpt-5-mini
 OPENAI_BASE_URL=https://api.openai.com/v1
 AI_MAX_OUTPUT_TOKENS=600
-AI_TIMEOUT_SECONDS=20
+AI_TIMEOUT_SECONDS=60
 ```
 
 ## AI Credit Billing

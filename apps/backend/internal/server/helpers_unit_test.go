@@ -193,13 +193,13 @@ func TestEnforceAnswerEvidenceGuideFallback(t *testing.T) {
 	}, "\n")
 
 	got := enforceAnswerEvidenceGuide(raw)
-	if !strings.Contains(got, "답변\n") {
+	if !strings.Contains(got, "## 답변\n") {
 		t.Fatalf("expected answer section, got: %s", got)
 	}
-	if !strings.Contains(got, "\n근거\n") {
+	if !strings.Contains(got, "\n## 근거\n") {
 		t.Fatalf("expected evidence section, got: %s", got)
 	}
-	if !strings.Contains(got, "\n가이드\n") {
+	if !strings.Contains(got, "\n## 가이드\n") {
 		t.Fatalf("expected guide section, got: %s", got)
 	}
 }
@@ -228,19 +228,38 @@ func TestEnforceAnswerEvidenceGuideStructuredInput(t *testing.T) {
 	}
 }
 
+func TestEnforceAnswerEvidenceGuideInlineHeadingsAndTilde(t *testing.T) {
+	raw := strings.Join([]string{
+		"## 답변: 오늘은 크게 걱정하지 않아도 됩니다.",
+		"## 근거: 최근 기록에서 수유 간격이 3~4시간으로 유지되었습니다.",
+		"## 가이드: 다음 수유는 2~3시간 간격으로 관찰하세요.",
+	}, "\n")
+
+	got := enforceAnswerEvidenceGuide(raw)
+	if strings.Count(got, "## 답변") != 1 {
+		t.Fatalf("expected single answer heading, got: %s", got)
+	}
+	if strings.Count(got, "## 근거") != 1 {
+		t.Fatalf("expected single evidence heading, got: %s", got)
+	}
+	if strings.Count(got, "## 가이드") != 1 {
+		t.Fatalf("expected single guide heading, got: %s", got)
+	}
+	if strings.Contains(got, "~") {
+		t.Fatalf("expected no tilde in markdown output, got: %s", got)
+	}
+}
+
 func TestBuildOnboardingDummySeedEvents(t *testing.T) {
 	now := time.Date(2026, 2, 19, 18, 0, 0, 0, time.UTC)
 	events := buildOnboardingDummySeedEvents(now)
-	if len(events) < 8 {
+	if len(events) < 10 {
 		t.Fatalf("expected enough seeded events, got %d", len(events))
 	}
 
 	hasFormula := false
 	hasSleep := false
-	hasPee := false
-	hasPoo := false
-	hasMedication := false
-	hasMemo := false
+	has150mlFormula := false
 
 	for _, item := range events {
 		if item.Type == "" {
@@ -256,28 +275,20 @@ func TestBuildOnboardingDummySeedEvents(t *testing.T) {
 		switch item.Type {
 		case "FORMULA":
 			hasFormula = true
+			if int(extractNumberFromMap(item.Value, "ml")+0.5) == 150 {
+				has150mlFormula = true
+			}
 		case "SLEEP":
 			hasSleep = true
-		case "PEE":
-			hasPee = true
-		case "POO":
-			hasPoo = true
-		case "MEDICATION":
-			hasMedication = true
-		case "MEMO":
-			hasMemo = true
 		}
 	}
 
-	if !hasFormula || !hasSleep || !hasPee || !hasPoo || !hasMedication || !hasMemo {
+	if !hasFormula || !hasSleep || !has150mlFormula {
 		t.Fatalf(
-			"expected representative seed types formula=%v sleep=%v pee=%v poo=%v medication=%v memo=%v",
+			"expected representative image seed data formula=%v sleep=%v has150mlFormula=%v",
 			hasFormula,
 			hasSleep,
-			hasPee,
-			hasPoo,
-			hasMedication,
-			hasMemo,
+			has150mlFormula,
 		)
 	}
 }

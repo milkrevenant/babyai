@@ -48,15 +48,21 @@ type chatContextResult struct {
 }
 
 type childProfileSnapshot struct {
-	Name             string
-	BirthDate        time.Time
-	AgeDays          int
-	AgeMonths        int
-	WeightKg         *float64
-	WeightSource     string
-	HeightCm         *float64
-	HeightSource     string
-	GrowthMeasuredAt *time.Time
+	Name                  string
+	BirthDate             time.Time
+	AgeDays               int
+	AgeMonths             int
+	Sex                   string
+	FeedingMethod         string
+	FormulaBrand          string
+	FormulaProduct        string
+	FormulaType           string
+	FormulaContainsStarch *bool
+	WeightKg              *float64
+	WeightSource          string
+	HeightCm              *float64
+	HeightSource          string
+	GrowthMeasuredAt      *time.Time
 }
 
 type creditSnapshot struct {
@@ -1645,6 +1651,9 @@ func (a *App) buildChatContext(
 			fmt.Sprintf("- 생년월일=%s", birthDateText),
 			fmt.Sprintf("- 나이=%d일 (만 %d개월, 생년월일 기준)", profileSnapshot.AgeDays, profileSnapshot.AgeMonths),
 		}
+		if onboardingLine := profileCareContextLine(profileSnapshot); onboardingLine != "" {
+			summaryLines = append(summaryLines, onboardingLine)
+		}
 		if profileSnapshot.WeightKg != nil {
 			summaryLines = append(summaryLines, fmt.Sprintf("- 몸무게=%.1fkg (출처=%s)", *profileSnapshot.WeightKg, profileSnapshot.WeightSource))
 		} else {
@@ -1682,19 +1691,126 @@ func (a *App) buildChatContext(
 }
 
 func buildBaseProfileMeta(childID string, profile childProfileSnapshot, birthDateText string) map[string]any {
-	return map[string]any{
-		"child_id":                       childID,
-		"profile_name":                   profile.Name,
-		"profile_birth_date_utc":         birthDateText,
-		"profile_age_days":               profile.AgeDays,
-		"profile_age_months":             profile.AgeMonths,
-		"profile_age_months_basis":       "calendar_from_birth_date",
-		"profile_weight_kg":              profile.WeightKg,
-		"profile_weight_source":          profile.WeightSource,
-		"profile_height_cm":              profile.HeightCm,
-		"profile_height_source":          profile.HeightSource,
-		"profile_growth_measured_at_utc": formatNullableTimeRFC3339(profile.GrowthMeasuredAt),
+	var weightValue any
+	if profile.WeightKg != nil {
+		weightValue = roundToOneDecimal(*profile.WeightKg)
 	}
+	var heightValue any
+	if profile.HeightCm != nil {
+		heightValue = roundToOneDecimal(*profile.HeightCm)
+	}
+	var containsStarch any
+	if profile.FormulaContainsStarch != nil {
+		containsStarch = *profile.FormulaContainsStarch
+	}
+	return map[string]any{
+		"child_id":                        childID,
+		"profile_name":                    profile.Name,
+		"profile_birth_date_utc":          birthDateText,
+		"profile_age_days":                profile.AgeDays,
+		"profile_age_months":              profile.AgeMonths,
+		"profile_age_months_basis":        "calendar_from_birth_date",
+		"profile_sex":                     profile.Sex,
+		"profile_feeding_method":          profile.FeedingMethod,
+		"profile_formula_brand":           profile.FormulaBrand,
+		"profile_formula_product":         profile.FormulaProduct,
+		"profile_formula_type":            profile.FormulaType,
+		"profile_formula_contains_starch": profile.FormulaContainsStarch,
+		"profile_weight_kg":               profile.WeightKg,
+		"profile_weight_source":           profile.WeightSource,
+		"profile_height_cm":               profile.HeightCm,
+		"profile_height_source":           profile.HeightSource,
+		"profile_growth_measured_at_utc":  formatNullableTimeRFC3339(profile.GrowthMeasuredAt),
+		"profile_onboarding_snapshot": map[string]any{
+			"name":                    profile.Name,
+			"birth_date":              birthDateText,
+			"sex":                     profile.Sex,
+			"feeding_method":          profile.FeedingMethod,
+			"formula_brand":           profile.FormulaBrand,
+			"formula_product":         profile.FormulaProduct,
+			"formula_type":            profile.FormulaType,
+			"formula_contains_starch": containsStarch,
+			"weight_kg":               weightValue,
+			"weight_source":           profile.WeightSource,
+			"height_cm":               heightValue,
+			"height_source":           profile.HeightSource,
+		},
+	}
+}
+
+func profileSexLabel(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "male":
+		return "남아"
+	case "female":
+		return "여아"
+	case "other":
+		return "기타"
+	case "unknown":
+		return "미정"
+	default:
+		return strings.TrimSpace(raw)
+	}
+}
+
+func profileFeedingMethodLabel(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "formula":
+		return "분유"
+	case "breastmilk":
+		return "모유"
+	case "mixed":
+		return "혼합"
+	default:
+		return strings.TrimSpace(raw)
+	}
+}
+
+func profileCareContextLine(profile childProfileSnapshot) string {
+	parts := make([]string, 0, 8)
+	if sex := profileSexLabel(profile.Sex); sex != "" && sex != "미정" {
+		parts = append(parts, "성별="+sex)
+	} else {
+		parts = append(parts, "성별=미입력")
+	}
+	if method := profileFeedingMethodLabel(profile.FeedingMethod); method != "" {
+		parts = append(parts, "수유방식="+method)
+	} else {
+		parts = append(parts, "수유방식=미입력")
+	}
+	if profile.WeightKg != nil {
+		parts = append(parts, fmt.Sprintf("몸무게=%.1fkg", *profile.WeightKg))
+	} else {
+		parts = append(parts, "몸무게=미입력")
+	}
+	if formulaType := strings.TrimSpace(profile.FormulaType); formulaType != "" {
+		parts = append(parts, "분유유형="+formulaType)
+	} else {
+		parts = append(parts, "분유유형=미입력")
+	}
+	if brand := strings.TrimSpace(profile.FormulaBrand); brand != "" {
+		parts = append(parts, "분유브랜드="+brand)
+	} else {
+		parts = append(parts, "분유브랜드=미입력")
+	}
+	if product := strings.TrimSpace(profile.FormulaProduct); product != "" {
+		parts = append(parts, "분유제품="+product)
+	} else {
+		parts = append(parts, "분유제품=미입력")
+	}
+	if profile.FormulaContainsStarch != nil {
+		if *profile.FormulaContainsStarch {
+			parts = append(parts, "전분함유=예")
+		} else {
+			parts = append(parts, "전분함유=아니오")
+		}
+	} else {
+		parts = append(parts, "전분함유=미입력")
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "- 온보딩 프로필=" + strings.Join(parts, ", ")
 }
 
 func resolveChatContextSelection(question string, intent aiIntent, nowUTC time.Time) chatContextSelection {
@@ -1992,8 +2108,11 @@ func (a *App) buildRawEventContext(
 		fmt.Sprintf("질문 우선 컨텍스트 (child_id=%s). 질문과 직접 관련된 근거만 사용하세요.", childID),
 		fmt.Sprintf("아동 프로필: 이름=%s, 생년월일=%s, 나이=%d일 (만 %d개월).", profileSnapshot.Name, birthDateText, profileSnapshot.AgeDays, profileSnapshot.AgeMonths),
 		fmt.Sprintf("근거 범위: %s ~ %s", formatContextTime(selection.RawStart), formatContextTime(selection.RawEnd)),
-		"정규화 이벤트 테이블(action | date | start_time | end_time | type | note | evidence_event_id):",
 	}
+	if onboardingLine := profileCareContextLine(profileSnapshot); onboardingLine != "" {
+		summaryLines = append(summaryLines, onboardingLine)
+	}
+	summaryLines = append(summaryLines, "정규화 이벤트 테이블(action | date | start_time | end_time | type | note | evidence_event_id):")
 	if len(evidenceRows) == 0 {
 		summaryLines = append(summaryLines, "- 기록만으로는 판단이 어렵습니다.")
 	} else {
@@ -2088,7 +2207,11 @@ func (a *App) buildRequestedDateSummaryContext(
 
 	summaryLines := []string{
 		fmt.Sprintf("질문 우선 컨텍스트 (child_id=%s).", childID),
+		fmt.Sprintf("아동 프로필: 이름=%s, 생년월일=%s, 나이=%d일 (만 %d개월).", profileSnapshot.Name, birthDateText, profileSnapshot.AgeDays, profileSnapshot.AgeMonths),
 		fmt.Sprintf("요청 날짜(%s)가 최근 3일을 초과하여 DailySummary 집계를 사용합니다.", targetDate.UTC().Format("2006-01-02")),
+	}
+	if onboardingLine := profileCareContextLine(profileSnapshot); onboardingLine != "" {
+		summaryLines = append(summaryLines, onboardingLine)
 	}
 	if !found {
 		summaryLines = append(summaryLines, "- 기록만으로는 판단이 어렵습니다.")
@@ -2167,8 +2290,12 @@ func (a *App) buildWeeklySummaryContext(
 
 	summaryLines := []string{
 		fmt.Sprintf("질문 우선 컨텍스트 (child_id=%s).", childID),
+		fmt.Sprintf("아동 프로필: 이름=%s, 생년월일=%s, 나이=%d일 (만 %d개월).", profileSnapshot.Name, birthDateText, profileSnapshot.AgeDays, profileSnapshot.AgeMonths),
 		"요청 범위가 최근 3일을 초과하여 WeeklySummary 집계를 사용합니다.",
 		"주간 집계 테이블(week_start_date | metrics_json | missingness_json):",
+	}
+	if onboardingLine := profileCareContextLine(profileSnapshot); onboardingLine != "" {
+		summaryLines = append(summaryLines, onboardingLine)
 	}
 	if len(items) == 0 {
 		summaryLines = append(summaryLines, "- 기록만으로는 판단이 어렵습니다.")
@@ -2246,8 +2373,12 @@ func (a *App) buildMonthlyMedicalSummaryContext(
 
 	summaryLines := []string{
 		fmt.Sprintf("질문 우선 컨텍스트 (child_id=%s).", childID),
+		fmt.Sprintf("아동 프로필: 이름=%s, 생년월일=%s, 나이=%d일 (만 %d개월).", profileSnapshot.Name, birthDateText, profileSnapshot.AgeDays, profileSnapshot.AgeMonths),
 		"요청 범위가 최근 3일을 초과하여 MonthlyMedicalSummary 집계를 사용합니다.",
 		"월간 의료 집계 테이블(month | medical_timeline_json | missingness_json):",
+	}
+	if onboardingLine := profileCareContextLine(profileSnapshot); onboardingLine != "" {
+		summaryLines = append(summaryLines, onboardingLine)
 	}
 	if len(items) == 0 {
 		summaryLines = append(summaryLines, "- 기록만으로는 판단이 어렵습니다.")
@@ -2386,8 +2517,12 @@ func (a *App) buildMonthlyParentingRollupContext(
 
 	summaryLines := []string{
 		fmt.Sprintf("질문 우선 컨텍스트 (child_id=%s).", childID),
+		fmt.Sprintf("아동 프로필: 이름=%s, 생년월일=%s, 나이=%d일 (만 %d개월).", profileSnapshot.Name, birthDateText, profileSnapshot.AgeDays, profileSnapshot.AgeMonths),
 		"요청 범위가 최근 3일을 초과하여 월간 육아 롤업(WeeklySummary + DailySummary)을 사용합니다.",
 		fmt.Sprintf("대상 월: %s", selection.MonthStart.UTC().Format("2006-01")),
+	}
+	if onboardingLine := profileCareContextLine(profileSnapshot); onboardingLine != "" {
+		summaryLines = append(summaryLines, onboardingLine)
 	}
 	if dayCount == 0 {
 		summaryLines = append(summaryLines, "- 기록만으로는 판단이 어렵습니다.")
@@ -2443,17 +2578,29 @@ func (a *App) loadChildProfileSnapshot(ctx context.Context, userID, childID stri
 	}
 
 	snapshot := childProfileSnapshot{
-		Name:         strings.TrimSpace(profile.Name),
-		BirthDate:    startOfUTCDay(profile.BirthDate.UTC()),
-		AgeDays:      profile.AgeDays,
-		AgeMonths:    ageMonthsFromBirthDate(profile.BirthDate.UTC(), time.Now().UTC()),
-		WeightKg:     profile.WeightKg,
-		WeightSource: "profile_settings",
-		HeightCm:     nil,
-		HeightSource: "not_available",
+		Name:                  strings.TrimSpace(profile.Name),
+		BirthDate:             startOfUTCDay(profile.BirthDate.UTC()),
+		AgeDays:               profile.AgeDays,
+		AgeMonths:             ageMonthsFromBirthDate(profile.BirthDate.UTC(), time.Now().UTC()),
+		Sex:                   strings.TrimSpace(profile.Sex),
+		FeedingMethod:         strings.TrimSpace(profile.FeedingMethod),
+		FormulaBrand:          strings.TrimSpace(profile.FormulaBrand),
+		FormulaProduct:        strings.TrimSpace(profile.FormulaProduct),
+		FormulaType:           strings.TrimSpace(profile.FormulaType),
+		FormulaContainsStarch: profile.FormulaContainsStarch,
+		WeightKg:              profile.WeightKg,
+		WeightSource:          "profile_settings",
+		HeightCm:              nil,
+		HeightSource:          "not_available",
 	}
 	if snapshot.AgeMonths < 0 {
 		snapshot.AgeMonths = 0
+	}
+	if snapshot.Sex == "" {
+		snapshot.Sex = "unknown"
+	}
+	if snapshot.FeedingMethod == "" {
+		snapshot.FeedingMethod = "mixed"
 	}
 	if snapshot.WeightKg == nil {
 		snapshot.WeightSource = "not_available"
@@ -2527,13 +2674,14 @@ func ageMonthsFromBirthDate(birthDate, now time.Time) int {
 }
 
 var (
-	htmlBreakTagPattern    = regexp.MustCompile(`(?i)<br\s*/?>`)
-	utcParenPattern        = regexp.MustCompile(`(?i)\(\s*UTC\s*\)`)
-	utcWordPattern         = regexp.MustCompile(`(?i)\bUTC\b`)
-	rfc3339DateTimePattern = regexp.MustCompile(`\b20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\b`)
-	timeWithZSuffixPattern = regexp.MustCompile(`\b(20\d{2}-\d{2}-\d{2}\s+\d{2}:\d{2})(?::\d{2})?Z\b`)
-	isoDatePattern         = regexp.MustCompile(`\b(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})\b`)
-	koreanDatePattern      = regexp.MustCompile(`(?:(20\d{2})\s*년\s*)?(\d{1,2})\s*월\s*(\d{1,2})\s*일`)
+	htmlBreakTagPattern     = regexp.MustCompile(`(?i)<br\s*/?>`)
+	utcParenPattern         = regexp.MustCompile(`(?i)\(\s*UTC\s*\)`)
+	utcWordPattern          = regexp.MustCompile(`(?i)\bUTC\b`)
+	rfc3339DateTimePattern  = regexp.MustCompile(`\b20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\b`)
+	timeWithZSuffixPattern  = regexp.MustCompile(`\b(20\d{2}-\d{2}-\d{2}\s+\d{2}:\d{2})(?::\d{2})?Z\b`)
+	isoDatePattern          = regexp.MustCompile(`\b(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})\b`)
+	koreanDatePattern       = regexp.MustCompile(`(?:(20\d{2})\s*년\s*)?(\d{1,2})\s*월\s*(\d{1,2})\s*일`)
+	aegSectionInlinePattern = regexp.MustCompile(`(?i)^(?:\d+[.)]\s*)?(답변|answer|결론|판단|근거|evidence|데이터 근거|가이드|guide|실천 가이드|행동 가이드)\s*[:：\-]\s*(.+)$`)
 )
 
 func extractRequestedDate(question string, nowUTC time.Time) (time.Time, bool) {
@@ -2629,6 +2777,8 @@ func buildChatSystemPrompt(
 		"smalltalk가 아닌 의도에서는 질문과 무관한 데이터는 답변 본문에서 제외한다.",
 		"smalltalk가 아닌 의도에서는 근거 섹션이 직접 답변 섹션보다 길어지지 않게 유지한다.",
 		"smalltalk가 아닌 의도에서는 Markdown으로 답한다.",
+		"smalltalk가 아닌 의도에서는 섹션 헤더를 정확히 한 번씩만 사용한다: `## 답변`, `## 근거`, `## 가이드`.",
+		"smalltalk가 아닌 의도에서는 물결표(`~`)를 쓰지 말고 하이픈(`-`)으로 표기한다.",
 		"모바일 화면에서 읽기 쉽도록 짧은 문단과 짧은 줄바꿈 중심으로 작성한다.",
 		"핵심 결론은 첫 줄 1문장으로 제시한다.",
 		"문단은 1~2문장으로 유지하고 긴 문장은 여러 줄로 나눈다.",
@@ -2996,6 +3146,9 @@ func enforceAnswerEvidenceGuide(answer string) string {
 	if guideSection == "" {
 		guideSection = "추가 기록을 남겨 주시면 더 정확히 안내할 수 있습니다."
 	}
+	answerSection = normalizeAEGMarkdownText(answerSection)
+	evidenceSection = normalizeAEGMarkdownText(evidenceSection)
+	guideSection = normalizeAEGMarkdownText(guideSection)
 
 	limit := len([]rune(answerSection)) * 2
 	if limit < 120 {
@@ -3006,13 +3159,13 @@ func enforceAnswerEvidenceGuide(answer string) string {
 	}
 
 	return strings.TrimSpace(strings.Join([]string{
-		"답변",
+		"## 답변",
 		answerSection,
 		"",
-		"근거",
+		"## 근거",
 		evidenceSection,
 		"",
-		"가이드",
+		"## 가이드",
 		guideSection,
 	}, "\n"))
 }
@@ -3032,8 +3185,18 @@ func splitAnswerEvidenceGuideSections(answer string) (string, string, string) {
 		if line == "" {
 			continue
 		}
-		if label := normalizeAEGSectionLabel(line); label != "" {
+		if label, inline := parseAEGSectionLine(line); label != "" {
 			current = label
+			if inline != "" {
+				switch label {
+				case "answer":
+					answerLines = append(answerLines, inline)
+				case "evidence":
+					evidenceLines = append(evidenceLines, inline)
+				case "guide":
+					guideLines = append(guideLines, inline)
+				}
+			}
 			continue
 		}
 		switch current {
@@ -3049,6 +3212,33 @@ func splitAnswerEvidenceGuideSections(answer string) (string, string, string) {
 	return strings.TrimSpace(strings.Join(answerLines, "\n")),
 		strings.TrimSpace(strings.Join(evidenceLines, "\n")),
 		strings.TrimSpace(strings.Join(guideLines, "\n"))
+}
+
+func parseAEGSectionLine(line string) (string, string) {
+	trimmed := strings.TrimSpace(line)
+	trimmed = strings.TrimLeft(trimmed, "#")
+	trimmed = strings.TrimSpace(trimmed)
+	trimmed = strings.Trim(trimmed, "*`")
+	trimmed = strings.TrimSpace(trimmed)
+	if trimmed == "" {
+		return "", ""
+	}
+
+	if label := normalizeAEGSectionLabel(trimmed); label != "" {
+		return label, ""
+	}
+
+	match := aegSectionInlinePattern.FindStringSubmatch(trimmed)
+	if len(match) != 3 {
+		return "", ""
+	}
+
+	label := normalizeAEGSectionLabel(match[1])
+	if label == "" {
+		return "", ""
+	}
+	inline := strings.TrimSpace(match[2])
+	return label, inline
 }
 
 func normalizeAEGSectionLabel(line string) string {
@@ -3079,8 +3269,12 @@ func buildAnswerEvidenceGuideFallback(answer string) (string, string, string) {
 
 	firstLine := strings.TrimSpace(stripSmalltalkListPrefix(lines[0]))
 	firstLine = strings.TrimSpace(strings.Trim(firstLine, "*`"))
-	if normalizeAEGSectionLabel(firstLine) != "" && len(lines) > 1 {
-		firstLine = strings.TrimSpace(stripSmalltalkListPrefix(lines[1]))
+	if label, inline := parseAEGSectionLine(firstLine); label != "" {
+		if inline != "" {
+			firstLine = inline
+		} else if len(lines) > 1 {
+			firstLine = strings.TrimSpace(stripSmalltalkListPrefix(lines[1]))
+		}
 	}
 	answerSection := strings.Join(strings.Fields(firstLine), " ")
 	if answerSection == "" {
@@ -3128,6 +3322,16 @@ func buildAnswerEvidenceGuideFallback(answer string) (string, string, string) {
 	}
 
 	return answerSection, evidenceSection, guideSection
+}
+
+func normalizeAEGMarkdownText(section string) string {
+	normalized := strings.TrimSpace(section)
+	if normalized == "" {
+		return ""
+	}
+	normalized = strings.ReplaceAll(normalized, "~~", "--")
+	normalized = strings.ReplaceAll(normalized, "~", "-")
+	return strings.TrimSpace(normalized)
 }
 
 func stripSmalltalkListPrefix(line string) string {
