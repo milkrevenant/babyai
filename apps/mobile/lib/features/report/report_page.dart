@@ -23,10 +23,15 @@ class _SemanticColors {
   static const Color other = Color(0xFF9AA4B2);
 }
 
-enum _StatsRange { daily, weekly, monthly }
+enum ReportRange { daily, weekly, monthly }
 
 class ReportPage extends StatefulWidget {
-  const ReportPage({super.key});
+  const ReportPage({
+    super.key,
+    this.initialRange = ReportRange.daily,
+  });
+
+  final ReportRange initialRange;
 
   @override
   State<ReportPage> createState() => ReportPageState();
@@ -36,7 +41,7 @@ class ReportPageState extends State<ReportPage> {
   bool _loading = false;
   String? _error;
 
-  _StatsRange _selected = _StatsRange.daily;
+  ReportRange _selected = ReportRange.daily;
   DateTime _todayUtc = _utcDate(DateTime.now().toUtc());
   DateTime _weekStartUtc = _toWeekStart(_utcDate(DateTime.now().toUtc()));
   DateTime _monthStartUtc = DateTime.utc(
@@ -51,7 +56,17 @@ class ReportPageState extends State<ReportPage> {
   @override
   void initState() {
     super.initState();
+    _selected = widget.initialRange;
     unawaited(_loadReports());
+  }
+
+  ReportRange get selectedRange => _selected;
+
+  void setRange(ReportRange next) {
+    if (_selected == next) {
+      return;
+    }
+    setState(() => _selected = next);
   }
 
   Future<void> refreshData() async {
@@ -179,17 +194,8 @@ class ReportPageState extends State<ReportPage> {
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         children: <Widget>[
-          _SegmentControl(
-            selected: _selected,
-            onChanged: (_StatsRange next) {
-              if (_selected == next) {
-                return;
-              }
-              setState(() => _selected = next);
-            },
-          ),
           if (_loading) ...<Widget>[
-            const SizedBox(height: 10),
+            const SizedBox(height: 2),
             const LinearProgressIndicator(minHeight: 3),
           ],
           if (_error != null) ...<Widget>[
@@ -202,7 +208,7 @@ class ReportPageState extends State<ReportPage> {
               ),
             ),
           ],
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           AnimatedSwitcher(
             duration: _kTabAnimationDuration,
             switchInCurve: Curves.easeOut,
@@ -244,21 +250,21 @@ class ReportPageState extends State<ReportPage> {
     required List<_EventDetail> knownEvents,
   }) {
     switch (_selected) {
-      case _StatsRange.daily:
+      case ReportRange.daily:
         return _DailyView(
           key: const ValueKey<String>("daily"),
           day: today,
           nowUtc: nowUtc,
           history: knownEvents,
         );
-      case _StatsRange.weekly:
+      case ReportRange.weekly:
         return _WeeklyView(
           key: const ValueKey<String>("weekly"),
           days: weekDays,
           weeklyTrend: weeklyTrend,
           suggestions: suggestions,
         );
-      case _StatsRange.monthly:
+      case ReportRange.monthly:
         return _MonthlyView(
           key: const ValueKey<String>("monthly"),
           days: monthDays,
@@ -280,76 +286,6 @@ String _dayKey(DateTime dayUtc) {
   final String m = dayUtc.month.toString().padLeft(2, "0");
   final String d = dayUtc.day.toString().padLeft(2, "0");
   return "$y-$m-$d";
-}
-
-class _SegmentControl extends StatelessWidget {
-  const _SegmentControl({required this.selected, required this.onChanged});
-
-  final _StatsRange selected;
-  final ValueChanged<_StatsRange> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final ColorScheme color = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.all(4),
-      decoration: BoxDecoration(
-        color: color.surfaceContainerHighest.withValues(alpha: 0.45),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Row(
-        children: <Widget>[
-          _item(
-            context,
-            value: _StatsRange.daily,
-            label: tr(context, ko: "Daily", en: "Daily", es: "Diario"),
-          ),
-          _item(
-            context,
-            value: _StatsRange.weekly,
-            label: tr(context, ko: "Weekly", en: "Weekly", es: "Semanal"),
-          ),
-          _item(
-            context,
-            value: _StatsRange.monthly,
-            label: tr(context, ko: "Monthly", en: "Monthly", es: "Mensual"),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _item(
-    BuildContext context, {
-    required _StatsRange value,
-    required String label,
-  }) {
-    final ColorScheme color = Theme.of(context).colorScheme;
-    final bool active = selected == value;
-
-    return Expanded(
-      child: Material(
-        color: active
-            ? color.primaryContainer.withValues(alpha: 0.92)
-            : Colors.transparent,
-        borderRadius: BorderRadius.circular(999),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(999),
-          onTap: () => onChanged(value),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 9),
-            child: Text(
-              label,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 class _DailyView extends StatelessWidget {
@@ -555,42 +491,24 @@ class _WeeklyView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final int avgSleep = days.isEmpty
-        ? 0
-        : (days.fold<int>(0, (int s, _DayStats d) => s + d.sleepMinutes) /
-                days.length)
-            .round();
-    final int feedingCount =
-        days.fold<int>(0, (int s, _DayStats d) => s + d.feedCount);
+    final int totalSleepMinutes =
+        days.fold<int>(0, (int s, _DayStats d) => s + d.sleepMinutes);
+    final int totalFormulaMl =
+        days.fold<int>(0, (int s, _DayStats d) => s + d.formulaMl);
+    final int totalPee =
+        days.fold<int>(0, (int s, _DayStats d) => s + d.peeCount);
+    final int totalPoo =
+        days.fold<int>(0, (int s, _DayStats d) => s + d.pooCount);
+    final int totalMedication =
+        days.fold<int>(0, (int s, _DayStats d) => s + d.medicationCount);
     final String insight = suggestions.isNotEmpty
         ? suggestions.first
         : "Feed trend: ${weeklyTrend["feeding_total_ml"] ?? "-"}. "
             "Sleep trend: ${weeklyTrend["sleep_total_min"] ?? "-"}.";
+    const double dateLabelWidth = 44;
 
     return Column(
       children: <Widget>[
-        Row(
-          children: <Widget>[
-            Expanded(
-              child: _StatsCard(
-                title: "Avg Sleep",
-                value: _formatHour(avgSleep / 60),
-                iconAsset: AppSvgAsset.sleepCrescentPurple,
-                accent: _SemanticColors.sleep,
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: _StatsCard(
-                title: "Feeding Count",
-                value: "$feedingCount",
-                iconAsset: AppSvgAsset.feeding,
-                accent: _SemanticColors.feed,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
         Card(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
@@ -600,7 +518,15 @@ class _WeeklyView extends StatelessWidget {
                 const Text("Weekly Timeline",
                     style: TextStyle(fontWeight: FontWeight.w700)),
                 const SizedBox(height: 12),
-                const _TimelineAxisLabels(),
+                const Row(
+                  children: <Widget>[
+                    SizedBox(width: dateLabelWidth),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: _TimelineAxisLabels(hourOnly: true),
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 8),
                 ...days.map(
                   (_DayStats day) => Padding(
@@ -608,12 +534,13 @@ class _WeeklyView extends StatelessWidget {
                     child: Row(
                       children: <Widget>[
                         SizedBox(
-                          width: 58,
+                          width: dateLabelWidth,
                           child: Text(
-                            "${_weekday(day.dayUtc)} ${day.dayUtc.day}",
+                            "${day.dayUtc.month}/${day.dayUtc.day}",
                             style: const TextStyle(fontWeight: FontWeight.w600),
                           ),
                         ),
+                        const SizedBox(width: 8),
                         Expanded(
                           child: _TimelineBand(
                             blocks: day.sleepBlocks,
@@ -634,23 +561,47 @@ class _WeeklyView extends StatelessWidget {
                             },
                           ),
                         ),
-                        const SizedBox(width: 8),
-                        SizedBox(
-                          width: 48,
-                          child: Text(
-                            _formatHour(day.sleepMinutes / 60),
-                            textAlign: TextAlign.right,
-                            style: TextStyle(
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onSurfaceVariant,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
                       ],
                     ),
                   ),
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  alignment: WrapAlignment.center,
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: <Widget>[
+                    _WeeklyMetricChip(
+                      iconAsset: AppSvgAsset.sleepCrescentPurple,
+                      accent: _SemanticColors.sleep,
+                      label: "수면",
+                      value: _formatDurationMinutes(totalSleepMinutes),
+                    ),
+                    _WeeklyMetricChip(
+                      iconAsset: AppSvgAsset.feeding,
+                      accent: _SemanticColors.feed,
+                      label: "분유",
+                      value: "${totalFormulaMl}ml",
+                    ),
+                    _WeeklyMetricChip(
+                      iconAsset: AppSvgAsset.diaper,
+                      accent: _SemanticColors.diaper,
+                      label: "소변",
+                      value: "$totalPee",
+                    ),
+                    _WeeklyMetricChip(
+                      iconAsset: AppSvgAsset.diaper,
+                      accent: _SemanticColors.diaper,
+                      label: "대변",
+                      value: "$totalPoo",
+                    ),
+                    _WeeklyMetricChip(
+                      iconAsset: AppSvgAsset.medicine,
+                      accent: _SemanticColors.medication,
+                      label: "투약",
+                      value: "$totalMedication",
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -1128,25 +1079,39 @@ class _DailyClockDialLabels extends StatelessWidget {
 }
 
 class _TimelineAxisLabels extends StatelessWidget {
-  const _TimelineAxisLabels();
+  const _TimelineAxisLabels({this.hourOnly = false});
+
+  final bool hourOnly;
 
   @override
   Widget build(BuildContext context) {
+    final List<String> labels = hourOnly
+        ? const <String>["00", "06", "12", "18", "24"]
+        : const <String>["00:00", "06:00", "12:00", "18:00", "24:00"];
     final TextStyle style = TextStyle(
       color: Theme.of(context).colorScheme.onSurfaceVariant,
-      fontSize: 11,
+      fontSize: hourOnly ? 10 : 11,
       fontWeight: FontWeight.w600,
     );
 
     return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: <Widget>[
-        Text("00:00", style: style),
-        Text("06:00", style: style),
-        Text("12:00", style: style),
-        Text("18:00", style: style),
-        Text("24:00", style: style),
-      ],
+      children: List<Widget>.generate(labels.length, (int index) {
+        final TextAlign align;
+        if (index == 0) {
+          align = TextAlign.left;
+        } else if (index == labels.length - 1) {
+          align = TextAlign.right;
+        } else {
+          align = TextAlign.center;
+        }
+        return Expanded(
+          child: Text(
+            labels[index],
+            textAlign: align,
+            style: style,
+          ),
+        );
+      }),
     );
   }
 }
@@ -1398,6 +1363,43 @@ class _TimelineBand extends StatelessWidget {
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+class _WeeklyMetricChip extends StatelessWidget {
+  const _WeeklyMetricChip({
+    required this.iconAsset,
+    required this.accent,
+    required this.label,
+    required this.value,
+  });
+
+  final String iconAsset;
+  final Color accent;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: color.surfaceContainerHighest.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          AppSvgIcon(iconAsset, size: 14, color: accent),
+          const SizedBox(width: 6),
+          Text(
+            "$label $value",
+            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
+          ),
+        ],
       ),
     );
   }
@@ -3058,19 +3060,6 @@ String _formatClock(DateTime value) {
   final String h = value.hour.toString().padLeft(2, "0");
   final String m = value.minute.toString().padLeft(2, "0");
   return "$h:$m";
-}
-
-String _weekday(DateTime dayUtc) {
-  const List<String> names = <String>[
-    "Mon",
-    "Tue",
-    "Wed",
-    "Thu",
-    "Fri",
-    "Sat",
-    "Sun"
-  ];
-  return names[dayUtc.weekday - 1];
 }
 
 String _month(int month) {

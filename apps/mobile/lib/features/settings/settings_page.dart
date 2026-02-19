@@ -24,136 +24,6 @@ class SettingsPage extends StatelessWidget {
   final VoidCallback onGoogleLogout;
   final Future<void> Function() onManageChildProfile;
 
-  Future<void> _selectTheme(AppThemeMode mode) async {
-    await themeController.setMode(mode);
-  }
-
-  Widget _boundedControl(Widget child) {
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 540),
-        child: child,
-      ),
-    );
-  }
-
-  InputDecoration _dropdownDecoration(BuildContext context, String label) {
-    final ColorScheme color = Theme.of(context).colorScheme;
-    final BorderRadius borderRadius = BorderRadius.circular(14);
-    return InputDecoration(
-      labelText: label,
-      filled: true,
-      fillColor: color.surfaceContainerHighest.withValues(alpha: 0.24),
-      border: OutlineInputBorder(borderRadius: borderRadius),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: borderRadius,
-        borderSide: BorderSide(color: color.outlineVariant),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: borderRadius,
-        borderSide: BorderSide(color: color.primary, width: 1.4),
-      ),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-    );
-  }
-
-  Widget _settingsDropdown<T>({
-    required BuildContext context,
-    required T initialValue,
-    required String label,
-    required List<DropdownMenuItem<T>> items,
-    required ValueChanged<T?> onChanged,
-  }) {
-    return _boundedControl(
-      DropdownButtonFormField<T>(
-        initialValue: initialValue,
-        isExpanded: true,
-        menuMaxHeight: 320,
-        borderRadius: BorderRadius.circular(14),
-        icon: const Icon(Icons.expand_more_rounded, size: 20),
-        decoration: _dropdownDecoration(context, label),
-        items: items,
-        onChanged: onChanged,
-      ),
-    );
-  }
-
-  String _mainFontLabel(BuildContext context, AppMainFont font) {
-    switch (font) {
-      case AppMainFont.notoSans:
-        return "Noto Sans";
-      case AppMainFont.systemSans:
-        return tr(
-          context,
-          ko: "시스템 산세리프",
-          en: "System Sans",
-          es: "Sans del sistema",
-        );
-    }
-  }
-
-  String _highlightFontLabel(BuildContext context, AppHighlightFont font) {
-    switch (font) {
-      case AppHighlightFont.ibmPlexSans:
-        return "IBM Plex Sans";
-      case AppHighlightFont.notoSans:
-        return "Noto Sans";
-    }
-  }
-
-  String _toneLabel(BuildContext context, AppAccentTone tone) {
-    switch (tone) {
-      case AppAccentTone.gold:
-        return tr(context, ko: "골드", en: "Gold", es: "Dorado");
-      case AppAccentTone.teal:
-        return tr(context, ko: "틸", en: "Teal", es: "Verde azulado");
-      case AppAccentTone.coral:
-        return tr(context, ko: "코랄", en: "Coral", es: "Coral");
-      case AppAccentTone.indigo:
-        return tr(context, ko: "인디고", en: "Indigo", es: "Indigo");
-    }
-  }
-
-  Color _toneColor(AppAccentTone tone) {
-    switch (tone) {
-      case AppAccentTone.gold:
-        return const Color(0xFFB9933F);
-      case AppAccentTone.teal:
-        return const Color(0xFF0E8F88);
-      case AppAccentTone.coral:
-        return const Color(0xFFBE5F3D);
-      case AppAccentTone.indigo:
-        return const Color(0xFF5C66C5);
-    }
-  }
-
-  String _bottomMenuLabel(BuildContext context, AppBottomMenu menu) {
-    switch (menu) {
-      case AppBottomMenu.chat:
-        return tr(context, ko: "AI 채팅", en: "AI Chat", es: "Chat IA");
-      case AppBottomMenu.statistics:
-        return tr(context, ko: "통계", en: "Statistics", es: "Estadisticas");
-      case AppBottomMenu.photos:
-        return tr(context, ko: "사진", en: "Photos", es: "Fotos");
-      case AppBottomMenu.market:
-        return tr(context, ko: "장터", en: "Market", es: "Mercado");
-      case AppBottomMenu.community:
-        return tr(context, ko: "커뮤니티", en: "Community", es: "Comunidad");
-    }
-  }
-
-  String _languageLabel(AppLanguage language) {
-    switch (language) {
-      case AppLanguage.ko:
-        return "한국어";
-      case AppLanguage.en:
-        return "English";
-      case AppLanguage.es:
-        return "Espanol";
-    }
-  }
-
   Future<void> _showCustomerCenter(BuildContext context) async {
     await showDialog<void>(
       context: context,
@@ -343,18 +213,435 @@ Aviso de recopilacion y uso de privacidad de BabyAI
     );
   }
 
+  String _accountInitials() {
+    final String source = accountName.trim().isNotEmpty
+        ? accountName.trim()
+        : accountEmail.trim();
+    if (source.isEmpty) {
+      return "AI";
+    }
+    final List<String> parts = source.split(RegExp(r"\s+"));
+    if (parts.length == 1) {
+      final String token = parts.first;
+      return token.substring(0, token.length >= 2 ? 2 : 1).toUpperCase();
+    }
+    return (parts.first.isEmpty ? "A" : parts.first[0]).toUpperCase() +
+        (parts[1].isEmpty ? "I" : parts[1][0]).toUpperCase();
+  }
+
+  Widget _sectionTitle(BuildContext context, String title) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(2, 2, 2, 8),
+      child: Text(
+        title,
+        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w700,
+              color: color.onSurface.withValues(alpha: 0.9),
+            ),
+      ),
+    );
+  }
+
+  Widget _sectionCard({
+    required BuildContext context,
+    required List<Widget> children,
+  }) {
+    final ThemeData theme = Theme.of(context);
+    final ColorScheme color = theme.colorScheme;
+    final bool isDark = theme.brightness == Brightness.dark;
+    return Card(
+      margin: EdgeInsets.zero,
+      elevation: 0,
+      color: isDark
+          ? color.surfaceContainerHighest.withValues(alpha: 0.22)
+          : color.surface.withValues(alpha: 0.94),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(24),
+        side: BorderSide(
+          color: color.outlineVariant.withValues(alpha: isDark ? 0.24 : 0.18),
+        ),
+      ),
+      child: Column(children: children),
+    );
+  }
+
+  Color _sectionDividerColor(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final bool isDark = theme.brightness == Brightness.dark;
+    return theme.colorScheme.outlineVariant
+        .withValues(alpha: isDark ? 0.3 : 0.16);
+  }
+
+  Widget _sectionRow({
+    required BuildContext context,
+    required IconData icon,
+    required String title,
+    String? subtitle,
+    required VoidCallback onTap,
+  }) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    return ListTile(
+      leading: Icon(icon, color: color.onSurfaceVariant),
+      title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+      subtitle: subtitle == null ? null : Text(subtitle),
+      trailing: const Icon(Icons.chevron_right_rounded),
+      onTap: onTap,
+    );
+  }
+
+  Future<void> _openPersonalizationSettings(BuildContext context) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (BuildContext context) => _PersonalizationSettingsPage(
+          themeController: themeController,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openAppSettings(BuildContext context) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (BuildContext context) => _AppStructureSettingsPage(
+          themeController: themeController,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openAccountSettings(BuildContext context) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (BuildContext context) => _AccountSettingsPage(
+          isGoogleLoggedIn: isGoogleLoggedIn,
+          accountName: accountName,
+          accountEmail: accountEmail,
+          onGoogleLogin: onGoogleLogin,
+          onGoogleLogout: onGoogleLogout,
+          onManageChildProfile: onManageChildProfile,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final ColorScheme color = Theme.of(context).colorScheme;
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    return Scaffold(
+      appBar: AppBar(),
+      body: AnimatedBuilder(
+        animation: themeController,
+        builder: (BuildContext context, _) {
+          return ListView(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
+            children: <Widget>[
+              Card(
+                margin: EdgeInsets.zero,
+                elevation: 0,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
+                  child: Column(
+                    children: <Widget>[
+                      CircleAvatar(
+                        radius: 36,
+                        backgroundColor: color.primary
+                            .withValues(alpha: isDark ? 0.28 : 0.18),
+                        child: Text(
+                          _accountInitials(),
+                          style: Theme.of(context)
+                              .textTheme
+                              .headlineSmall
+                              ?.copyWith(
+                                fontWeight: FontWeight.w700,
+                                color: color.primary,
+                              ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        accountName,
+                        style: Theme.of(context)
+                            .textTheme
+                            .titleLarge
+                            ?.copyWith(fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        accountEmail,
+                        style: TextStyle(color: color.onSurfaceVariant),
+                      ),
+                      const SizedBox(height: 12),
+                      OutlinedButton.icon(
+                        onPressed: () => onManageChildProfile(),
+                        icon: const Icon(Icons.edit_outlined),
+                        label: Text(tr(context,
+                            ko: "프로필 편집", en: "Edit profile", es: "Editar")),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 18),
+              _sectionTitle(
+                context,
+                tr(context,
+                    ko: "개인화", en: "Personalization", es: "Personalizacion"),
+              ),
+              _sectionCard(
+                context: context,
+                children: <Widget>[
+                  _sectionRow(
+                    context: context,
+                    icon: Icons.mood_outlined,
+                    title: tr(context,
+                        ko: "개인 맞춤 설정",
+                        en: "Personal preferences",
+                        es: "Preferencias personales"),
+                    subtitle: tr(context,
+                        ko: "언어, 테마, 폰트, 강조 색상",
+                        en: "Language, theme, font, accent tone",
+                        es: "Idioma, tema, fuente, color"),
+                    onTap: () => _openPersonalizationSettings(context),
+                  ),
+                  Divider(
+                    height: 1,
+                    indent: 16,
+                    endIndent: 16,
+                    color: _sectionDividerColor(context),
+                  ),
+                  _sectionRow(
+                    context: context,
+                    icon: Icons.apps_outlined,
+                    title: tr(context, ko: "앱", en: "App", es: "App"),
+                    subtitle: tr(context,
+                        ko: "하단 메뉴, 홈 타일 구성",
+                        en: "Bottom menu and home tiles",
+                        es: "Menu inferior y tiles"),
+                    onTap: () => _openAppSettings(context),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              _sectionTitle(
+                context,
+                tr(context, ko: "계정", en: "Account", es: "Cuenta"),
+              ),
+              _sectionCard(
+                context: context,
+                children: <Widget>[
+                  _sectionRow(
+                    context: context,
+                    icon: Icons.badge_outlined,
+                    title: tr(context,
+                        ko: "계정 및 아이 프로필",
+                        en: "Account and child profile",
+                        es: "Cuenta y perfil del bebe"),
+                    subtitle: tr(context,
+                        ko: "로그인 상태, 아이 등록/수정",
+                        en: "Login status and child profile",
+                        es: "Estado de sesion y perfil"),
+                    onTap: () => _openAccountSettings(context),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              _sectionTitle(
+                context,
+                tr(context, ko: "지원", en: "Support", es: "Soporte"),
+              ),
+              _sectionCard(
+                context: context,
+                children: <Widget>[
+                  _sectionRow(
+                    context: context,
+                    icon: Icons.support_agent_outlined,
+                    title: tr(context,
+                        ko: "고객센터",
+                        en: "Customer Center",
+                        es: "Centro de ayuda"),
+                    subtitle: tr(context,
+                        ko: "문의 및 FAQ",
+                        en: "Support and FAQ",
+                        es: "Soporte y FAQ"),
+                    onTap: () => _showCustomerCenter(context),
+                  ),
+                  Divider(
+                    height: 1,
+                    indent: 16,
+                    endIndent: 16,
+                    color: _sectionDividerColor(context),
+                  ),
+                  _sectionRow(
+                    context: context,
+                    icon: Icons.privacy_tip_outlined,
+                    title: tr(context,
+                        ko: "개인정보 수집 약관",
+                        en: "Privacy Terms",
+                        es: "Terminos de privacidad"),
+                    subtitle: tr(context,
+                        ko: "수집 항목 및 이용 목적",
+                        en: "Collection and usage details",
+                        es: "Detalle de recopilacion y uso"),
+                    onTap: () => _showPrivacyTerms(context),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              FilledButton.tonalIcon(
+                style: FilledButton.styleFrom(
+                  foregroundColor:
+                      isGoogleLoggedIn ? color.error : color.onPrimaryContainer,
+                ),
+                onPressed: isGoogleLoggedIn ? onGoogleLogout : onGoogleLogin,
+                icon: Icon(isGoogleLoggedIn ? Icons.logout : Icons.login),
+                label: Text(
+                  isGoogleLoggedIn
+                      ? tr(context, ko: "로그아웃", en: "Logout", es: "Salir")
+                      : tr(context, ko: "로그인", en: "Login", es: "Entrar"),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _PersonalizationSettingsPage extends StatelessWidget {
+  const _PersonalizationSettingsPage({required this.themeController});
+
+  final AppThemeController themeController;
+
+  Widget _boundedControl(Widget child) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 540),
+        child: child,
+      ),
+    );
+  }
+
+  InputDecoration _dropdownDecoration(BuildContext context, String label) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    final BorderRadius borderRadius = BorderRadius.circular(14);
+    return InputDecoration(
+      labelText: label,
+      filled: true,
+      fillColor: color.surfaceContainerHighest.withValues(alpha: 0.24),
+      border: OutlineInputBorder(borderRadius: borderRadius),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: borderRadius,
+        borderSide: BorderSide(color: color.outlineVariant),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: borderRadius,
+        borderSide: BorderSide(color: color.primary, width: 1.4),
+      ),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+    );
+  }
+
+  Widget _settingsDropdown<T>({
+    required BuildContext context,
+    required T initialValue,
+    required String label,
+    required List<DropdownMenuItem<T>> items,
+    required ValueChanged<T?> onChanged,
+  }) {
+    return _boundedControl(
+      DropdownButtonFormField<T>(
+        initialValue: initialValue,
+        isExpanded: true,
+        menuMaxHeight: 320,
+        borderRadius: BorderRadius.circular(14),
+        icon: const Icon(Icons.expand_more_rounded, size: 20),
+        decoration: _dropdownDecoration(context, label),
+        items: items,
+        onChanged: onChanged,
+      ),
+    );
+  }
+
+  String _mainFontLabel(BuildContext context, AppMainFont font) {
+    switch (font) {
+      case AppMainFont.notoSans:
+        return "Noto Sans";
+      case AppMainFont.systemSans:
+        return tr(
+          context,
+          ko: "시스템 산세리프",
+          en: "System Sans",
+          es: "Sans del sistema",
+        );
+    }
+  }
+
+  String _highlightFontLabel(BuildContext context, AppHighlightFont font) {
+    switch (font) {
+      case AppHighlightFont.ibmPlexSans:
+        return "IBM Plex Sans";
+      case AppHighlightFont.notoSans:
+        return "Noto Sans";
+    }
+  }
+
+  String _toneLabel(BuildContext context, AppAccentTone tone) {
+    switch (tone) {
+      case AppAccentTone.gold:
+        return tr(context, ko: "골드", en: "Gold", es: "Dorado");
+      case AppAccentTone.teal:
+        return tr(context, ko: "틸", en: "Teal", es: "Verde azulado");
+      case AppAccentTone.coral:
+        return tr(context, ko: "코랄", en: "Coral", es: "Coral");
+      case AppAccentTone.indigo:
+        return tr(context, ko: "인디고", en: "Indigo", es: "Indigo");
+    }
+  }
+
+  Color _toneColor(AppAccentTone tone) {
+    switch (tone) {
+      case AppAccentTone.gold:
+        return const Color(0xFFB9933F);
+      case AppAccentTone.teal:
+        return const Color(0xFF0E8F88);
+      case AppAccentTone.coral:
+        return const Color(0xFFBE5F3D);
+      case AppAccentTone.indigo:
+        return const Color(0xFF5C66C5);
+    }
+  }
+
+  String _languageLabel(AppLanguage language) {
+    switch (language) {
+      case AppLanguage.ko:
+        return "한국어";
+      case AppLanguage.en:
+        return "English";
+      case AppLanguage.es:
+        return "Espanol";
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(tr(context, ko: "설정", en: "Settings", es: "Ajustes")),
+        title: Text(
+          tr(context,
+              ko: "개인 맞춤 설정",
+              en: "Personal preferences",
+              es: "Preferencias personales"),
+        ),
       ),
       body: AnimatedBuilder(
         animation: themeController,
         builder: (BuildContext context, _) {
           return ListView(
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
             children: <Widget>[
               Text(tr(context, ko: "언어", en: "Language", es: "Idioma"),
                   style: const TextStyle(fontWeight: FontWeight.w700)),
@@ -392,7 +679,7 @@ Aviso de recopilacion y uso de privacidad de BabyAI
                 groupValue: themeController.mode,
                 onChanged: (AppThemeMode? value) {
                   if (value != null) {
-                    _selectTheme(value);
+                    themeController.setMode(value);
                   }
                 },
                 child: Column(
@@ -418,7 +705,7 @@ Aviso de recopilacion y uso de privacidad de BabyAI
                 ),
               ),
               const Divider(height: 24),
-              Text(tr(context, ko: "폰트 설정", en: "Font Settings", es: "Fuentes"),
+              Text(tr(context, ko: "폰트", en: "Fonts", es: "Fuentes"),
                   style: const TextStyle(fontWeight: FontWeight.w700)),
               const SizedBox(height: 8),
               _settingsDropdown<AppMainFont>(
@@ -464,8 +751,7 @@ Aviso de recopilacion y uso de privacidad de BabyAI
                 },
               ),
               const Divider(height: 24),
-              Text(
-                  tr(context, ko: "색상 설정", en: "Color Settings", es: "Colores"),
+              Text(tr(context, ko: "강조 색상", en: "Accent tone", es: "Color"),
                   style: const TextStyle(fontWeight: FontWeight.w700)),
               const SizedBox(height: 8),
               Wrap(
@@ -482,8 +768,9 @@ Aviso de recopilacion y uso de privacidad de BabyAI
                               width: 10,
                               height: 10,
                               decoration: BoxDecoration(
-                                  color: _toneColor(tone),
-                                  shape: BoxShape.circle),
+                                color: _toneColor(tone),
+                                shape: BoxShape.circle,
+                              ),
                             ),
                             const SizedBox(width: 6),
                             Text(_toneLabel(context, tone)),
@@ -494,13 +781,54 @@ Aviso de recopilacion y uso de privacidad de BabyAI
                     )
                     .toList(),
               ),
-              const Divider(height: 24),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _AppStructureSettingsPage extends StatelessWidget {
+  const _AppStructureSettingsPage({required this.themeController});
+
+  final AppThemeController themeController;
+
+  String _bottomMenuLabel(BuildContext context, AppBottomMenu menu) {
+    switch (menu) {
+      case AppBottomMenu.chat:
+        return tr(context, ko: "AI 채팅", en: "AI Chat", es: "Chat IA");
+      case AppBottomMenu.statistics:
+        return tr(context, ko: "통계", en: "Statistics", es: "Estadisticas");
+      case AppBottomMenu.photos:
+        return tr(context, ko: "사진", en: "Photos", es: "Fotos");
+      case AppBottomMenu.market:
+        return tr(context, ko: "장터", en: "Market", es: "Mercado");
+      case AppBottomMenu.community:
+        return tr(context, ko: "커뮤니티", en: "Community", es: "Comunidad");
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(tr(context, ko: "앱", en: "App", es: "App")),
+      ),
+      body: AnimatedBuilder(
+        animation: themeController,
+        builder: (BuildContext context, _) {
+          return ListView(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+            children: <Widget>[
               Text(
-                  tr(context,
-                      ko: "하단 메뉴 표시",
-                      en: "Bottom Menu Visibility",
-                      es: "Menu inferior"),
-                  style: const TextStyle(fontWeight: FontWeight.w700)),
+                tr(context,
+                    ko: "하단 메뉴 표시",
+                    en: "Bottom menu visibility",
+                    es: "Menu inferior"),
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
               const SizedBox(height: 4),
               Text(
                 tr(context,
@@ -509,16 +837,18 @@ Aviso de recopilacion y uso de privacidad de BabyAI
                     es: "Inicio es fijo. Active o desactive otros menus."),
                 style: TextStyle(color: color.onSurfaceVariant),
               ),
-              ...AppBottomMenu.values.map(
-                (AppBottomMenu menu) => SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  value: themeController.isBottomMenuEnabled(menu),
-                  title: Text(_bottomMenuLabel(context, menu)),
-                  onChanged: (bool value) {
-                    themeController.setBottomMenuEnabled(menu, value);
-                  },
-                ),
-              ),
+              ...AppBottomMenu.values
+                  .where((AppBottomMenu menu) => menu != AppBottomMenu.photos)
+                  .map(
+                    (AppBottomMenu menu) => SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      value: themeController.isBottomMenuEnabled(menu),
+                      title: Text(_bottomMenuLabel(context, menu)),
+                      onChanged: (bool value) {
+                        themeController.setBottomMenuEnabled(menu, value);
+                      },
+                    ),
+                  ),
               const Divider(height: 24),
               ListTile(
                 contentPadding: EdgeInsets.zero,
@@ -529,11 +859,13 @@ Aviso de recopilacion y uso de privacidad de BabyAI
                     ko: "홈 화면 타일을 추가/삭제하고 유형별 기본 세트를 적용합니다.",
                     en: "Add/remove home tiles and apply profile defaults.",
                     es: "Agrega/elimina tiles y aplica valores por perfil.")),
+                trailing: const Icon(Icons.chevron_right_rounded),
                 onTap: () {
                   Navigator.of(context).push(
                     MaterialPageRoute<void>(
                       builder: (BuildContext context) => HomeTileSettingsPage(
-                          themeController: themeController),
+                        themeController: themeController,
+                      ),
                     ),
                   );
                 },
@@ -554,94 +886,100 @@ Aviso de recopilacion y uso de privacidad de BabyAI
                   themeController.setShowSpecialMemo(value);
                 },
               ),
-              const Divider(height: 24),
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: const Icon(Icons.child_care_outlined),
-                title: Text(tr(context,
-                    ko: "아이 등록/수정",
-                    en: "Child Registration",
-                    es: "Registro del bebe")),
-                subtitle: Text(tr(context,
-                    ko: "아이 프로필, 수유 방식, 분유 정보를 입력합니다.",
-                    en: "Manage profile, feeding method, and formula type.",
-                    es: "Gestiona perfil, metodo de alimentacion y formula.")),
-                onTap: () => onManageChildProfile(),
-              ),
-              const Divider(height: 24),
-              Text(
-                  tr(context,
-                      ko: "구글 계정 로그인",
-                      en: "Google Account Login",
-                      es: "Cuenta de Google"),
-                  style: const TextStyle(fontWeight: FontWeight.w700)),
-              const SizedBox(height: 8),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: color.surfaceContainerHighest.withValues(alpha: 0.4),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(accountName,
-                        style: const TextStyle(fontWeight: FontWeight.w700)),
-                    const SizedBox(height: 4),
-                    Text(accountEmail),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: <Widget>[
-                        Expanded(
-                          child: FilledButton.tonalIcon(
-                            onPressed: isGoogleLoggedIn ? null : onGoogleLogin,
-                            icon: const Icon(Icons.login),
-                            label: Text(tr(context,
-                                ko: "로그인", en: "Login", es: "Entrar")),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed: isGoogleLoggedIn ? onGoogleLogout : null,
-                            icon: const Icon(Icons.logout),
-                            label: Text(tr(context,
-                                ko: "로그아웃", en: "Logout", es: "Salir")),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              const Divider(height: 24),
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: const Icon(Icons.support_agent_outlined),
-                title: Text(tr(context,
-                    ko: "고객센터", en: "Customer Center", es: "Centro de ayuda")),
-                subtitle: Text(tr(context,
-                    ko: "문의 및 FAQ",
-                    en: "Support and FAQ",
-                    es: "Soporte y FAQ")),
-                onTap: () => _showCustomerCenter(context),
-              ),
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: const Icon(Icons.privacy_tip_outlined),
-                title: Text(tr(context,
-                    ko: "개인정보 수집 약관 안내",
-                    en: "Privacy Terms",
-                    es: "Privacidad")),
-                subtitle: Text(tr(context,
-                    ko: "수집 항목 및 이용 목적",
-                    en: "Data collection and terms",
-                    es: "Recopilacion de datos y terminos")),
-                onTap: () => _showPrivacyTerms(context),
-              ),
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+class _AccountSettingsPage extends StatelessWidget {
+  const _AccountSettingsPage({
+    required this.isGoogleLoggedIn,
+    required this.accountName,
+    required this.accountEmail,
+    required this.onGoogleLogin,
+    required this.onGoogleLogout,
+    required this.onManageChildProfile,
+  });
+
+  final bool isGoogleLoggedIn;
+  final String accountName;
+  final String accountEmail;
+  final Future<void> Function() onGoogleLogin;
+  final VoidCallback onGoogleLogout;
+  final Future<void> Function() onManageChildProfile;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(tr(context, ko: "계정", en: "Account", es: "Cuenta")),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+        children: <Widget>[
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.child_care_outlined),
+            title: Text(tr(context,
+                ko: "아이 등록/수정", en: "Child Registration", es: "Registro")),
+            subtitle: Text(tr(context,
+                ko: "아이 프로필, 수유 방식, 분유 정보를 입력합니다.",
+                en: "Manage profile, feeding method, and formula type.",
+                es: "Gestiona perfil y alimentacion.")),
+            onTap: () => onManageChildProfile(),
+          ),
+          const Divider(height: 24),
+          Text(
+            tr(context,
+                ko: "구글 계정", en: "Google account", es: "Cuenta de Google"),
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: color.surfaceContainerHighest.withValues(alpha: 0.4),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(accountName,
+                    style: const TextStyle(fontWeight: FontWeight.w700)),
+                const SizedBox(height: 4),
+                Text(accountEmail),
+                const SizedBox(height: 10),
+                Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: FilledButton.tonalIcon(
+                        onPressed: isGoogleLoggedIn ? null : onGoogleLogin,
+                        icon: const Icon(Icons.login),
+                        label: Text(
+                          tr(context, ko: "로그인", en: "Login", es: "Entrar"),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: isGoogleLoggedIn ? onGoogleLogout : null,
+                        icon: const Icon(Icons.logout),
+                        label: Text(
+                          tr(context, ko: "로그아웃", en: "Logout", es: "Salir"),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

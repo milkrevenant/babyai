@@ -62,7 +62,7 @@ class AppThemeController extends ChangeNotifier {
       <AppBottomMenu, bool>{
     AppBottomMenu.chat: true,
     AppBottomMenu.statistics: true,
-    AppBottomMenu.photos: true,
+    AppBottomMenu.photos: false,
     AppBottomMenu.market: false,
     AppBottomMenu.community: false,
   };
@@ -102,10 +102,12 @@ class AppThemeController extends ChangeNotifier {
 
   static const List<HomeTileType> _defaultHomeTileOrder = <HomeTileType>[
     HomeTileType.formula,
-    HomeTileType.sleep,
-    HomeTileType.diaper,
     HomeTileType.weaning,
+    HomeTileType.diaper,
+    HomeTileType.sleep,
     HomeTileType.medication,
+    HomeTileType.breastfeed,
+    HomeTileType.memo,
   ];
 
   AppThemeMode _mode = AppThemeMode.system;
@@ -485,6 +487,8 @@ class AppThemeController extends ChangeNotifier {
     switch (key) {
       case "formula":
         return HomeTileType.formula;
+      case "breastfeed":
+        return HomeTileType.breastfeed;
       case "sleep":
         return HomeTileType.sleep;
       case "diaper":
@@ -493,6 +497,8 @@ class AppThemeController extends ChangeNotifier {
         return HomeTileType.weaning;
       case "medication":
         return HomeTileType.medication;
+      case "memo":
+        return HomeTileType.memo;
       default:
         return null;
     }
@@ -515,12 +521,12 @@ class AppThemeController extends ChangeNotifier {
   List<String> _serializeHomeTileOrder() {
     final List<String> serialized = <String>[];
     for (final HomeTileType tile in _homeTileOrder) {
-      final HomeTileType? normalized = _tileFromOrderKey(
-        tile.name.toLowerCase(),
-      );
-      switch (normalized) {
+      switch (tile) {
         case HomeTileType.formula:
           serialized.add("formula");
+          break;
+        case HomeTileType.breastfeed:
+          serialized.add("breastfeed");
           break;
         case HomeTileType.sleep:
           serialized.add("sleep");
@@ -534,9 +540,8 @@ class AppThemeController extends ChangeNotifier {
         case HomeTileType.medication:
           serialized.add("medication");
           break;
-        case HomeTileType.breastfeed:
         case HomeTileType.memo:
-        case null:
+          serialized.add("memo");
           break;
       }
     }

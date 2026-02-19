@@ -45,17 +45,21 @@ func TestStartManualEventCreatesOpenEvent(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	var status string
+	var metadataRaw []byte
 	var endTime *time.Time
 	if err := testPool.QueryRow(
 		ctx,
-		`SELECT status, "endTime" FROM "Event" WHERE id = $1`,
+		`SELECT "metadataJson", "endTime" FROM "Event" WHERE id = $1`,
 		eventID,
-	).Scan(&status, &endTime); err != nil {
+	).Scan(&metadataRaw, &endTime); err != nil {
 		t.Fatalf("query event: %v", err)
 	}
-	if status != "OPEN" {
-		t.Fatalf("expected OPEN status, got %q", status)
+	metadata := map[string]any{}
+	if err := json.Unmarshal(metadataRaw, &metadata); err != nil {
+		t.Fatalf("unmarshal metadata json: %v", err)
+	}
+	if metadata["event_state"] != "OPEN" {
+		t.Fatalf("expected event_state OPEN, got %v", metadata["event_state"])
 	}
 	if endTime != nil {
 		t.Fatalf("expected nil endTime for OPEN event, got %v", endTime)
@@ -163,21 +167,25 @@ func TestCompleteManualEventClosesOpenEvent(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	var status string
 	var endTime *time.Time
 	var valueRaw []byte
+	var metadataRaw []byte
 	if err := testPool.QueryRow(
 		ctx,
-		`SELECT status, "endTime", "valueJson" FROM "Event" WHERE id = $1`,
+		`SELECT "endTime", "valueJson", "metadataJson" FROM "Event" WHERE id = $1`,
 		eventID,
-	).Scan(&status, &endTime, &valueRaw); err != nil {
+	).Scan(&endTime, &valueRaw, &metadataRaw); err != nil {
 		t.Fatalf("query completed event: %v", err)
-	}
-	if status != "CLOSED" {
-		t.Fatalf("expected CLOSED, got %q", status)
 	}
 	if endTime == nil {
 		t.Fatalf("expected endTime after completion")
+	}
+	metadata := map[string]any{}
+	if err := json.Unmarshal(metadataRaw, &metadata); err != nil {
+		t.Fatalf("unmarshal metadata json: %v", err)
+	}
+	if metadata["event_state"] != "CLOSED" {
+		t.Fatalf("expected event_state CLOSED, got %v", metadata["event_state"])
 	}
 
 	value := map[string]any{}
@@ -331,16 +339,20 @@ func TestCancelManualEventMarksCanceled(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	var status string
+	var metadataRaw []byte
 	if err := testPool.QueryRow(
 		ctx,
-		`SELECT status FROM "Event" WHERE id = $1`,
+		`SELECT "metadataJson" FROM "Event" WHERE id = $1`,
 		eventID,
-	).Scan(&status); err != nil {
+	).Scan(&metadataRaw); err != nil {
 		t.Fatalf("query canceled event: %v", err)
 	}
-	if status != "CANCELED" {
-		t.Fatalf("expected CANCELED status, got %q", status)
+	metadata := map[string]any{}
+	if err := json.Unmarshal(metadataRaw, &metadata); err != nil {
+		t.Fatalf("unmarshal metadata json: %v", err)
+	}
+	if metadata["event_state"] != "CANCELED" {
+		t.Fatalf("expected event_state CANCELED, got %v", metadata["event_state"])
 	}
 }
 

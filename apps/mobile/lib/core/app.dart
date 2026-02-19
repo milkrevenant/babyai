@@ -218,6 +218,7 @@ class _HomeShellState extends State<_HomeShell> {
 
   int _index = 0;
   bool _isGoogleLoggedIn = false;
+  bool _isBusinessAccount = false;
   String _accountName = "Google account";
   String _accountEmail = "Not connected";
   bool _chatHistoryLoading = false;
@@ -226,6 +227,7 @@ class _HomeShellState extends State<_HomeShell> {
   String? _selectedChatSessionId;
 
   RecordRange _recordRange = RecordRange.week;
+  ReportRange _reportRange = ReportRange.daily;
   MarketSection _marketSection = MarketSection.used;
   CommunitySection _communitySection = CommunitySection.free;
 
@@ -759,14 +761,6 @@ class _HomeShellState extends State<_HomeShell> {
         label: "statistics",
       ));
     }
-    if (widget.themeController.isBottomMenuEnabled(AppBottomMenu.photos)) {
-      tabs.add(const _BottomMenuTab(
-        pageIndex: _photosPage,
-        iconData: Icons.settings_outlined,
-        selectedIconData: Icons.settings_rounded,
-        label: "settings",
-      ));
-    }
     if (widget.themeController.isBottomMenuEnabled(AppBottomMenu.market)) {
       tabs.add(const _BottomMenuTab(
         pageIndex: _marketPage,
@@ -794,7 +788,10 @@ class _HomeShellState extends State<_HomeShell> {
           onHistoryChanged: _onChatHistoryChanged,
         );
       case _statisticsPage:
-        return ReportPage(key: _reportPageKey);
+        return ReportPage(
+          key: _reportPageKey,
+          initialRange: _reportRange,
+        );
       case _photosPage:
         return SettingsPage(
           themeController: widget.themeController,
@@ -877,11 +874,140 @@ class _HomeShellState extends State<_HomeShell> {
     }
   }
 
+  bool _resolveBusinessAccount(Map<String, dynamic> payload) {
+    final dynamic raw = payload["account_type"] ??
+        payload["plan_type"] ??
+        payload["membership"] ??
+        payload["workspace_type"] ??
+        payload["tenant_type"] ??
+        payload["organization_type"] ??
+        payload["is_business"];
+    if (raw is bool) {
+      return raw;
+    }
+
+    final String normalized = raw?.toString().trim().toLowerCase() ?? "";
+    if (normalized.isEmpty) {
+      return false;
+    }
+    if (normalized == "true") {
+      return true;
+    }
+    if (normalized == "false") {
+      return false;
+    }
+    if (normalized.contains("business") ||
+        normalized.contains("enterprise") ||
+        normalized.contains("team") ||
+        normalized.contains("company") ||
+        normalized.contains("organization") ||
+        normalized.contains("org") ||
+        normalized.contains("biz")) {
+      return true;
+    }
+    return false;
+  }
+
+  String _accountTypeLabel(BuildContext context) {
+    return _isBusinessAccount
+        ? tr(context, ko: "비즈니스", en: "Business", es: "Empresa")
+        : tr(context, ko: "개인", en: "Personal", es: "Personal");
+  }
+
+  String _accountInitials() {
+    final String source = _accountName.trim().isNotEmpty
+        ? _accountName.trim()
+        : _accountEmail.trim();
+    if (source.isEmpty) {
+      return "AI";
+    }
+    final List<String> parts = source.split(RegExp(r"\s+"));
+    if (parts.length == 1) {
+      final String token = parts.first;
+      return token.substring(0, token.length >= 2 ? 2 : 1).toUpperCase();
+    }
+    final String a = parts.first.isEmpty ? "A" : parts.first[0];
+    final String b = parts[1].isEmpty ? "I" : parts[1][0];
+    return (a + b).toUpperCase();
+  }
+
+  Widget _buildDrawerFooterAccount(BuildContext context) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    return Material(
+      color: color.surface,
+      child: InkWell(
+        onTap: () {
+          if (Navigator.of(context).canPop()) {
+            Navigator.of(context).pop();
+          }
+          _setIndex(_photosPage);
+        },
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+          decoration: BoxDecoration(
+            border: Border(
+              top: BorderSide(
+                color: color.outlineVariant.withValues(alpha: 0.2),
+              ),
+            ),
+          ),
+          child: Row(
+            children: <Widget>[
+              CircleAvatar(
+                radius: 20,
+                backgroundColor: color.primary.withValues(alpha: 0.16),
+                child: Text(
+                  _accountInitials(),
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        color: color.primary,
+                      ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    Text(
+                      _accountName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      _accountTypeLabel(context),
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: color.onSurfaceVariant,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(
+                Icons.chevron_right_rounded,
+                color: color.onSurfaceVariant,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   void _bootstrapAccountFromToken() {
     final String token = BabyAIApi.currentBearerToken;
     if (token.trim().isEmpty) {
       setState(() {
         _isGoogleLoggedIn = false;
+        _isBusinessAccount = false;
         _accountName = "Google account";
         _accountEmail = "Not connected";
       });
@@ -894,6 +1020,7 @@ class _HomeShellState extends State<_HomeShell> {
         (payload["name"] ?? payload["given_name"] ?? "Google User").toString();
     setState(() {
       _isGoogleLoggedIn = true;
+      _isBusinessAccount = _resolveBusinessAccount(payload);
       _accountName = name.trim().isEmpty ? "Google User" : name.trim();
       _accountEmail = email.trim().isEmpty ? "Connected" : email.trim();
     });
@@ -980,6 +1107,7 @@ class _HomeShellState extends State<_HomeShell> {
                 final Map<String, dynamic> payload = _decodeJwtPayload(token);
                 setState(() {
                   _isGoogleLoggedIn = token.isNotEmpty;
+                  _isBusinessAccount = _resolveBusinessAccount(payload);
                   _accountName = name.isNotEmpty
                       ? name
                       : ((payload["name"] ??
@@ -1014,6 +1142,7 @@ class _HomeShellState extends State<_HomeShell> {
     _clearLinkedProfileState();
     setState(() {
       _isGoogleLoggedIn = false;
+      _isBusinessAccount = false;
       _accountName = "Google account";
       _accountEmail = "Not connected";
     });
@@ -1024,6 +1153,13 @@ class _HomeShellState extends State<_HomeShell> {
     if (_index == _statisticsPage) {
       _reportPageKey.currentState?.refreshData();
     }
+  }
+
+  void _setReportRange(ReportRange next) {
+    if (_reportRange != next) {
+      setState(() => _reportRange = next);
+    }
+    _reportPageKey.currentState?.setRange(next);
   }
 
   Widget _buildHeaderControls(BuildContext context) {
@@ -1117,9 +1253,31 @@ class _HomeShellState extends State<_HomeShell> {
           ),
         );
       case _statisticsPage:
-        return _HeaderHint(
-            label: tr(context,
-                ko: "일간 + 주간", en: "Daily + Weekly", es: "Diario + Semanal"));
+        final ReportRange selectedRange =
+            _reportPageKey.currentState?.selectedRange ?? _reportRange;
+        return Wrap(
+          spacing: 6,
+          children: <Widget>[
+            _HeaderChoice(
+              selected: selectedRange == ReportRange.daily,
+              label: tr(context, ko: "Daily", en: "Daily", es: "Diario"),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+              onTap: () => _setReportRange(ReportRange.daily),
+            ),
+            _HeaderChoice(
+              selected: selectedRange == ReportRange.weekly,
+              label: tr(context, ko: "Weekly", en: "Weekly", es: "Semanal"),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+              onTap: () => _setReportRange(ReportRange.weekly),
+            ),
+            _HeaderChoice(
+              selected: selectedRange == ReportRange.monthly,
+              label: tr(context, ko: "Monthly", en: "Monthly", es: "Mensual"),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+              onTap: () => _setReportRange(ReportRange.monthly),
+            ),
+          ],
+        );
       case _chatPage:
       default:
         return _HeaderHint(
@@ -1214,6 +1372,7 @@ class _HomeShellState extends State<_HomeShell> {
       key: _scaffoldKey,
       appBar: _buildTopBar(context),
       drawer: Drawer(
+        backgroundColor: color.surface,
         child: SafeArea(
           child: Column(
             children: <Widget>[
@@ -1223,10 +1382,11 @@ class _HomeShellState extends State<_HomeShell> {
                   children: <Widget>[
                     const AppSvgIcon(AppSvgAsset.aiChatSparkles, size: 24),
                     const SizedBox(width: 8),
-                    const Expanded(
+                    Expanded(
                       child: Text(
-                        "Previous chats",
-                        style: TextStyle(
+                        tr(context,
+                            ko: "채팅 내역", en: "Chat history", es: "Historial"),
+                        style: const TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.w700,
                         ),
@@ -1249,7 +1409,14 @@ class _HomeShellState extends State<_HomeShell> {
                   child: FilledButton.icon(
                     onPressed: () => unawaited(_createNewChatFromDrawer()),
                     icon: const Icon(Icons.add_comment_outlined),
-                    label: const Text("New conversation"),
+                    label: Text(
+                      tr(
+                        context,
+                        ko: "새 채팅",
+                        en: "New conversation",
+                        es: "Nueva conversacion",
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -1334,6 +1501,7 @@ class _HomeShellState extends State<_HomeShell> {
                             },
                           ),
               ),
+              _buildDrawerFooterAccount(context),
             ],
           ),
         ),
@@ -1437,12 +1605,17 @@ class _RoundTopButton extends StatelessWidget {
 }
 
 class _HeaderChoice extends StatelessWidget {
-  const _HeaderChoice(
-      {required this.selected, required this.label, required this.onTap});
+  const _HeaderChoice({
+    required this.selected,
+    required this.label,
+    required this.onTap,
+    this.padding = const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+  });
 
   final bool selected;
   final String label;
   final VoidCallback onTap;
+  final EdgeInsetsGeometry padding;
 
   @override
   Widget build(BuildContext context) {
@@ -1456,7 +1629,7 @@ class _HeaderChoice extends StatelessWidget {
         borderRadius: BorderRadius.circular(999),
         onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          padding: padding,
           child: Text(
             label,
             style: TextStyle(

@@ -88,8 +88,13 @@ class RecordingPageState extends State<RecordingPage> {
     });
 
     try {
+      final String range = switch (widget.range) {
+        RecordRange.day => "day",
+        RecordRange.week => "week",
+        RecordRange.month => "month",
+      };
       final Map<String, dynamic> result =
-          await BabyAIApi.instance.quickLandingSnapshot();
+          await BabyAIApi.instance.quickLandingSnapshot(range: range);
       if (!mounted) {
         return;
       }
@@ -316,16 +321,27 @@ class RecordingPageState extends State<RecordingPage> {
   }
 
   List<HomeTileType> _visibleTiles(AppThemeController controller) {
-    final List<HomeTileType> tiles = HomeTileType.values
-        .where((HomeTileType tile) => controller.isHomeTileEnabled(tile))
-        .toList();
+    final List<HomeTileType> tiles = <HomeTileType>[];
+    for (final HomeTileType tile in controller.homeTileOrder) {
+      if (controller.isHomeTileEnabled(tile)) {
+        tiles.add(tile);
+      }
+    }
+    for (final HomeTileType tile in HomeTileType.values) {
+      if (controller.isHomeTileEnabled(tile) && !tiles.contains(tile)) {
+        tiles.add(tile);
+      }
+    }
     if (tiles.isNotEmpty) {
       return tiles;
     }
     return <HomeTileType>[
       HomeTileType.formula,
+      HomeTileType.weaning,
       HomeTileType.diaper,
       HomeTileType.sleep,
+      HomeTileType.medication,
+      HomeTileType.breastfeed,
     ];
   }
 
@@ -333,11 +349,11 @@ class RecordingPageState extends State<RecordingPage> {
     final List<HomeTileType> base = _visibleTiles(controller);
     const List<HomeTileType> fallbackOrder = <HomeTileType>[
       HomeTileType.formula,
-      HomeTileType.breastfeed,
-      HomeTileType.sleep,
-      HomeTileType.diaper,
       HomeTileType.weaning,
+      HomeTileType.diaper,
+      HomeTileType.sleep,
       HomeTileType.medication,
+      HomeTileType.breastfeed,
       HomeTileType.memo,
     ];
     for (final HomeTileType tile in fallbackOrder) {
@@ -404,6 +420,433 @@ class RecordingPageState extends State<RecordingPage> {
       case HomeTileType.memo:
         return const Color(0xFFA546C9);
     }
+  }
+
+  String _dashboardTileHeadline(
+      HomeTileType tile, Map<String, dynamic> snapshot) {
+    final bool isDay = widget.range == RecordRange.day;
+    final bool isMonth = widget.range == RecordRange.month;
+    final int formulaTotal = _asInt(snapshot["formula_total_ml"]) ?? 0;
+    final int formulaCount = _asInt(snapshot["formula_count"]) ?? 0;
+    final int breastfeedCount = _asInt(snapshot["breastfeed_count"]) ?? 0;
+    final int feedingsCount =
+        _asInt(snapshot["feedings_count"]) ?? (formulaCount + breastfeedCount);
+    final int weaningCount = _asInt(snapshot["weaning_count"]) ?? 0;
+    final int medicationCount = _asInt(snapshot["medication_count"]) ?? 0;
+    final int rangeDayCount =
+        (_asInt(snapshot["range_day_count"]) ?? (isDay ? 1 : 7)).clamp(1, 31);
+    final double avgFormulaPerDay =
+        _asDouble(snapshot["avg_formula_ml_per_day"]) ??
+            formulaTotal.toDouble();
+    final double avgFeedingsPerDay =
+        _asDouble(snapshot["avg_feedings_per_day"]) ?? feedingsCount.toDouble();
+    final double avgSleepPerDayMin =
+        _asDouble(snapshot["avg_sleep_minutes_per_day"]) ?? 0;
+
+    switch (tile) {
+      case HomeTileType.formula:
+        if (isDay) {
+          return "${formulaTotal}ml";
+        }
+        return "${_decimal(avgFormulaPerDay)}ml / ${_decimal(avgFeedingsPerDay)}회";
+      case HomeTileType.breastfeed:
+        if (isDay) {
+          return "$breastfeedCount회";
+        }
+        final double avg = breastfeedCount / rangeDayCount;
+        return "${_decimal(avg)}회";
+      case HomeTileType.sleep:
+        if (isDay) {
+          final int? duration = _asInt(snapshot["recent_sleep_duration_min"]);
+          return duration == null ? "-" : _formatDuration(duration);
+        }
+        return _formatDuration(avgSleepPerDayMin.round());
+      case HomeTileType.diaper:
+        final int pee = _asInt(snapshot["diaper_pee_count"]) ?? 0;
+        final int poo = _asInt(snapshot["diaper_poo_count"]) ?? 0;
+        if (isMonth) {
+          return "소${_decimal(pee / rangeDayCount)} · 대${_decimal(poo / rangeDayCount)}";
+        }
+        return "소$pee · 대$poo";
+      case HomeTileType.weaning:
+        if (isDay) {
+          return "$weaningCount회";
+        }
+        return "${_decimal(weaningCount / rangeDayCount)}회";
+      case HomeTileType.medication:
+        if (isDay) {
+          return "$medicationCount회";
+        }
+        return "${_decimal(medicationCount / rangeDayCount)}회";
+      case HomeTileType.memo:
+        return "${_asInt(snapshot["memo_count"]) ?? 0}개";
+    }
+  }
+
+  String _dashboardTileSubtitle(
+      HomeTileType tile, Map<String, dynamic> snapshot) {
+    switch (tile) {
+      case HomeTileType.formula:
+        return "마지막 ${_relativeAgo(_asString(snapshot["last_formula_time"]))}";
+      case HomeTileType.breastfeed:
+        return "마지막 ${_relativeAgo(_asString(snapshot["last_breastfeed_time"]))}";
+      case HomeTileType.sleep:
+        final int? since = _asInt(snapshot["minutes_since_last_sleep"]);
+        if (since == null) {
+          return "최근 수면 기록 없음";
+        }
+        return "$since분 전 종료";
+      case HomeTileType.diaper:
+        return "마지막 ${_relativeAgo(_asString(snapshot["last_diaper_time"]))}";
+      case HomeTileType.weaning:
+        return "놀이/이유식 입력";
+      case HomeTileType.medication:
+        return "마지막 ${_relativeAgo(_asString(snapshot["last_medication_time"]))}";
+      case HomeTileType.memo:
+        final String memo = _asString(snapshot["special_memo"]) ?? "특별 메모 입력";
+        return memo.length > 20 ? "${memo.substring(0, 20)}..." : memo;
+    }
+  }
+
+  List<MapEntry<String, String>> _dashboardTileMetaLines(
+    HomeTileType tile,
+    Map<String, dynamic> snapshot,
+  ) {
+    final bool isDay = widget.range == RecordRange.day;
+    final bool isWeek = widget.range == RecordRange.week;
+    final bool isMonth = widget.range == RecordRange.month;
+    final int rangeDayCount =
+        (_asInt(snapshot["range_day_count"]) ?? (isDay ? 1 : 7)).clamp(1, 31);
+
+    final int formulaTotal = _asInt(snapshot["formula_total_ml"]) ?? 0;
+    final int formulaCount = _asInt(snapshot["formula_count"]) ?? 0;
+    final int breastfeedCount = _asInt(snapshot["breastfeed_count"]) ?? 0;
+    final int feedingsCount =
+        _asInt(snapshot["feedings_count"]) ?? (formulaCount + breastfeedCount);
+    final int weaningCount = _asInt(snapshot["weaning_count"]) ?? 0;
+    final int diaperPeeCount = _asInt(snapshot["diaper_pee_count"]) ?? 0;
+    final int diaperPooCount = _asInt(snapshot["diaper_poo_count"]) ?? 0;
+    final int medicationCount = _asInt(snapshot["medication_count"]) ?? 0;
+    final int memoCount = _asInt(snapshot["memo_count"]) ?? 0;
+
+    final double avgFormulaPerDay =
+        _asDouble(snapshot["avg_formula_ml_per_day"]) ??
+            formulaTotal.toDouble();
+    final double avgFeedingsPerDay =
+        _asDouble(snapshot["avg_feedings_per_day"]) ?? feedingsCount.toDouble();
+    final double avgSleepPerDayMin =
+        _asDouble(snapshot["avg_sleep_minutes_per_day"]) ?? 0;
+    final double avgNapPerDayMin =
+        _asDouble(snapshot["avg_nap_minutes_per_day"]) ?? 0;
+    final double avgNightPerDayMin =
+        _asDouble(snapshot["avg_night_sleep_minutes_per_day"]) ?? 0;
+    final double avgPeePerDay = _asDouble(snapshot["avg_diaper_pee_per_day"]) ??
+        diaperPeeCount.toDouble();
+    final double avgPooPerDay = _asDouble(snapshot["avg_diaper_poo_per_day"]) ??
+        diaperPooCount.toDouble();
+
+    final String lastFormulaAgo =
+        _relativeAgo(_asString(snapshot["last_formula_time"]));
+    final String lastBreastfeedAgo =
+        _relativeAgo(_asString(snapshot["last_breastfeed_time"]));
+    final String recentSleepAgo =
+        _relativeAgo(_asString(snapshot["recent_sleep_time"]));
+    final String recentSleepDuration =
+        _formatDuration(_asInt(snapshot["recent_sleep_duration_min"]));
+    final String lastSleepEndAgo =
+        _relativeAgo(_asString(snapshot["last_sleep_end_time"]));
+    final int? minutesSinceSleep = _asInt(snapshot["minutes_since_last_sleep"]);
+    final String lastDiaperAgo =
+        _relativeAgo(_asString(snapshot["last_diaper_time"]));
+    final String lastPeeAgo =
+        _relativeAgo(_asString(snapshot["last_pee_time"]));
+    final String lastPooAgo =
+        _relativeAgo(_asString(snapshot["last_poo_time"]));
+    final String lastMedicationAgo =
+        _relativeAgo(_asString(snapshot["last_medication_time"]));
+    final String lastMedicationName =
+        _asString(snapshot["last_medication_name"]) ?? "-";
+    final String lastWeaningAgo =
+        _relativeAgo(_asString(snapshot["last_weaning_time"]));
+    final String specialMemo = _asString(snapshot["special_memo"]) ?? "-";
+    final String clippedMemo = specialMemo.length > 24
+        ? "${specialMemo.substring(0, 24)}..."
+        : specialMemo;
+
+    switch (tile) {
+      case HomeTileType.formula:
+        return <MapEntry<String, String>>[
+          if (_hasOpenEventForTile(HomeTileType.formula, snapshot))
+            MapEntry<String, String>("진행 중 시작",
+                _openStartedAgo(HomeTileType.formula, snapshot) ?? "-"),
+          MapEntry<String, String>(
+            isDay ? "총 수유량" : "1일 평균 수유량",
+            isDay ? "${formulaTotal}ml" : "${_decimal(avgFormulaPerDay)}ml",
+          ),
+          MapEntry<String, String>(
+            isDay ? "수유 횟수" : "1일 평균 수유 횟수",
+            isDay ? "$feedingsCount" : _decimal(avgFeedingsPerDay),
+          ),
+          MapEntry<String, String>(
+            "마지막 분유/모유",
+            "$lastFormulaAgo / $lastBreastfeedAgo",
+          ),
+        ];
+      case HomeTileType.breastfeed:
+        return <MapEntry<String, String>>[
+          if (_hasOpenEventForTile(HomeTileType.breastfeed, snapshot))
+            MapEntry<String, String>("진행 중 시작",
+                _openStartedAgo(HomeTileType.breastfeed, snapshot) ?? "-"),
+          MapEntry<String, String>(
+            isDay ? "모유 횟수" : "평균 모유 횟수",
+            isDay
+                ? "$breastfeedCount"
+                : _decimal(breastfeedCount / rangeDayCount),
+          ),
+          MapEntry<String, String>("마지막 모유", lastBreastfeedAgo),
+          MapEntry<String, String>("최근 분유", lastFormulaAgo),
+        ];
+      case HomeTileType.sleep:
+        return <MapEntry<String, String>>[
+          if (_hasOpenEventForTile(HomeTileType.sleep, snapshot))
+            MapEntry<String, String>("진행 중 시작",
+                _openStartedAgo(HomeTileType.sleep, snapshot) ?? "-"),
+          MapEntry<String, String>(
+            isDay ? "최근 잠 지속" : "1일 평균 수면",
+            isDay
+                ? recentSleepDuration
+                : _formatDuration(avgSleepPerDayMin.round()),
+          ),
+          MapEntry<String, String>(
+            isDay ? "최근 잠 시작" : "1일 평균 낮잠",
+            isDay ? recentSleepAgo : _formatDuration(avgNapPerDayMin.round()),
+          ),
+          MapEntry<String, String>(
+            isDay ? "마지막 잠 종료/이후" : "1일 평균 밤잠",
+            isDay
+                ? "$lastSleepEndAgo / ${minutesSinceSleep == null ? "-" : "$minutesSinceSleep분"}"
+                : _formatDuration(avgNightPerDayMin.round()),
+          ),
+        ];
+      case HomeTileType.diaper:
+        return <MapEntry<String, String>>[
+          if (_hasOpenEventForTile(HomeTileType.diaper, snapshot))
+            MapEntry<String, String>("진행 중 시작",
+                _openStartedAgo(HomeTileType.diaper, snapshot) ?? "-"),
+          MapEntry<String, String>(
+            isMonth ? "1일 평균 대변 횟수" : (isWeek ? "주 총 대변 횟수" : "마지막 대변"),
+            isMonth
+                ? _decimal(avgPooPerDay)
+                : isWeek
+                    ? "$diaperPooCount"
+                    : lastPooAgo,
+          ),
+          MapEntry<String, String>(
+            isMonth ? "1일 평균 소변 횟수" : (isWeek ? "주 총 소변 횟수" : "마지막 소변"),
+            isMonth
+                ? _decimal(avgPeePerDay)
+                : isWeek
+                    ? "$diaperPeeCount"
+                    : lastPeeAgo,
+          ),
+          MapEntry<String, String>(isDay ? "오늘 소/대 횟수" : "마지막 교체",
+              isDay ? "소$diaperPeeCount · 대$diaperPooCount" : lastDiaperAgo),
+        ];
+      case HomeTileType.weaning:
+        return <MapEntry<String, String>>[
+          if (_hasOpenEventForTile(HomeTileType.weaning, snapshot))
+            MapEntry<String, String>("진행 중 시작",
+                _openStartedAgo(HomeTileType.weaning, snapshot) ?? "-"),
+          MapEntry<String, String>(isDay ? "오늘 횟수" : "1일 평균 횟수",
+              isDay ? "$weaningCount" : _decimal(weaningCount / rangeDayCount)),
+          MapEntry<String, String>("마지막 기록", lastWeaningAgo),
+          MapEntry<String, String>("최근 메모", clippedMemo),
+        ];
+      case HomeTileType.medication:
+        return <MapEntry<String, String>>[
+          if (_hasOpenEventForTile(HomeTileType.medication, snapshot))
+            MapEntry<String, String>("진행 중 시작",
+                _openStartedAgo(HomeTileType.medication, snapshot) ?? "-"),
+          MapEntry<String, String>(
+              isDay ? "오늘 횟수" : "1일 평균 횟수",
+              isDay
+                  ? "$medicationCount"
+                  : _decimal(medicationCount / rangeDayCount)),
+          MapEntry<String, String>("마지막 투약", lastMedicationAgo),
+          MapEntry<String, String>("최근 약명", lastMedicationName),
+        ];
+      case HomeTileType.memo:
+        return <MapEntry<String, String>>[
+          MapEntry<String, String>("오늘 메모", "$memoCount"),
+          MapEntry<String, String>("최근 메모", clippedMemo),
+          const MapEntry<String, String>("입력", "탭해서 추가"),
+        ];
+    }
+  }
+
+  bool _hasOpenEventForTile(HomeTileType tile, Map<String, dynamic> snapshot) {
+    final String? key = _openEventIdKey(tile);
+    if (key == null) {
+      return false;
+    }
+    return _asString(snapshot[key]) != null;
+  }
+
+  String? _openStartedAgo(HomeTileType tile, Map<String, dynamic> snapshot) {
+    final String? key = _openStartTimeKey(tile);
+    if (key == null) {
+      return null;
+    }
+    final String? startTime = _asString(snapshot[key]);
+    if (startTime == null) {
+      return null;
+    }
+    return _relativeAgo(startTime);
+  }
+
+  String? _openEventIdKey(HomeTileType tile) {
+    switch (tile) {
+      case HomeTileType.formula:
+        return "open_formula_event_id";
+      case HomeTileType.breastfeed:
+        return "open_breastfeed_event_id";
+      case HomeTileType.sleep:
+        return "open_sleep_event_id";
+      case HomeTileType.diaper:
+        return "open_diaper_event_id";
+      case HomeTileType.weaning:
+        return "open_weaning_event_id";
+      case HomeTileType.medication:
+        return "open_medication_event_id";
+      case HomeTileType.memo:
+        return null;
+    }
+  }
+
+  String? _openStartTimeKey(HomeTileType tile) {
+    switch (tile) {
+      case HomeTileType.formula:
+        return "open_formula_start_time";
+      case HomeTileType.breastfeed:
+        return "open_breastfeed_start_time";
+      case HomeTileType.sleep:
+        return "open_sleep_start_time";
+      case HomeTileType.diaper:
+        return "open_diaper_start_time";
+      case HomeTileType.weaning:
+        return "open_weaning_start_time";
+      case HomeTileType.medication:
+        return "open_medication_start_time";
+      case HomeTileType.memo:
+        return null;
+    }
+  }
+
+  String? _openValueKey(HomeTileType tile) {
+    switch (tile) {
+      case HomeTileType.formula:
+        return "open_formula_value";
+      case HomeTileType.breastfeed:
+        return "open_breastfeed_value";
+      case HomeTileType.sleep:
+        return "open_sleep_value";
+      case HomeTileType.diaper:
+        return "open_diaper_value";
+      case HomeTileType.weaning:
+        return "open_weaning_value";
+      case HomeTileType.medication:
+        return "open_medication_value";
+      case HomeTileType.memo:
+        return null;
+    }
+  }
+
+  Map<String, dynamic>? _openPrefillForTile(
+    HomeTileType tile,
+    Map<String, dynamic> snapshot,
+  ) {
+    final String? eventIdKey = _openEventIdKey(tile);
+    final String? startKey = _openStartTimeKey(tile);
+    final String? valueKey = _openValueKey(tile);
+    if (eventIdKey == null || startKey == null || valueKey == null) {
+      return null;
+    }
+    final String? eventId = _asString(snapshot[eventIdKey]);
+    final String? startTime = _asString(snapshot[startKey]);
+    final Map<String, dynamic> value = _asStringDynamicMap(snapshot[valueKey]);
+    if (eventId == null && startTime == null && value.isEmpty) {
+      return null;
+    }
+    final Map<String, dynamic> prefill = <String, dynamic>{
+      if (eventId != null) "open_event_id": eventId,
+      if (eventId != null) eventIdKey: eventId,
+      if (startTime != null) "open_start_time": startTime,
+      if (startTime != null) "start_time": startTime,
+      if (startTime != null) startKey: startTime,
+      if (value.isNotEmpty) "open_value": value,
+      if (value.isNotEmpty) valueKey: value,
+    };
+    if (tile == HomeTileType.diaper) {
+      final String? diaperType = _asString(snapshot["open_diaper_type"]);
+      if (diaperType != null) {
+        prefill["open_diaper_type"] = diaperType;
+        prefill["diaper_type"] = diaperType;
+      }
+    }
+    return prefill;
+  }
+
+  Map<String, dynamic> _asStringDynamicMap(dynamic value) {
+    if (value is! Map) {
+      return <String, dynamic>{};
+    }
+    final Map<String, dynamic> result = <String, dynamic>{};
+    value.forEach((dynamic key, dynamic item) {
+      final String textKey = key?.toString().trim() ?? "";
+      if (textKey.isNotEmpty) {
+        result[textKey] = item;
+      }
+    });
+    return result;
+  }
+
+  double? _asDouble(dynamic value) {
+    if (value is double) {
+      return value;
+    }
+    if (value is int) {
+      return value.toDouble();
+    }
+    if (value is String) {
+      return double.tryParse(value.trim());
+    }
+    return null;
+  }
+
+  String _decimal(double value) {
+    if (value.isNaN || value.isInfinite) {
+      return "0";
+    }
+    final double rounded = (value * 10).roundToDouble() / 10;
+    if ((rounded - rounded.roundToDouble()).abs() < 0.05) {
+      return rounded.round().toString();
+    }
+    return rounded.toStringAsFixed(1);
+  }
+
+  String _formatDuration(int? minutes) {
+    if (minutes == null || minutes <= 0) {
+      return "-";
+    }
+    final int h = minutes ~/ 60;
+    final int m = minutes % 60;
+    if (h > 0 && m > 0) {
+      return "$h시간 $m분";
+    }
+    if (h > 0) {
+      return "$h시간";
+    }
+    return "$m분";
   }
 
   RecordEntryInput _buildTimerRecordInput({
@@ -591,13 +1034,19 @@ class RecordingPageState extends State<RecordingPage> {
   }
 
   Future<void> _persistSleepMarker(RecordEntryInput input) async {
-    if (input.type != "SLEEP") {
-      return;
+    if (input.type == "SLEEP") {
+      if (input.lifecycleAction == RecordLifecycleAction.startOnly) {
+        await AppSessionStore.setPendingSleepStart(input.startTime.toUtc());
+      } else {
+        await AppSessionStore.setPendingSleepStart(null);
+      }
     }
-    if (input.endTime == null) {
-      await AppSessionStore.setPendingSleepStart(input.startTime.toUtc());
-    } else {
-      await AppSessionStore.setPendingSleepStart(null);
+    if (input.type == "FORMULA") {
+      if (input.lifecycleAction == RecordLifecycleAction.startOnly) {
+        await AppSessionStore.setPendingFormulaStart(input.startTime.toUtc());
+      } else {
+        await AppSessionStore.setPendingFormulaStart(null);
+      }
     }
   }
 
@@ -608,13 +1057,37 @@ class RecordingPageState extends State<RecordingPage> {
     setState(() => _entrySaving = true);
     bool saved = false;
     try {
-      await BabyAIApi.instance.createManualEvent(
-        type: input.type,
-        startTime: input.startTime,
-        endTime: input.endTime,
-        value: input.value,
-        metadata: input.metadata,
-      );
+      switch (input.lifecycleAction) {
+        case RecordLifecycleAction.startOnly:
+          await BabyAIApi.instance.startManualEvent(
+            type: input.type,
+            startTime: input.startTime,
+            value: input.value,
+            metadata: input.metadata,
+          );
+          break;
+        case RecordLifecycleAction.completeOpen:
+          final String targetEventId = (input.targetEventId ?? "").trim();
+          if (targetEventId.isEmpty) {
+            throw ApiFailure("Missing in-progress event id to complete.");
+          }
+          await BabyAIApi.instance.completeManualEvent(
+            eventId: targetEventId,
+            endTime: input.endTime,
+            value: input.value,
+            metadata: input.metadata,
+          );
+          break;
+        case RecordLifecycleAction.createClosed:
+          await BabyAIApi.instance.createManualEvent(
+            type: input.type,
+            startTime: input.startTime,
+            endTime: input.endTime,
+            value: input.value,
+            metadata: input.metadata,
+          );
+          break;
+      }
       await _persistSleepMarker(input);
       await _loadLandingSnapshot();
       if (!mounted) {
@@ -742,6 +1215,96 @@ class RecordingPageState extends State<RecordingPage> {
     await _saveEntryInput(input);
   }
 
+  Widget _tileMetaLine(
+    BuildContext context, {
+    required String label,
+    required String value,
+  }) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: Row(
+        children: <Widget>[
+          Expanded(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: color.onSurfaceVariant,
+                fontSize: 11.2,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: 11.8,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _specialMemoPanel(BuildContext context, String memoText) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    return Material(
+      color: color.surface,
+      borderRadius: BorderRadius.circular(24),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(
+            color: color.outlineVariant.withValues(alpha: 0.4),
+          ),
+          gradient: LinearGradient(
+            colors: <Color>[
+              color.surface,
+              color.surfaceContainerHighest.withValues(alpha: 0.22),
+            ],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text(
+              tr(
+                context,
+                ko: "특별 메모",
+                en: "Special memo",
+                es: "Nota especial",
+              ),
+              style: TextStyle(
+                color: color.onSurfaceVariant,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              memoText,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                height: 1.25,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> openQuickEntryFromExternal(
     HomeTileType tile, {
     Map<String, dynamic>? prefill,
@@ -774,18 +1337,24 @@ class RecordingPageState extends State<RecordingPage> {
     final AppThemeController controller = AppSettingsScope.of(context);
     final Map<String, dynamic> snapshot = _snapshot ?? <String, dynamic>{};
     final List<HomeTileType> tiles = _dashboardTiles(controller);
+    final int tileColumns = controller.homeTileColumns.clamp(1, 3);
+    final int maxMetaLines = tileColumns == 3 ? 3 : 4;
+    final bool showSpecialMemo = controller.showSpecialMemo;
     final int aiBalance = _asInt(snapshot["ai_credit_balance"]) ?? 0;
     final int aiGraceUsed = _asInt(snapshot["ai_grace_used_today"]) ?? 0;
     final int aiGraceLimit = _asInt(snapshot["ai_grace_limit"]) ?? 3;
+    final String specialMemoText = _asString(snapshot["special_memo"]) ??
+        tr(
+          context,
+          ko: "기록된 특별 메모가 없습니다.",
+          en: "No special memo recorded.",
+          es: "No hay nota especial registrada.",
+        );
 
     final String greeting = _now.hour < 12
         ? "좋은 아침이에요,"
         : (_now.hour < 18 ? "좋은 오후예요," : "편안한 저녁이에요,");
     final String babyName = _asString(snapshot["baby_name"]) ?? "우리 아기";
-    final String lastFormulaAgo =
-        _relativeAgo(_asString(snapshot["last_formula_time"]));
-    final String lastDiaperAgo =
-        _relativeAgo(_asString(snapshot["last_diaper_time"]));
 
     final bool timerRunning =
         _activeTimerActivity != null && _activeTimerStartedAt != null;
@@ -915,22 +1484,7 @@ class RecordingPageState extends State<RecordingPage> {
               style: TextStyle(color: color.error, fontWeight: FontWeight.w600),
             ),
           ],
-          const SizedBox(height: 18),
-          Row(
-            children: <Widget>[
-              const Text(
-                "타이머",
-                style: TextStyle(fontSize: 30, fontWeight: FontWeight.w700),
-              ),
-              const Spacer(),
-              Text(
-                "실시간 추적",
-                style: TextStyle(
-                    color: color.primary, fontWeight: FontWeight.w600),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 14),
           Container(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
             decoration: BoxDecoration(
@@ -1133,76 +1687,121 @@ class RecordingPageState extends State<RecordingPage> {
               ],
             ),
           ),
-          const SizedBox(height: 20),
-          const Text(
-            "빠른 기록",
-            style: TextStyle(fontSize: 30, fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 12),
+          if (showSpecialMemo) ...<Widget>[
+            const SizedBox(height: 12),
+            _specialMemoPanel(context, specialMemoText),
+          ],
+          const SizedBox(height: 16),
           GridView.builder(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
             itemCount: tiles.length,
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 2,
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: tileColumns,
               mainAxisSpacing: 14,
               crossAxisSpacing: 14,
-              childAspectRatio: 1.02,
+              childAspectRatio:
+                  tileColumns == 1 ? 2.35 : (tileColumns == 2 ? 0.9 : 0.68),
             ),
             itemBuilder: (BuildContext context, int index) {
               final HomeTileType tile = tiles[index];
               final Color accent = _dashboardTileAccent(tile);
+              final String headline = _dashboardTileHeadline(tile, snapshot);
+              final String subtitle = _dashboardTileSubtitle(tile, snapshot);
+              final Map<String, dynamic>? openPrefill =
+                  _openPrefillForTile(tile, snapshot);
+              final List<MapEntry<String, String>> metaLines =
+                  _dashboardTileMetaLines(tile, snapshot)
+                      .take(maxMetaLines)
+                      .toList(growable: false);
               return Material(
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(34),
                 child: InkWell(
                   borderRadius: BorderRadius.circular(34),
-                  onTap: _entrySaving ? null : () => _openQuickEntry(tile),
+                  onTap: _entrySaving
+                      ? null
+                      : () => _openQuickEntry(tile, prefill: openPrefill),
                   child: Padding(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 14),
+                        horizontal: 14, vertical: 12),
                     child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: <Widget>[
-                        Container(
-                          width: 64,
-                          height: 64,
-                          decoration: BoxDecoration(
-                            color: accent.withValues(alpha: 0.15),
-                            shape: BoxShape.circle,
-                          ),
-                          child: Center(
-                            child: AppSvgIcon(
-                              _dashboardTileAsset(tile),
-                              color: accent,
-                              size: 24,
+                        Row(
+                          children: <Widget>[
+                            Container(
+                              width: 54,
+                              height: 54,
+                              decoration: BoxDecoration(
+                                color: accent.withValues(alpha: 0.15),
+                                shape: BoxShape.circle,
+                              ),
+                              child: Center(
+                                child: AppSvgIcon(
+                                  _dashboardTileAsset(tile),
+                                  color: accent,
+                                  size: 22,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: <Widget>[
+                                  Text(
+                                    _dashboardTileLabel(tile),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    headline,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w700,
+                                      color: accent,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        if (metaLines.isNotEmpty)
+                          ...metaLines.map(
+                            (MapEntry<String, String> line) => _tileMetaLine(
+                              context,
+                              label: line.key,
+                              value: line.value,
+                            ),
+                          )
+                        else
+                          Text(
+                            subtitle,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: color.onSurfaceVariant,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                              height: 1.25,
                             ),
                           ),
-                        ),
-                        const SizedBox(height: 10),
-                        Text(
-                          _dashboardTileLabel(tile),
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
                       ],
                     ),
                   ),
                 ),
               );
             },
-          ),
-          const SizedBox(height: 18),
-          Text(
-            "마지막 수유: $lastFormulaAgo · 기저귀 교체: $lastDiaperAgo",
-            style: TextStyle(
-              color: color.onSurfaceVariant,
-              fontSize: 13,
-              fontWeight: FontWeight.w500,
-            ),
           ),
         ],
       ),

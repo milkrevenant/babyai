@@ -423,8 +423,8 @@ func seedEvent(
 	_, err := testPool.Exec(
 		ctx,
 		`INSERT INTO "Event" (
-			id, "babyId", type, "startTime", "endTime", "valueJson", "metadataJson", status, source, "createdBy", "createdAt"
-		) VALUES ($1, $2, $3, $4, $5, $6, NULL, 'CLOSED', 'MANUAL', $7, NOW())`,
+			id, "babyId", type, "startTime", "endTime", "valueJson", "metadataJson", source, "createdBy", "createdAt"
+		) VALUES ($1, $2, $3, $4, $5, $6, NULL, 'MANUAL', $7, NOW())`,
 		eventID,
 		babyID,
 		eventType,

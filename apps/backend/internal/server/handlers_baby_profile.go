@@ -300,7 +300,16 @@ func (a *App) latestFeedingTime(ctx context.Context, babyID string) (*time.Time,
 	err := a.db.QueryRow(
 		ctx,
 		`SELECT "startTime" FROM "Event"
-		 WHERE "babyId" = $1 AND status = 'CLOSED' AND type IN ('FORMULA', 'BREASTFEED')
+		 WHERE "babyId" = $1
+		   AND type IN ('FORMULA', 'BREASTFEED')
+		   AND NOT (
+		     "endTime" IS NULL
+		     AND (
+		       COALESCE("metadataJson"->>'event_state', '') = 'OPEN'
+		       OR COALESCE("metadataJson"->>'entry_mode', '') = 'manual_start'
+		     )
+		   )
+		   AND COALESCE("metadataJson"->>'event_state', 'CLOSED') <> 'CANCELED'
 		 ORDER BY "startTime" DESC LIMIT 1`,
 		babyID,
 	).Scan(&latest)

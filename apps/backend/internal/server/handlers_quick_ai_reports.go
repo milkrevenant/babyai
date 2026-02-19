@@ -3,7 +3,9 @@ package server
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -211,17 +213,37 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 		return
 	}
 
-	now := time.Now().UTC()
-	start := startOfUTCDay(now)
-	end := start.Add(24 * time.Hour)
+	localZone, tzNormalized, err := parseTZOffset(c.Query("tz_offset"))
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	rangeKey := strings.ToLower(strings.TrimSpace(c.DefaultQuery("range", "day")))
+	nowUTC := time.Now().UTC()
+	localNow := nowUTC.In(localZone)
+	localStart, localEnd, rangeDays, rangeLabel, err := quickRangeWindow(localNow, rangeKey)
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	start := localStart.UTC()
+	end := localEnd.UTC()
 
 	rows, err := a.db.Query(
 		c.Request.Context(),
-		`SELECT type, "startTime", "endTime", "valueJson"
+		`SELECT type, "startTime", "endTime", "valueJson", "metadataJson"
 		 FROM "Event"
 		 WHERE "babyId" = $1
 		   AND "startTime" >= $2
 		   AND "startTime" < $3
+		   AND NOT (
+		     "endTime" IS NULL
+		     AND (
+		       COALESCE("metadataJson"->>'event_state', '') = 'OPEN'
+		       OR COALESCE("metadataJson"->>'entry_mode', '') = 'manual_start'
+		     )
+		   )
+		   AND COALESCE("metadataJson"->>'event_state', 'CLOSED') <> 'CANCELED'
 		   AND type IN ('FORMULA', 'BREASTFEED', 'SLEEP', 'PEE', 'POO', 'MEDICATION', 'MEMO')
 		 ORDER BY "startTime" DESC`,
 		baby.ID,
@@ -240,46 +262,82 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 		"afternoon": 0,
 		"evening":   0,
 	}
+	formulaByDay := map[string]int{}
+	type formulaPoint struct {
+		StartedAt time.Time
+		AmountML  int
+	}
+	formulaEvents := make([]formulaPoint, 0)
 	formulaCount := 0
 	formulaTimes := make([]string, 0)
 	breastfeedCount := 0
 	breastfeedTimes := make([]string, 0)
+	feedingsCount := 0
 	var lastFormulaTime *time.Time
 	var lastBreastfeedTime *time.Time
 	var recentSleepTime *time.Time
 	var recentSleepDurationMin *int
 	var sleepReferenceTime *time.Time
+	var lastSleepEndTime *time.Time
+	sleepTotalMin := 0
+	sleepNapTotalMin := 0
+	sleepNightTotalMin := 0
 	diaperPeeCount := 0
 	diaperPooCount := 0
+	var lastPeeTime *time.Time
+	var lastPooTime *time.Time
 	var lastDiaperTime *time.Time
+	weaningCount := 0
+	memoCount := 0
+	var lastWeaningTime *time.Time
 	medicationCount := 0
 	var lastMedicationTime *time.Time
-	specialMemo := "No special memo for today."
+	var lastMedicationName *string
+	var lastFormulaAmountML *int
+	specialMemo := "No special memo in selected range."
 
 	for rows.Next() {
 		var eventType string
 		var startedAt time.Time
 		var endedAt *time.Time
 		var valueRaw []byte
-		if err := rows.Scan(&eventType, &startedAt, &endedAt, &valueRaw); err != nil {
+		var metadataRaw []byte
+		if err := rows.Scan(&eventType, &startedAt, &endedAt, &valueRaw, &metadataRaw); err != nil {
 			writeError(c, http.StatusInternalServerError, "Failed to parse events")
 			return
 		}
 
 		startedUTC := startedAt.UTC()
+		startedLocal := startedUTC.In(localZone)
 		valueMap := parseJSONStringMap(valueRaw)
+		metadataMap := parseJSONStringMap(metadataRaw)
 
 		switch eventType {
 		case "FORMULA":
+			feedingsCount++
 			formulaCount++
 			if lastFormulaTime == nil {
 				lastFormulaTime = &startedUTC
 			}
 			formulaTimes = append(formulaTimes, startedUTC.Format(time.RFC3339))
 			amountML := int(extractNumberFromMap(valueMap, "ml", "amount_ml", "volume_ml") + 0.5)
-			formulaBands[landingFormulaBand(startedUTC.Hour())] += amountML
+			if amountML < 0 {
+				amountML = 0
+			}
+			if lastFormulaAmountML == nil {
+				amountCopy := amountML
+				lastFormulaAmountML = &amountCopy
+			}
+			formulaBands[landingFormulaBand(startedLocal.Hour())] += amountML
+			dayKey := startedLocal.Format("2006-01-02")
+			formulaByDay[dayKey] += amountML
+			formulaEvents = append(formulaEvents, formulaPoint{
+				StartedAt: startedLocal,
+				AmountML:  amountML,
+			})
 
 		case "BREASTFEED":
+			feedingsCount++
 			breastfeedCount++
 			if lastBreastfeedTime == nil {
 				lastBreastfeedTime = &startedUTC
@@ -289,27 +347,45 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 		case "SLEEP":
 			if recentSleepTime == nil {
 				recentSleepTime = &startedUTC
-				if endedAt != nil {
-					endedUTC := endedAt.UTC()
-					sleepReferenceTime = &endedUTC
-					duration := int(endedUTC.Sub(startedUTC).Minutes())
-					if duration < 0 {
-						duration = 0
-					}
+			}
+			durationPtr := extractDurationMinutes(valueMap, startedUTC, endedAt)
+			duration := 0
+			if durationPtr != nil {
+				duration = int(*durationPtr + 0.5)
+				if duration < 0 {
+					duration = 0
+				}
+				if recentSleepDurationMin == nil {
 					recentSleepDurationMin = &duration
-				} else {
-					sleepReferenceTime = &startedUTC
+				}
+			}
+			sleepTotalMin += duration
+			if startedLocal.Hour() >= 6 && startedLocal.Hour() < 18 {
+				sleepNapTotalMin += duration
+			} else {
+				sleepNightTotalMin += duration
+			}
+			if endedAt != nil {
+				endedUTC := endedAt.UTC()
+				if lastSleepEndTime == nil {
+					lastSleepEndTime = &endedUTC
 				}
 			}
 
 		case "PEE":
 			diaperPeeCount++
+			if lastPeeTime == nil {
+				lastPeeTime = &startedUTC
+			}
 			if lastDiaperTime == nil {
 				lastDiaperTime = &startedUTC
 			}
 
 		case "POO":
 			diaperPooCount++
+			if lastPooTime == nil {
+				lastPooTime = &startedUTC
+			}
 			if lastDiaperTime == nil {
 				lastDiaperTime = &startedUTC
 			}
@@ -318,22 +394,206 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 			medicationCount++
 			if lastMedicationTime == nil {
 				lastMedicationTime = &startedUTC
+				medicationName := ""
+				for _, raw := range []any{
+					valueMap["name"],
+					valueMap["medication_name"],
+					valueMap["medication_type"],
+				} {
+					text := strings.TrimSpace(toString(raw))
+					if text == "" {
+						continue
+					}
+					medicationName = text
+					break
+				}
+				if medicationName != "" {
+					nameCopy := medicationName
+					lastMedicationName = &nameCopy
+				}
 			}
 
 		case "MEMO":
-			if specialMemo == "No special memo for today." {
-				memoText := extractMemoText(valueMap)
-				if memoText == "" {
-					memoText = "Memo recorded today."
+			memoCount++
+			if isWeaningMemo(valueMap, metadataMap) {
+				weaningCount++
+				if lastWeaningTime == nil {
+					lastWeaningTime = &startedUTC
 				}
+			}
+		}
+
+		if specialMemo == "No special memo in selected range." {
+			memoText := extractMemoText(valueMap)
+			if memoText != "" {
 				specialMemo = memoText
 			}
 		}
 	}
+	if err := rows.Err(); err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to parse events")
+		return
+	}
+
+	var openFormulaEventID *string
+	var openFormulaStartTime *time.Time
+	var openFormulaValue map[string]any
+	var openFormulaMemo *string
+	var openBreastfeedEventID *string
+	var openBreastfeedStartTime *time.Time
+	var openBreastfeedValue map[string]any
+	var openBreastfeedMemo *string
+	var openSleepEventID *string
+	var openSleepStartTime *time.Time
+	var openSleepValue map[string]any
+	var openSleepMemo *string
+	var openDiaperEventID *string
+	var openDiaperStartTime *time.Time
+	var openDiaperValue map[string]any
+	var openDiaperMemo *string
+	var openDiaperType *string
+	var openWeaningEventID *string
+	var openWeaningStartTime *time.Time
+	var openWeaningValue map[string]any
+	var openWeaningMemo *string
+	var openMedicationEventID *string
+	var openMedicationStartTime *time.Time
+	var openMedicationValue map[string]any
+	var openMedicationMemo *string
+
+	openRows, err := a.db.Query(
+		c.Request.Context(),
+		`SELECT id, type, "startTime", "valueJson", "metadataJson"
+		 FROM "Event"
+		 WHERE "babyId" = $1
+		   AND "endTime" IS NULL
+		   AND (
+		     COALESCE("metadataJson"->>'event_state', '') = 'OPEN'
+		     OR COALESCE("metadataJson"->>'entry_mode', '') = 'manual_start'
+		   )
+		   AND type IN ('FORMULA', 'BREASTFEED', 'SLEEP', 'PEE', 'POO', 'MEDICATION', 'MEMO')
+		 ORDER BY "startTime" DESC`,
+		baby.ID,
+	)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to load open events")
+		return
+	}
+	defer openRows.Close()
+
+	for openRows.Next() {
+		var eventID string
+		var eventType string
+		var startTime time.Time
+		var valueRaw []byte
+		var metadataRaw []byte
+		if err := openRows.Scan(&eventID, &eventType, &startTime, &valueRaw, &metadataRaw); err != nil {
+			writeError(c, http.StatusInternalServerError, "Failed to parse open events")
+			return
+		}
+		valueMap := parseJSONStringMap(valueRaw)
+		metadataMap := parseJSONStringMap(metadataRaw)
+		switch eventType {
+		case "FORMULA":
+			if openFormulaEventID == nil {
+				eventIDCopy := eventID
+				startCopy := startTime.UTC()
+				openFormulaEventID = &eventIDCopy
+				openFormulaStartTime = &startCopy
+				openFormulaValue = valueMap
+				memoText := extractMemoText(valueMap)
+				if memoText != "" {
+					openFormulaMemo = &memoText
+				}
+			}
+		case "BREASTFEED":
+			if openBreastfeedEventID == nil {
+				eventIDCopy := eventID
+				startCopy := startTime.UTC()
+				openBreastfeedEventID = &eventIDCopy
+				openBreastfeedStartTime = &startCopy
+				openBreastfeedValue = valueMap
+				memoText := extractMemoText(valueMap)
+				if memoText != "" {
+					openBreastfeedMemo = &memoText
+				}
+			}
+		case "SLEEP":
+			if openSleepEventID == nil {
+				eventIDCopy := eventID
+				startCopy := startTime.UTC()
+				openSleepEventID = &eventIDCopy
+				openSleepStartTime = &startCopy
+				openSleepValue = valueMap
+				memoText := extractMemoText(valueMap)
+				if memoText != "" {
+					openSleepMemo = &memoText
+				}
+			}
+		case "PEE", "POO":
+			if openDiaperEventID == nil {
+				eventIDCopy := eventID
+				startCopy := startTime.UTC()
+				typeCopy := eventType
+				openDiaperEventID = &eventIDCopy
+				openDiaperStartTime = &startCopy
+				openDiaperType = &typeCopy
+				openDiaperValue = valueMap
+				memoText := extractMemoText(valueMap)
+				if memoText != "" {
+					openDiaperMemo = &memoText
+				}
+			}
+		case "MEDICATION":
+			if openMedicationEventID == nil {
+				eventIDCopy := eventID
+				startCopy := startTime.UTC()
+				openMedicationEventID = &eventIDCopy
+				openMedicationStartTime = &startCopy
+				openMedicationValue = valueMap
+				memoText := extractMemoText(valueMap)
+				if memoText != "" {
+					openMedicationMemo = &memoText
+				}
+			}
+		case "MEMO":
+			if !isWeaningMemo(valueMap, metadataMap) {
+				continue
+			}
+			if openWeaningEventID == nil {
+				eventIDCopy := eventID
+				startCopy := startTime.UTC()
+				openWeaningEventID = &eventIDCopy
+				openWeaningStartTime = &startCopy
+				openWeaningValue = valueMap
+				memoText := extractMemoText(valueMap)
+				if memoText != "" {
+					openWeaningMemo = &memoText
+				}
+			}
+		}
+	}
+	if err := openRows.Err(); err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to parse open events")
+		return
+	}
+
+	if recentSleepDurationMin == nil && lastSleepEndTime != nil && recentSleepTime != nil {
+		duration := int(lastSleepEndTime.UTC().Sub(recentSleepTime.UTC()).Minutes())
+		if duration < 0 {
+			duration = 0
+		}
+		recentSleepDurationMin = &duration
+	}
+	if lastSleepEndTime != nil {
+		sleepReferenceTime = lastSleepEndTime
+	} else if recentSleepTime != nil {
+		sleepReferenceTime = recentSleepTime
+	}
 
 	var minutesSinceLastSleep *int
 	if sleepReferenceTime != nil {
-		elapsed := int(now.Sub(sleepReferenceTime.UTC()).Minutes())
+		elapsed := int(nowUTC.Sub(sleepReferenceTime.UTC()).Minutes())
 		if elapsed < 0 {
 			elapsed = 0
 		}
@@ -341,6 +601,48 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 	}
 
 	formulaTotalML := formulaBands["night"] + formulaBands["morning"] + formulaBands["afternoon"] + formulaBands["evening"]
+	avgFormulaMLPerDay := quickAvgPerDay(formulaTotalML, rangeDays)
+	avgFeedingsPerDay := quickAvgPerDay(feedingsCount, rangeDays)
+	avgSleepMinPerDay := quickAvgPerDay(sleepTotalMin, rangeDays)
+	avgNapSleepMinPerDay := quickAvgPerDay(sleepNapTotalMin, rangeDays)
+	avgNightSleepMinPerDay := quickAvgPerDay(sleepNightTotalMin, rangeDays)
+	avgPeePerDay := quickAvgPerDay(diaperPeeCount, rangeDays)
+	avgPooPerDay := quickAvgPerDay(diaperPooCount, rangeDays)
+
+	graphLabels := make([]string, 0)
+	graphPoints := make([]float64, 0)
+	graphMode := ""
+	switch rangeKey {
+	case "day":
+		graphMode = "feeding_by_session"
+		sort.Slice(formulaEvents, func(i, j int) bool {
+			return formulaEvents[i].StartedAt.Before(formulaEvents[j].StartedAt)
+		})
+		for _, event := range formulaEvents {
+			graphLabels = append(graphLabels, event.StartedAt.Format("15:04"))
+			graphPoints = append(graphPoints, float64(event.AmountML))
+		}
+	case "week":
+		graphMode = "daily_total_ml_7d"
+		for day := localStart; day.Before(localEnd); day = day.Add(24 * time.Hour) {
+			dayKey := day.Format("2006-01-02")
+			graphLabels = append(graphLabels, day.Format("1/2"))
+			graphPoints = append(graphPoints, float64(formulaByDay[dayKey]))
+		}
+	case "month":
+		graphMode = "daily_total_ml_month"
+		for day := localStart; day.Before(localEnd); day = day.Add(24 * time.Hour) {
+			dayKey := day.Format("2006-01-02")
+			graphLabels = append(graphLabels, day.Format("2"))
+			graphPoints = append(graphPoints, float64(formulaByDay[dayKey]))
+		}
+	default:
+		graphMode = "daily_total_ml"
+	}
+	if len(graphPoints) == 0 {
+		graphLabels = []string{"-"}
+		graphPoints = []float64{0}
+	}
 
 	profile, _, err := a.resolveBabyProfile(c.Request.Context(), user.ID, baby.ID, readRoles)
 	if err != nil {
@@ -352,9 +654,9 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, "Failed to load latest feeding event")
 		return
 	}
-	recommendation := calculateFeedingRecommendation(profile, lastFeedingTime, now)
+	recommendation := calculateFeedingRecommendation(profile, lastFeedingTime, nowUTC)
 
-	plan, err := a.ensureMonthlyGrant(c.Request.Context(), a.db, user.ID, baby.HouseholdID, now)
+	plan, err := a.ensureMonthlyGrant(c.Request.Context(), a.db, user.ID, baby.HouseholdID, nowUTC)
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to resolve AI credit plan")
 		return
@@ -364,30 +666,60 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, "Failed to load AI credit balance")
 		return
 	}
-	graceUsed, err := a.countGraceUsedToday(c.Request.Context(), a.db, user.ID, now)
+	graceUsed, err := a.countGraceUsedToday(c.Request.Context(), a.db, user.ID, nowUTC)
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to load AI grace usage")
 		return
 	}
 
+	rangeEndDate := localEnd.Add(-24 * time.Hour).Format("2006-01-02")
+	if rangeEndDate < localStart.Format("2006-01-02") {
+		rangeEndDate = localStart.Format("2006-01-02")
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"date":                            start.Format("2006-01-02"),
+		"date":                            localNow.Format("2006-01-02"),
+		"range":                           rangeKey,
+		"range_label":                     rangeLabel,
+		"range_start_date":                localStart.Format("2006-01-02"),
+		"range_end_date":                  rangeEndDate,
+		"range_day_count":                 rangeDays,
+		"tz_offset":                       tzNormalized,
 		"formula_count":                   formulaCount,
 		"formula_times":                   formulaTimes,
+		"feedings_count":                  feedingsCount,
 		"formula_total_ml":                formulaTotalML,
+		"avg_formula_ml_per_day":          avgFormulaMLPerDay,
+		"avg_feedings_per_day":            avgFeedingsPerDay,
 		"formula_amount_by_time_band_ml":  formulaBands,
 		"last_formula_time":               formatNullableTimeRFC3339(lastFormulaTime),
+		"last_formula_amount_ml":          lastFormulaAmountML,
 		"breastfeed_count":                breastfeedCount,
 		"breastfeed_times":                breastfeedTimes,
 		"last_breastfeed_time":            formatNullableTimeRFC3339(lastBreastfeedTime),
 		"recent_sleep_time":               formatNullableTimeRFC3339(recentSleepTime),
 		"recent_sleep_duration_min":       recentSleepDurationMin,
+		"sleep_total_min":                 sleepTotalMin,
+		"sleep_day_total_min":             sleepNapTotalMin,
+		"sleep_night_total_min":           sleepNightTotalMin,
+		"avg_sleep_minutes_per_day":       avgSleepMinPerDay,
+		"avg_nap_minutes_per_day":         avgNapSleepMinPerDay,
+		"avg_night_sleep_minutes_per_day": avgNightSleepMinPerDay,
+		"last_sleep_end_time":             formatNullableTimeRFC3339(lastSleepEndTime),
 		"minutes_since_last_sleep":        minutesSinceLastSleep,
 		"diaper_pee_count":                diaperPeeCount,
 		"diaper_poo_count":                diaperPooCount,
+		"avg_diaper_pee_per_day":          avgPeePerDay,
+		"avg_diaper_poo_per_day":          avgPooPerDay,
+		"last_pee_time":                   formatNullableTimeRFC3339(lastPeeTime),
+		"last_poo_time":                   formatNullableTimeRFC3339(lastPooTime),
 		"last_diaper_time":                formatNullableTimeRFC3339(lastDiaperTime),
+		"weaning_count":                   weaningCount,
+		"last_weaning_time":               formatNullableTimeRFC3339(lastWeaningTime),
+		"memo_count":                      memoCount,
 		"medication_count":                medicationCount,
 		"last_medication_time":            formatNullableTimeRFC3339(lastMedicationTime),
+		"last_medication_name":            lastMedicationName,
 		"special_memo":                    specialMemo,
 		"feeding_method":                  profile.FeedingMethod,
 		"formula_type":                    profile.FormulaType,
@@ -404,12 +736,154 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 		"recommended_next_feeding_in_min": recommendation.RecommendedNextFeedingInMin,
 		"recommendation_note":             recommendation.Note,
 		"recommendation_reference_text":   recommendation.ReferenceText,
+		"feeding_graph_mode":              graphMode,
+		"feeding_graph_labels":            graphLabels,
+		"feeding_graph_points":            graphPoints,
 		"ai_credit_balance":               balance,
 		"ai_grace_used_today":             graceUsed,
 		"ai_grace_limit":                  graceLimitPerDay,
 		"ai_plan":                         plan,
-		"reference_text":                  "Derived from today's confirmed events.",
+		"open_formula_event_id":           openFormulaEventID,
+		"open_formula_start_time":         formatNullableTimeRFC3339(openFormulaStartTime),
+		"open_formula_value":              openFormulaValue,
+		"open_formula_memo":               openFormulaMemo,
+		"open_breastfeed_event_id":        openBreastfeedEventID,
+		"open_breastfeed_start_time":      formatNullableTimeRFC3339(openBreastfeedStartTime),
+		"open_breastfeed_value":           openBreastfeedValue,
+		"open_breastfeed_memo":            openBreastfeedMemo,
+		"open_sleep_event_id":             openSleepEventID,
+		"open_sleep_start_time":           formatNullableTimeRFC3339(openSleepStartTime),
+		"open_sleep_value":                openSleepValue,
+		"open_sleep_memo":                 openSleepMemo,
+		"open_diaper_event_id":            openDiaperEventID,
+		"open_diaper_start_time":          formatNullableTimeRFC3339(openDiaperStartTime),
+		"open_diaper_type":                openDiaperType,
+		"open_diaper_value":               openDiaperValue,
+		"open_diaper_memo":                openDiaperMemo,
+		"open_weaning_event_id":           openWeaningEventID,
+		"open_weaning_start_time":         formatNullableTimeRFC3339(openWeaningStartTime),
+		"open_weaning_value":              openWeaningValue,
+		"open_weaning_memo":               openWeaningMemo,
+		"open_medication_event_id":        openMedicationEventID,
+		"open_medication_start_time":      formatNullableTimeRFC3339(openMedicationStartTime),
+		"open_medication_value":           openMedicationValue,
+		"open_medication_memo":            openMedicationMemo,
+		"reference_text":                  "Derived from selected range confirmed events.",
 	})
+}
+
+func quickRangeWindow(localNow time.Time, rangeKey string) (time.Time, time.Time, int, string, error) {
+	location := localNow.Location()
+	year, month, day := localNow.Date()
+	dayStart := time.Date(year, month, day, 0, 0, 0, 0, location)
+
+	switch rangeKey {
+	case "day":
+		return dayStart, dayStart.Add(24 * time.Hour), 1, dayStart.Format("2006-01-02"), nil
+	case "week":
+		weekdayOffset := int(dayStart.Weekday() - time.Monday)
+		if weekdayOffset < 0 {
+			weekdayOffset = 6
+		}
+		weekStart := dayStart.AddDate(0, 0, -weekdayOffset)
+		weekEnd := weekStart.AddDate(0, 0, 7)
+		label := fmt.Sprintf("%d/%d - %d/%d", weekStart.Month(), weekStart.Day(), weekStart.AddDate(0, 0, 6).Month(), weekStart.AddDate(0, 0, 6).Day())
+		return weekStart, weekEnd, 7, label, nil
+	case "month":
+		monthStart := time.Date(year, month, 1, 0, 0, 0, 0, location)
+		monthEnd := monthStart.AddDate(0, 1, 0)
+		days := int(monthEnd.Sub(monthStart).Hours() / 24)
+		if days <= 0 {
+			days = 1
+		}
+		label := monthStart.Format("2006-01")
+		return monthStart, monthEnd, days, label, nil
+	default:
+		return time.Time{}, time.Time{}, 0, "", errors.New("range must be one of: day, week, month")
+	}
+}
+
+func parseTZOffset(raw string) (*time.Location, string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return time.UTC, "+00:00", nil
+	}
+	if len(trimmed) != 6 || trimmed[3] != ':' || (trimmed[0] != '+' && trimmed[0] != '-') {
+		return nil, "", errors.New("tz_offset must be in +/-HH:MM format")
+	}
+	hours, err := strconv.Atoi(trimmed[1:3])
+	if err != nil {
+		return nil, "", errors.New("tz_offset must be in +/-HH:MM format")
+	}
+	minutes, err := strconv.Atoi(trimmed[4:6])
+	if err != nil {
+		return nil, "", errors.New("tz_offset must be in +/-HH:MM format")
+	}
+	if hours > 14 || minutes > 59 || (hours == 14 && minutes != 0) {
+		return nil, "", errors.New("tz_offset is out of range")
+	}
+	totalSeconds := (hours * 60 * 60) + (minutes * 60)
+	sign := trimmed[0:1]
+	if sign == "-" {
+		totalSeconds *= -1
+	}
+	normalized := fmt.Sprintf("%s%02d:%02d", sign, hours, minutes)
+	return time.FixedZone("UTC"+normalized, totalSeconds), normalized, nil
+}
+
+func quickAvgPerDay(total int, days int) float64 {
+	if days <= 0 {
+		return 0
+	}
+	return math.Round((float64(total)/float64(days))*10) / 10
+}
+
+func extractDurationMinutes(valueMap map[string]any, startTime time.Time, endTime *time.Time) *float64 {
+	if valueMap != nil {
+		for _, key := range []string{"duration_min", "duration_minutes", "minutes"} {
+			raw, ok := valueMap[key]
+			if !ok {
+				continue
+			}
+			switch parsed := raw.(type) {
+			case float64:
+				if parsed < 0 {
+					zero := 0.0
+					return &zero
+				}
+				return &parsed
+			case int:
+				value := float64(parsed)
+				if value < 0 {
+					zero := 0.0
+					return &zero
+				}
+				return &value
+			case string:
+				trimmed := strings.TrimSpace(parsed)
+				if trimmed == "" {
+					continue
+				}
+				value, err := strconv.ParseFloat(trimmed, 64)
+				if err != nil {
+					continue
+				}
+				if value < 0 {
+					zero := 0.0
+					return &zero
+				}
+				return &value
+			}
+		}
+	}
+	if endTime == nil {
+		return nil
+	}
+	duration := endTime.UTC().Sub(startTime.UTC()).Minutes()
+	if duration < 0 {
+		duration = 0
+	}
+	return &duration
 }
 
 func landingFormulaBand(hour int) string {
@@ -433,6 +907,21 @@ func extractMemoText(value map[string]any) string {
 		}
 	}
 	return ""
+}
+
+func isWeaningMemo(value map[string]any, metadata map[string]any) bool {
+	candidates := []string{
+		toString(value["category"]),
+		toString(value["entry_kind"]),
+		toString(metadata["category"]),
+		toString(metadata["entry_kind"]),
+	}
+	for _, candidate := range candidates {
+		if strings.EqualFold(strings.TrimSpace(candidate), "WEANING") {
+			return true
+		}
+	}
+	return false
 }
 
 func formatNullableTimeRFC3339(value *time.Time) *string {
