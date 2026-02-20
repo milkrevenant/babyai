@@ -921,6 +921,52 @@ func TestDailyReportReturnsComputedSummaryWhenNoPrecomputedReport(t *testing.T) 
 	}
 }
 
+func TestDailyReportRespectsTZOffsetLocalDayBoundary(t *testing.T) {
+	resetDatabase(t)
+	fixture := seedOwnerFixture(t)
+	kst := time.FixedZone("UTC+09:00", 9*60*60)
+	localStart := time.Date(2026, 2, 19, 0, 30, 0, 0, kst)
+	startUTC := localStart.UTC()
+	seedEvent(
+		t,
+		"",
+		fixture.BabyID,
+		"FORMULA",
+		startUTC,
+		nil,
+		map[string]any{"ml": 120},
+		fixture.UserID,
+	)
+
+	rec := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodGet,
+		"/api/v1/reports/daily?baby_id="+fixture.BabyID+"&date=2026-02-19&tz_offset=%2B09:00",
+		signToken(t, fixture.UserID, nil),
+		nil,
+		nil,
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	body := decodeJSONMap(t, rec)
+	events, ok := body["events"].([]any)
+	if !ok {
+		t.Fatalf("expected events array, got %T", body["events"])
+	}
+	if len(events) == 0 {
+		t.Fatalf("expected daily events in local day window, got 0")
+	}
+	first, ok := events[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected object event item, got %T", events[0])
+	}
+	if strings.TrimSpace(toString(first["type"])) != "FORMULA" {
+		t.Fatalf("expected first event type FORMULA, got %v", first["type"])
+	}
+}
+
 func TestWeeklyReportReturnsPrecomputedMetrics(t *testing.T) {
 	resetDatabase(t)
 	fixture := seedOwnerFixture(t)

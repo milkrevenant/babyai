@@ -54,6 +54,7 @@ type aiQueryRequest struct {
 	UsePersonalData bool   `json:"use_personal_data"`
 	DateMode        string `json:"date_mode"`
 	AnchorDate      string `json:"anchor_date"`
+	TZOffset        string `json:"tz_offset"`
 }
 
 type chatSessionCreateRequest struct {
@@ -77,6 +78,7 @@ type chatQueryRequest struct {
 	UsePersonalData bool   `json:"use_personal_data"`
 	DateMode        string `json:"date_mode"`
 	AnchorDate      string `json:"anchor_date"`
+	TZOffset        string `json:"tz_offset"`
 }
 
 type photoUploadCompleteRequest struct {

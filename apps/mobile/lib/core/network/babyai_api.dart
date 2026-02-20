@@ -2482,6 +2482,7 @@ class BabyAIApi {
           "use_personal_data": usePersonalData,
           "date_mode": normalizedMode,
           "anchor_date": anchorDateText,
+          "tz_offset": _localTimezoneOffset(),
           if (childId != null && childId.trim().isNotEmpty)
             "child_id": childId.trim()
           else if (activeBabyId.isNotEmpty)
@@ -2517,6 +2518,7 @@ class BabyAIApi {
             "use_personal_data": usePersonalData,
             "date_mode": normalizedMode,
             "anchor_date": anchorDateText,
+            "tz_offset": _localTimezoneOffset(),
             if (activeBabyId.isNotEmpty) "child_id": activeBabyId,
           },
           options: _authOptions(
@@ -2548,6 +2550,7 @@ class BabyAIApi {
             "use_personal_data": usePersonalData,
             "date_mode": normalizedMode,
             "anchor_date": anchorDateText,
+            "tz_offset": _localTimezoneOffset(),
             if (activeBabyId.isNotEmpty) "child_id": activeBabyId,
           },
           options: _authOptions(
@@ -2922,6 +2925,7 @@ class BabyAIApi {
       queryParameters: <String, dynamic>{
         "baby_id": activeBabyId,
         "date": day,
+        "tz_offset": _localTimezoneOffset(),
       },
       options: _authOptions(),
     );
@@ -2999,6 +3003,7 @@ class BabyAIApi {
       queryParameters: <String, dynamic>{
         "baby_id": activeBabyId,
         "week_start": day,
+        "tz_offset": _localTimezoneOffset(),
       },
       options: _authOptions(),
     );

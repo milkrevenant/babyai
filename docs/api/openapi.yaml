@@ -569,6 +569,10 @@ paths:
           name: date
           required: true
           schema: { type: string, format: date }
+        - in: query
+          name: tz_offset
+          required: false
+          schema: { type: string, example: '+09:00' }
       responses:
         '200':
           description: Daily report
@@ -591,6 +595,10 @@ paths:
           name: week_start
           required: true
           schema: { type: string, format: date }
+        - in: query
+          name: tz_offset
+          required: false
+          schema: { type: string, example: '+09:00' }
       responses:
         '200':
           description: Weekly report
@@ -968,6 +976,9 @@ components:
           type: string
           format: date
           description: Anchor date for date_mode (YYYY-MM-DD).
+        tz_offset:
+          type: string
+          description: Local timezone offset in +/-HH:MM (e.g. +09:00).
 
     AiQueryResponse:
       type: object

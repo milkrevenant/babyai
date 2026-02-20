@@ -568,6 +568,7 @@ func (a *App) aiQuery(c *gin.Context) {
 			UsePersonalData: payload.UsePersonalData,
 			DateMode:        payload.DateMode,
 			AnchorDate:      payload.AnchorDate,
+			TZOffset:        payload.TZOffset,
 		},
 		baby.ID,
 	)
@@ -674,7 +675,7 @@ func (a *App) runChatQuery(
 	}
 
 	now := time.Now().UTC()
-	scopeOverride := resolveRequestedChatScope(payload.DateMode, payload.AnchorDate, now)
+	scopeOverride := resolveRequestedChatScope(payload.DateMode, payload.AnchorDate, payload.TZOffset, now)
 	preflight, err := a.preflightBilling(ctx, user.ID, session.HouseholdID, now)
 	if err != nil {
 		return chatExecutionResult{}, err
@@ -1603,6 +1604,7 @@ type chatContextSelection struct {
 type chatScopeOverride struct {
 	Mode       string
 	AnchorDate *time.Time
+	LocalZone  *time.Location
 }
 
 type normalizedEvidenceRow struct {
@@ -1882,22 +1884,28 @@ func profileSubscriptionCareContextLine(meta map[string]any) string {
 	return strings.Join(parts, ", ")
 }
 
-func resolveRequestedChatScope(rawMode, rawAnchorDate string, nowUTC time.Time) chatScopeOverride {
+func resolveRequestedChatScope(rawMode, rawAnchorDate, rawTZOffset string, nowUTC time.Time) chatScopeOverride {
 	mode := normalizeChatDateMode(rawMode)
 	if mode == "" {
 		return chatScopeOverride{}
 	}
-	anchor, ok := parseChatScopeAnchorDate(rawAnchorDate, nowUTC)
+	localZone := time.UTC
+	if parsedZone, _, err := parseTZOffset(rawTZOffset); err == nil && parsedZone != nil {
+		localZone = parsedZone
+	}
+	anchor, ok := parseChatScopeAnchorDate(rawAnchorDate, nowUTC, localZone)
 	if !ok {
-		fallback := startOfUTCDay(nowUTC)
+		fallback := startOfScopeLocalDayUTC(nowUTC, localZone)
 		return chatScopeOverride{
 			Mode:       mode,
 			AnchorDate: &fallback,
+			LocalZone:  localZone,
 		}
 	}
 	return chatScopeOverride{
 		Mode:       mode,
 		AnchorDate: &anchor,
+		LocalZone:  localZone,
 	}
 }
 
@@ -1914,13 +1922,17 @@ func normalizeChatDateMode(raw string) string {
 	}
 }
 
-func parseChatScopeAnchorDate(raw string, nowUTC time.Time) (time.Time, bool) {
+func parseChatScopeAnchorDate(raw string, nowUTC time.Time, localZone *time.Location) (time.Time, bool) {
+	zone := localZone
+	if zone == nil {
+		zone = time.UTC
+	}
 	candidate := strings.TrimSpace(raw)
 	if candidate == "" {
-		return startOfUTCDay(nowUTC), true
+		return startOfScopeLocalDayUTC(nowUTC, zone), true
 	}
 	if parsed, err := parseDate(candidate); err == nil {
-		return startOfUTCDay(parsed.UTC()), true
+		return startOfScopeLocalDayUTC(parsed.UTC(), zone), true
 	}
 	layouts := []string{
 		time.RFC3339Nano,
@@ -1932,7 +1944,7 @@ func parseChatScopeAnchorDate(raw string, nowUTC time.Time) (time.Time, bool) {
 	}
 	for _, layout := range layouts {
 		if parsed, err := time.Parse(layout, candidate); err == nil {
-			return startOfUTCDay(parsed.UTC()), true
+			return startOfScopeLocalDayUTC(parsed.UTC(), zone), true
 		}
 	}
 	return time.Time{}, false
@@ -2001,9 +2013,13 @@ func selectionByRequestedScope(
 	if mode == "" {
 		return chatContextSelection{}, false
 	}
-	anchor := startOfUTCDay(nowUTC)
+	localZone := scopeOverride.LocalZone
+	if localZone == nil {
+		localZone = time.UTC
+	}
+	anchor := startOfScopeLocalDayUTC(nowUTC, localZone)
 	if scopeOverride.AnchorDate != nil && !scopeOverride.AnchorDate.IsZero() {
-		anchor = startOfUTCDay(scopeOverride.AnchorDate.UTC())
+		anchor = startOfScopeLocalDayUTC(scopeOverride.AnchorDate.UTC(), localZone)
 	}
 	switch mode {
 	case "day":
@@ -2018,10 +2034,10 @@ func selectionByRequestedScope(
 		return selection, true
 	case "week":
 		selection.Mode = chatContextModeWeeklySummary
-		selection.WeekAnchor = startOfUTCWeek(anchor)
+		selection.WeekAnchor = startOfScopeLocalWeekUTC(anchor, localZone)
 		return selection, true
 	case "month":
-		selection.MonthStart = startOfUTCMonth(anchor)
+		selection.MonthStart = startOfScopeLocalMonthUTC(anchor, localZone)
 		selection.MonthEnd = selection.MonthStart.AddDate(0, 1, 0)
 		if intent == aiIntentMedicalRelated {
 			selection.Mode = chatContextModeMonthlyMedicalSummary
@@ -2032,6 +2048,35 @@ func selectionByRequestedScope(
 	default:
 		return chatContextSelection{}, false
 	}
+}
+
+func startOfScopeLocalDayUTC(value time.Time, zone *time.Location) time.Time {
+	if zone == nil {
+		zone = time.UTC
+	}
+	local := value.In(zone)
+	localStart := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, zone)
+	return localStart.UTC()
+}
+
+func startOfScopeLocalWeekUTC(value time.Time, zone *time.Location) time.Time {
+	dayStartUTC := startOfScopeLocalDayUTC(value, zone)
+	localDay := dayStartUTC.In(zone)
+	offset := int(localDay.Weekday() - time.Monday)
+	if offset < 0 {
+		offset = 6
+	}
+	localWeekStart := time.Date(localDay.Year(), localDay.Month(), localDay.Day(), 0, 0, 0, 0, zone).AddDate(0, 0, -offset)
+	return localWeekStart.UTC()
+}
+
+func startOfScopeLocalMonthUTC(value time.Time, zone *time.Location) time.Time {
+	if zone == nil {
+		zone = time.UTC
+	}
+	local := value.In(zone)
+	localMonthStart := time.Date(local.Year(), local.Month(), 1, 0, 0, 0, 0, zone)
+	return localMonthStart.UTC()
 }
 
 func questionAsksWeeklySummary(question string) bool {

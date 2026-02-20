@@ -535,22 +535,17 @@ class ReportPageState extends State<ReportPage> {
   }
 
   Future<Map<String, dynamic>> _loadDailySafe(DateTime dayUtc) async {
-    try {
-      return await BabyAIApi.instance.dailyReport(dayUtc);
-    } catch (_) {
-      return <String, dynamic>{"summary": <String>[], "events": <dynamic>[]};
-    }
+    return await BabyAIApi.instance.dailyReport(
+      dayUtc,
+      preferOffline: false,
+    );
   }
 
   Future<Map<String, dynamic>> _loadWeeklySafe(DateTime weekStartUtc) async {
-    try {
-      return await BabyAIApi.instance.weeklyReport(weekStartUtc);
-    } catch (_) {
-      return <String, dynamic>{
-        "trend": <String, dynamic>{},
-        "suggestions": <String>[]
-      };
-    }
+    return await BabyAIApi.instance.weeklyReport(
+      weekStartUtc,
+      preferOffline: false,
+    );
   }
 
   _DayStats _stats(DateTime dayUtc) {

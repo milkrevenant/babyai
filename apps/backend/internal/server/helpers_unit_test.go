@@ -187,7 +187,7 @@ func TestChatModelForIntent(t *testing.T) {
 
 func TestResolveRequestedChatScope(t *testing.T) {
 	now := time.Date(2026, 2, 20, 9, 0, 0, 0, time.UTC)
-	scope := resolveRequestedChatScope("weekly", "2026-02-11", now)
+	scope := resolveRequestedChatScope("weekly", "2026-02-11", "+00:00", now)
 	if scope.Mode != "week" {
 		t.Fatalf("expected week mode, got %q", scope.Mode)
 	}
@@ -198,7 +198,7 @@ func TestResolveRequestedChatScope(t *testing.T) {
 		t.Fatalf("unexpected anchor date: %s", scope.AnchorDate.UTC().Format("2006-01-02"))
 	}
 
-	defaulted := resolveRequestedChatScope("month", "", now)
+	defaulted := resolveRequestedChatScope("month", "", "+00:00", now)
 	if defaulted.Mode != "month" {
 		t.Fatalf("expected month mode, got %q", defaulted.Mode)
 	}

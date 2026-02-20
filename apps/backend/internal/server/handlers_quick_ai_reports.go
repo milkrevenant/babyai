@@ -1068,6 +1068,11 @@ func (a *App) getDailyReport(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, "date must be YYYY-MM-DD")
 		return
 	}
+	localZone, _, err := parseTZOffset(c.Query("tz_offset"))
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	baby, statusCode, err := a.getBabyWithAccess(c.Request.Context(), user.ID, babyID, readRoles)
 	if err != nil {
@@ -1093,13 +1098,33 @@ func (a *App) getDailyReport(c *gin.Context) {
 		return
 	}
 
-	start := targetDate
-	end := start.Add(24 * time.Hour)
+	localStart := time.Date(
+		targetDate.Year(),
+		targetDate.Month(),
+		targetDate.Day(),
+		0,
+		0,
+		0,
+		0,
+		localZone,
+	)
+	start := localStart.UTC()
+	end := localStart.Add(24 * time.Hour).UTC()
 	rows, err := a.db.Query(
 		c.Request.Context(),
 		`SELECT type, "startTime", "endTime", "valueJson"
 		 FROM "Event"
-		 WHERE "babyId" = $1 AND "startTime" >= $2 AND "startTime" < $3
+		 WHERE "babyId" = $1
+		   AND "startTime" >= $2
+		   AND "startTime" < $3
+		   AND NOT (
+		     "endTime" IS NULL
+		     AND (
+		       COALESCE("metadataJson"->>'event_state', '') = 'OPEN'
+		       OR COALESCE("metadataJson"->>'entry_mode', '') = 'manual_start'
+		     )
+		   )
+		   AND COALESCE("metadataJson"->>'event_state', 'CLOSED') <> 'CANCELED'
 		 ORDER BY "startTime" ASC`,
 		baby.ID,
 		start,
@@ -1183,6 +1208,23 @@ func (a *App) getWeeklyReport(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, "week_start must be YYYY-MM-DD")
 		return
 	}
+	localZone, _, err := parseTZOffset(c.Query("tz_offset"))
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	localStart := time.Date(
+		start.Year(),
+		start.Month(),
+		start.Day(),
+		0,
+		0,
+		0,
+		0,
+		localZone,
+	)
+	startUTC := localStart.UTC()
+	endUTC := localStart.Add(7 * 24 * time.Hour).UTC()
 
 	baby, statusCode, err := a.getBabyWithAccess(c.Request.Context(), user.ID, babyID, readRoles)
 	if err != nil {
@@ -1197,7 +1239,7 @@ func (a *App) getWeeklyReport(c *gin.Context) {
 		 WHERE "babyId" = $1 AND "periodType" = 'WEEKLY' AND "periodStart" = $2
 		 ORDER BY "createdAt" DESC LIMIT 1`,
 		baby.ID,
-		start,
+		startUTC,
 	).Scan(&metricsRaw)
 	if err == nil {
 		metrics := parseJSONStringMap(metricsRaw)
@@ -1209,7 +1251,7 @@ func (a *App) getWeeklyReport(c *gin.Context) {
 		}
 		c.JSON(http.StatusOK, gin.H{
 			"baby_id":     baby.ID,
-			"week_start":  start.Format("2006-01-02"),
+			"week_start":  localStart.Format("2006-01-02"),
 			"trend":       trend,
 			"suggestions": suggestions,
 			"labels":      []string{"record_based"},
@@ -1221,13 +1263,13 @@ func (a *App) getWeeklyReport(c *gin.Context) {
 		return
 	}
 
-	currentMetrics, err := a.computeWeeklyMetrics(c, baby.ID, start, start.Add(7*24*time.Hour))
+	currentMetrics, err := a.computeWeeklyMetrics(c, baby.ID, startUTC, endUTC)
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to compute weekly metrics")
 		return
 	}
-	previousStart := start.Add(-7 * 24 * time.Hour)
-	previousMetrics, err := a.computeWeeklyMetrics(c, baby.ID, previousStart, start)
+	previousStart := localStart.Add(-7 * 24 * time.Hour).UTC()
+	previousMetrics, err := a.computeWeeklyMetrics(c, baby.ID, previousStart, startUTC)
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to compute weekly metrics")
 		return
@@ -1235,7 +1277,7 @@ func (a *App) getWeeklyReport(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"baby_id":    baby.ID,
-		"week_start": start.Format("2006-01-02"),
+		"week_start": localStart.Format("2006-01-02"),
 		"trend": gin.H{
 			"feeding_total_ml": trendString(currentMetrics.FeedingML, previousMetrics.FeedingML),
 			"sleep_total_min":  trendString(float64(currentMetrics.SleepMinutes), float64(previousMetrics.SleepMinutes)),
@@ -1253,7 +1295,17 @@ func (a *App) computeWeeklyMetrics(c *gin.Context, babyID string, start, end tim
 		c.Request.Context(),
 		`SELECT type, "startTime", "endTime", "valueJson"
 		 FROM "Event"
-		 WHERE "babyId" = $1 AND "startTime" >= $2 AND "startTime" < $3`,
+		 WHERE "babyId" = $1
+		   AND "startTime" >= $2
+		   AND "startTime" < $3
+		   AND NOT (
+		     "endTime" IS NULL
+		     AND (
+		       COALESCE("metadataJson"->>'event_state', '') = 'OPEN'
+		       OR COALESCE("metadataJson"->>'entry_mode', '') = 'manual_start'
+		     )
+		   )
+		   AND COALESCE("metadataJson"->>'event_state', 'CLOSED') <> 'CANCELED'`,
 		babyID,
 		start,
 		end,
