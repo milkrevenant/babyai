@@ -1196,6 +1196,46 @@ class _HomeShellState extends State<_HomeShell> {
     }
   }
 
+  Future<void> _showDrawerSessionLongPressActions(_ChatHistoryItem item) async {
+    if (!mounted) {
+      return;
+    }
+    final ColorScheme color = Theme.of(context).colorScheme;
+    final String? action = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: color.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (BuildContext context) {
+        return SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              ListTile(
+                leading: Icon(Icons.delete_outline, color: color.error),
+                title: Text(
+                  tr(context,
+                      ko: "채팅 삭제", en: "Delete chat", es: "Eliminar chat"),
+                  style: TextStyle(
+                    color: color.error,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                onTap: () => Navigator.of(context).pop("delete"),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    if ((action ?? "").trim().isEmpty) {
+      return;
+    }
+    await _handleChatSessionAction(item, action!);
+  }
+
   Widget _buildChatSessionPopupButton({
     required _ChatHistoryItem? item,
     required ColorScheme color,
@@ -2881,17 +2921,8 @@ class _HomeShellState extends State<_HomeShell> {
                                       _openChatSessionFromDrawer(
                                           item.sessionId),
                                     ),
-                                    leading: CircleAvatar(
-                                      radius: 16,
-                                      backgroundColor:
-                                          color.surfaceContainerHighest,
-                                      child: AppSvgIcon(
-                                        AppSvgAsset.aiChatSparkles,
-                                        size: 15,
-                                        color: selected
-                                            ? color.primary
-                                            : color.onSurfaceVariant,
-                                      ),
+                                    onLongPress: () => unawaited(
+                                      _showDrawerSessionLongPressActions(item),
                                     ),
                                     title: Text(
                                       item.title,
@@ -2927,17 +2958,6 @@ class _HomeShellState extends State<_HomeShell> {
                                             fontSize: 12,
                                             color: color.onSurfaceVariant,
                                           ),
-                                        ),
-                                        const SizedBox(width: 6),
-                                        _buildChatSessionPopupButton(
-                                          item: item,
-                                          color: color,
-                                          iconSize: 18,
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 6,
-                                            vertical: 6,
-                                          ),
-                                          compact: true,
                                         ),
                                       ],
                                     ),
