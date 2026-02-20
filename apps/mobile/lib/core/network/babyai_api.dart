@@ -2,6 +2,7 @@ import "dart:async";
 import "dart:convert";
 
 import "package:dio/dio.dart";
+import "package:flutter/foundation.dart";
 
 import "../config/app_env.dart";
 import "../storage/offline_data_store.dart";
@@ -145,6 +146,23 @@ class BabyAIApi {
       _isOnlineSyncEnabled &&
       activeBabyId.isNotEmpty &&
       !activeBabyId.toLowerCase().startsWith("offline_");
+
+  Future<void> _ensureLocalDevTokenIfMissing() async {
+    if (kReleaseMode) {
+      return;
+    }
+    if (_runtimeBearerToken.trim().isNotEmpty) {
+      return;
+    }
+    try {
+      await issueLocalDevToken(
+        name: "Local Dev User",
+        provider: "google",
+      );
+    } catch (_) {
+      // Keep existing behavior when local backend is unavailable.
+    }
+  }
 
   void _requireToken() {
     if (_runtimeBearerToken.isEmpty) {
@@ -2077,6 +2095,7 @@ class BabyAIApi {
 
   Future<Map<String, dynamic>> queryAi(String question) async {
     try {
+      await _ensureLocalDevTokenIfMissing();
       _requireBabyId();
       final Response<dynamic> response = await _dio.post<dynamic>(
         "/api/v1/ai/query",
@@ -2102,6 +2121,7 @@ class BabyAIApi {
     String? childId,
   }) async {
     try {
+      await _ensureLocalDevTokenIfMissing();
       final Response<dynamic> response = await _dio.post<dynamic>(
         "/api/v1/chat/sessions",
         data: <String, dynamic>{
@@ -2123,6 +2143,7 @@ class BabyAIApi {
     int limit = 50,
   }) async {
     try {
+      await _ensureLocalDevTokenIfMissing();
       if (!_hasServerLinkedProfile) {
         return <String, dynamic>{
           "sessions": <dynamic>[],
@@ -2160,6 +2181,7 @@ class BabyAIApi {
     String? childId,
   }) async {
     try {
+      await _ensureLocalDevTokenIfMissing();
       await flushOfflineMutations();
       final String sid = sessionId.trim();
       if (sid.isEmpty) {
@@ -2188,6 +2210,7 @@ class BabyAIApi {
 
   Future<Map<String, dynamic>> getChatMessages(String sessionId) async {
     try {
+      await _ensureLocalDevTokenIfMissing();
       final String sid = sessionId.trim();
       if (sid.isEmpty) {
         throw ApiFailure("sessionId is required");
@@ -2212,6 +2235,7 @@ class BabyAIApi {
     DateTime? anchorDate,
   }) async {
     try {
+      await _ensureLocalDevTokenIfMissing();
       final String sid = sessionId.trim();
       if (sid.isEmpty) {
         throw ApiFailure("sessionId is required");
