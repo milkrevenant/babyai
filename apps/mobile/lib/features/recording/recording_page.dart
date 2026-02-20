@@ -66,6 +66,7 @@ class RecordingPageState extends State<RecordingPage> {
   String? _activeTimerEventId;
   _BreastfeedSide _breastfeedSide = _BreastfeedSide.left;
   _CompletedTimerEntry? _latestTimerEntry;
+  int _landingSnapshotRequestSeq = 0;
 
   @override
   void initState() {
@@ -100,23 +101,23 @@ class RecordingPageState extends State<RecordingPage> {
   Future<void> _loadLandingSnapshot({
     bool preferOffline = true,
   }) async {
+    final int requestSeq = ++_landingSnapshotRequestSeq;
     setState(() {
       _snapshotLoading = true;
       _snapshotError = null;
     });
 
     try {
-      final String range = switch (widget.range) {
-        RecordRange.day => "day",
-        RecordRange.week => "week",
-        RecordRange.month => "month",
-      };
+      final String range = _rangeKey();
       final Map<String, dynamic> result =
           await BabyAIApi.instance.quickLandingSnapshot(
         range: range,
         preferOffline: preferOffline,
       );
       if (!mounted) {
+        return;
+      }
+      if (requestSeq != _landingSnapshotRequestSeq) {
         return;
       }
       final String? babyName = _asString(result["baby_name"]);
@@ -137,15 +138,66 @@ class RecordingPageState extends State<RecordingPage> {
         widget.onBabyNameChanged?.call(babyName);
       }
       widget.onBabyPhotoChanged?.call(babyPhoto);
+      if (preferOffline) {
+        unawaited(_refreshLandingSnapshotFromServer(range, requestSeq));
+      }
     } catch (error) {
       if (!mounted) {
+        return;
+      }
+      if (requestSeq != _landingSnapshotRequestSeq) {
         return;
       }
       setState(() => _snapshotError = error.toString());
     } finally {
       if (mounted) {
-        setState(() => _snapshotLoading = false);
+        if (requestSeq == _landingSnapshotRequestSeq) {
+          setState(() => _snapshotLoading = false);
+        }
       }
+    }
+  }
+
+  String _rangeKey() {
+    return switch (widget.range) {
+      RecordRange.day => "day",
+      RecordRange.week => "week",
+      RecordRange.month => "month",
+    };
+  }
+
+  Future<void> _refreshLandingSnapshotFromServer(
+    String range,
+    int parentRequestSeq,
+  ) async {
+    try {
+      final Map<String, dynamic> remote =
+          await BabyAIApi.instance.quickLandingSnapshot(
+        range: range,
+        preferOffline: false,
+      );
+      if (!mounted) {
+        return;
+      }
+      if (parentRequestSeq != _landingSnapshotRequestSeq) {
+        return;
+      }
+      final String? babyName = _asString(remote["baby_name"]);
+      final String? babyPhoto = _asString(remote["baby_profile_photo_url"]) ??
+          _asString(remote["profile_photo_url"]) ??
+          _asString(remote["baby_photo_url"]) ??
+          _asString(remote["avatar_url"]) ??
+          _asString(remote["image_url"]);
+      setState(() {
+        _snapshot = remote;
+        _snapshotError = null;
+      });
+      if (babyName != null && babyName.isNotEmpty) {
+        widget.onBabyNameChanged?.call(babyName);
+      }
+      widget.onBabyPhotoChanged?.call(babyPhoto);
+    } catch (_) {
+      // Keep offline-first snapshot visible when remote refresh fails.
     }
   }
 

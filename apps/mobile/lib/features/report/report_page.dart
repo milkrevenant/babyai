@@ -152,6 +152,7 @@ class ReportPageState extends State<ReportPage> {
   ReportRangeComparison? _inlineComparisonData;
   String? _inlineComparisonError;
   int _inlineComparisonRequestId = 0;
+  Timer? _deleteUndoHideTimer;
 
   @override
   void initState() {
@@ -182,6 +183,12 @@ class ReportPageState extends State<ReportPage> {
     if (oldWidget.inlineComparisonRange != widget.inlineComparisonRange) {
       _setInlineComparisonRange(widget.inlineComparisonRange);
     }
+  }
+
+  @override
+  void dispose() {
+    _deleteUndoHideTimer?.cancel();
+    super.dispose();
   }
 
   ReportRange get selectedRange => _selected;
@@ -482,9 +489,12 @@ class ReportPageState extends State<ReportPage> {
       final ColorScheme color = Theme.of(context).colorScheme;
       final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
       messenger.hideCurrentSnackBar();
-      messenger.showSnackBar(
+      _deleteUndoHideTimer?.cancel();
+      late final ScaffoldFeatureController<SnackBar, SnackBarClosedReason>
+          snackController;
+      snackController = messenger.showSnackBar(
         SnackBar(
-          duration: const Duration(seconds: 5),
+          duration: const Duration(days: 1),
           behavior: SnackBarBehavior.floating,
           backgroundColor: color.surfaceContainerHighest,
           content: _UndoDeleteSnackContent(
@@ -501,11 +511,23 @@ class ReportPageState extends State<ReportPage> {
             label: tr(context, ko: "되돌리기", en: "Undo", es: "Deshacer"),
             textColor: color.primary,
             onPressed: () {
+              _deleteUndoHideTimer?.cancel();
+              snackController.close();
               unawaited(_undoDeletedEvent(event));
             },
           ),
         ),
       );
+      _deleteUndoHideTimer = Timer(const Duration(seconds: 5), () {
+        if (!mounted) {
+          return;
+        }
+        snackController.close();
+      });
+      unawaited(snackController.closed.then((_) {
+        _deleteUndoHideTimer?.cancel();
+        _deleteUndoHideTimer = null;
+      }));
     } catch (error) {
       if (!mounted) {
         return;
@@ -4005,6 +4027,19 @@ Future<void> _showEventDetailsSheet(
                           height: 1.35,
                         ),
                       ),
+                      onLongPress:
+                          (onEditEvent == null && onDeleteEvent == null)
+                              ? null
+                              : () {
+                                  unawaited(
+                                    _showEventActionMenu(
+                                      context,
+                                      event: event,
+                                      onEditEvent: onEditEvent,
+                                      onDeleteEvent: onDeleteEvent,
+                                    ),
+                                  );
+                                },
                       trailing: (onEditEvent == null && onDeleteEvent == null)
                           ? null
                           : Row(
@@ -4050,6 +4085,62 @@ Future<void> _showEventDetailsSheet(
               ),
             ],
           ),
+        ),
+      );
+    },
+  );
+}
+
+Future<void> _showEventActionMenu(
+  BuildContext context, {
+  required _EventDetail event,
+  _EventActionHandler? onEditEvent,
+  _EventActionHandler? onDeleteEvent,
+}) async {
+  if (onEditEvent == null && onDeleteEvent == null) {
+    return;
+  }
+  final ColorScheme color = Theme.of(context).colorScheme;
+  await showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: true,
+    builder: (BuildContext modalContext) {
+      return SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            if (onEditEvent != null)
+              ListTile(
+                leading: const Icon(Icons.edit_rounded),
+                title: Text(tr(
+                  modalContext,
+                  ko: "수정",
+                  en: "Edit",
+                  es: "Editar",
+                )),
+                onTap: () {
+                  Navigator.of(modalContext).pop();
+                  unawaited(onEditEvent(event));
+                },
+              ),
+            if (onDeleteEvent != null)
+              ListTile(
+                leading: Icon(Icons.delete_rounded, color: color.error),
+                title: Text(
+                  tr(
+                    modalContext,
+                    ko: "삭제",
+                    en: "Delete",
+                    es: "Eliminar",
+                  ),
+                  style: TextStyle(color: color.error),
+                ),
+                onTap: () {
+                  Navigator.of(modalContext).pop();
+                  unawaited(onDeleteEvent(event));
+                },
+              ),
+          ],
         ),
       );
     },
