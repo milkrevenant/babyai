@@ -1399,6 +1399,103 @@ class _HomeShellState extends State<_HomeShell> {
     _chatRenamedTitles.clear();
   }
 
+  double? _asNullableDouble(Object? raw) {
+    if (raw is num) {
+      return raw.toDouble();
+    }
+    if (raw == null) {
+      return null;
+    }
+    return double.tryParse(raw.toString().trim().replaceAll(",", "."));
+  }
+
+  bool? _asNullableBool(Object? raw) {
+    if (raw is bool) {
+      return raw;
+    }
+    if (raw == null) {
+      return null;
+    }
+    final String text = raw.toString().trim().toLowerCase();
+    if (text == "true" || text == "1" || text == "yes") {
+      return true;
+    }
+    if (text == "false" || text == "0" || text == "no") {
+      return false;
+    }
+    return null;
+  }
+
+  Future<void> _promoteOfflineProfileAfterGoogleLogin() async {
+    if (!BabyAIApi.isGoogleLinked) {
+      return;
+    }
+    final String localBabyId = BabyAIApi.activeBabyId.trim();
+    if (!localBabyId.toLowerCase().startsWith("offline_")) {
+      return;
+    }
+    try {
+      final Map<String, dynamic> profile =
+          await BabyAIApi.instance.getBabyProfile();
+      final String babyName =
+          (profile["baby_name"] ?? "우리 아기").toString().trim();
+      final String birthDateRaw =
+          (profile["birth_date"] ?? "").toString().trim();
+      final String birthDate = birthDateRaw.isEmpty
+          ? DateTime.now().toIso8601String().split("T").first
+          : birthDateRaw;
+      final String babySex = (profile["sex"] ?? "unknown").toString().trim();
+      final String feedingMethod =
+          (profile["feeding_method"] ?? "mixed").toString().trim();
+      final String formulaBrand =
+          (profile["formula_brand"] ?? "").toString().trim();
+      final String formulaProduct =
+          (profile["formula_product"] ?? "").toString().trim();
+      final String formulaType =
+          (profile["formula_type"] ?? "standard").toString().trim();
+      final double? weight = _asNullableDouble(profile["weight_kg"]);
+      final bool formulaContainsStarch =
+          _asNullableBool(profile["formula_contains_starch"]) ?? false;
+
+      final Map<String, dynamic> remote =
+          await BabyAIApi.instance.onboardingParent(
+        provider: "google",
+        babyName: babyName,
+        babyBirthDate: birthDate,
+        babySex: babySex,
+        babyWeightKg: weight,
+        feedingMethod: feedingMethod,
+        formulaBrand: formulaBrand,
+        formulaProduct: formulaProduct,
+        formulaType: formulaType,
+        formulaContainsStarch: formulaContainsStarch,
+      );
+      final String remoteBabyId = (remote["baby_id"] ?? "").toString().trim();
+      final String remoteHouseholdId =
+          (remote["household_id"] ?? "").toString().trim();
+      if (remoteBabyId.isEmpty || remoteHouseholdId.isEmpty) {
+        return;
+      }
+      BabyAIApi.setRuntimeIds(
+        babyId: remoteBabyId,
+        householdId: remoteHouseholdId,
+      );
+      await BabyAIApi.instance.upsertBabyProfile(
+        babyName: babyName,
+        babyBirthDate: birthDate,
+        babySex: babySex,
+        babyWeightKg: weight,
+        feedingMethod: feedingMethod,
+        formulaBrand: formulaBrand,
+        formulaProduct: formulaProduct,
+        formulaType: formulaType,
+        formulaContainsStarch: formulaContainsStarch,
+      );
+    } catch (_) {
+      // Keep local mode when online promotion fails.
+    }
+  }
+
   Future<void> _loginWithGoogleToken() async {
     final TextEditingController tokenController = TextEditingController();
     final TextEditingController emailController = TextEditingController();
@@ -1455,15 +1552,24 @@ class _HomeShellState extends State<_HomeShell> {
               child: Text(tr(context, ko: "취소", en: "Cancel", es: "Cancelar")),
             ),
             FilledButton(
-              onPressed: () {
+              onPressed: () async {
                 final String token = tokenController.text.trim();
                 final String previousToken =
                     BabyAIApi.currentBearerToken.trim();
                 if (token.isNotEmpty) {
                   BabyAIApi.setBearerToken(token);
-                  if (token != previousToken) {
+                  final bool changedToken = token != previousToken;
+                  if (changedToken &&
+                      BabyAIApi.activeBabyId.isNotEmpty &&
+                      !BabyAIApi.activeBabyId
+                          .toLowerCase()
+                          .startsWith("offline_")) {
                     _clearLinkedProfileState();
                   }
+                }
+                await _promoteOfflineProfileAfterGoogleLogin();
+                if (!mounted || !context.mounted) {
+                  return;
                 }
                 final String name = nameController.text.trim();
                 final String email = emailController.text.trim();
