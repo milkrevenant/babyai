@@ -97,6 +97,74 @@ func TestOpenAIResponsesClientHonorsConfiguredMaxOutputTokens(t *testing.T) {
 	}
 }
 
+func TestOpenAIResponsesClientRetriesWithHigherTokenBudgetOnIncomplete(t *testing.T) {
+	t.Parallel()
+
+	var attempts int32
+	var firstBudget int
+	var secondBudget int
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("failed to decode request payload: %v", err)
+		}
+
+		current := atomic.AddInt32(&attempts, 1)
+		budget := int(extractNumber(payload["max_output_tokens"]))
+		if current == 1 {
+			firstBudget = budget
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"model":"gpt-5-mini",
+				"output":[],
+				"incomplete_details":{"reason":"max_output_tokens"}
+			}`))
+			return
+		}
+
+		secondBudget = budget
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"model":"gpt-5-mini",
+			"output":[{"content":[{"type":"output_text","text":"retry with larger budget"}]}],
+			"usage":{"input_tokens":12,"output_tokens":5,"total_tokens":17}
+		}`))
+	}))
+	defer server.Close()
+
+	client := &OpenAIResponsesClient{
+		apiKey:          "test",
+		baseURL:         server.URL,
+		model:           "gpt-5-mini",
+		maxOutputTokens: 600,
+		httpClient: &http.Client{
+			Timeout: 2 * time.Second,
+		},
+	}
+
+	resp, err := client.Query(context.Background(), AIModelRequest{
+		Model:      "gpt-5-mini",
+		UserPrompt: "needs a longer response",
+	})
+	if err != nil {
+		t.Fatalf("query failed: %v", err)
+	}
+	if resp.Answer != "retry with larger budget" {
+		t.Fatalf("unexpected answer: %q", resp.Answer)
+	}
+	if got := atomic.LoadInt32(&attempts); got != 2 {
+		t.Fatalf("expected 2 attempts, got %d", got)
+	}
+	if firstBudget != 600 {
+		t.Fatalf("expected first max_output_tokens=600, got %d", firstBudget)
+	}
+	if secondBudget <= firstBudget {
+		t.Fatalf("expected second token budget to increase (first=%d second=%d)", firstBudget, secondBudget)
+	}
+}
+
 func extractNumber(value any) float64 {
 	switch v := value.(type) {
 	case float64:

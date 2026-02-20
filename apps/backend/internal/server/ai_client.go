@@ -46,7 +46,8 @@ type AIClient interface {
 
 const (
 	defaultAITimeoutSeconds = 60
-	defaultAIMaxOutputToken = 600
+	defaultAIMaxOutputToken = 1200
+	aiMaxOutputRetryCap     = 2400
 	openAIRequestMaxRetries = 1
 )
 
@@ -193,14 +194,14 @@ func (c *OpenAIResponsesClient) Query(ctx context.Context, req AIModelRequest) (
 		maxTokens = defaultAIMaxOutputToken
 	}
 
-	callResponses := func(input []inputBlock) (int, []byte, error) {
+	callResponses := func(input []inputBlock, outputTokens int) (int, []byte, error) {
 		if len(input) == 0 {
 			return 0, nil, errors.New("AI request input is empty")
 		}
 		payload := map[string]any{
 			"model":             requestModel,
 			"input":             input,
-			"max_output_tokens": maxTokens,
+			"max_output_tokens": outputTokens,
 			"reasoning": map[string]any{
 				"effort": "low",
 			},
@@ -238,10 +239,10 @@ func (c *OpenAIResponsesClient) Query(ctx context.Context, req AIModelRequest) (
 		return response.StatusCode, responseBody, nil
 	}
 
-	callResponsesWithRetry := func(input []inputBlock) (int, []byte, error) {
+	callResponsesWithRetry := func(input []inputBlock, outputTokens int) (int, []byte, error) {
 		maxAttempts := openAIRequestMaxRetries + 1
 		for attempt := 1; attempt <= maxAttempts; attempt++ {
-			statusCode, responseBody, err := callResponses(input)
+			statusCode, responseBody, err := callResponses(input, outputTokens)
 			if err != nil {
 				shouldRetry := attempt < maxAttempts && isRetryableTransportError(err)
 				if !shouldRetry {
@@ -268,7 +269,7 @@ func (c *OpenAIResponsesClient) Query(ctx context.Context, req AIModelRequest) (
 	}
 
 	input := buildInput(true)
-	statusCode, responseBody, err := callResponsesWithRetry(input)
+	statusCode, responseBody, err := callResponsesWithRetry(input, maxTokens)
 	if err != nil {
 		return AIModelResponse{}, err
 	}
@@ -280,7 +281,7 @@ func (c *OpenAIResponsesClient) Query(ctx context.Context, req AIModelRequest) (
 			strings.Contains(bodyText, "Supported values are: 'output_text' and 'refusal'")
 		if shouldRetryWithoutAssistant {
 			retryInput := buildInput(false)
-			retryStatusCode, retryResponseBody, retryErr := callResponsesWithRetry(retryInput)
+			retryStatusCode, retryResponseBody, retryErr := callResponsesWithRetry(retryInput, maxTokens)
 			if retryErr == nil && retryStatusCode >= 200 && retryStatusCode < 300 {
 				statusCode = retryStatusCode
 				responseBody = retryResponseBody
@@ -299,10 +300,34 @@ func (c *OpenAIResponsesClient) Query(ctx context.Context, req AIModelRequest) (
 	answer := extractResponseAnswer(parsed)
 	if strings.TrimSpace(answer) == "" {
 		if isMaxOutputTokenIncomplete(parsed) {
-			return AIModelResponse{}, errors.New("openai response incomplete due max_output_tokens")
+			boostedMaxTokens := maxTokens * 2
+			if boostedMaxTokens < defaultAIMaxOutputToken {
+				boostedMaxTokens = defaultAIMaxOutputToken
+			}
+			if boostedMaxTokens > aiMaxOutputRetryCap {
+				boostedMaxTokens = aiMaxOutputRetryCap
+			}
+			if boostedMaxTokens > maxTokens {
+				retryStatusCode, retryResponseBody, retryErr := callResponsesWithRetry(input, boostedMaxTokens)
+				if retryErr != nil {
+					return AIModelResponse{}, retryErr
+				}
+				if retryStatusCode < 200 || retryStatusCode >= 300 {
+					return AIModelResponse{}, fmt.Errorf("openai responses error (%d): %s", retryStatusCode, strings.TrimSpace(string(retryResponseBody)))
+				}
+				parsed = parseJSONStringMap(retryResponseBody)
+				answer = extractResponseAnswer(parsed)
+				if strings.TrimSpace(answer) == "" && isMaxOutputTokenIncomplete(parsed) {
+					return AIModelResponse{}, errors.New("openai response incomplete due max_output_tokens")
+				}
+			} else {
+				return AIModelResponse{}, errors.New("openai response incomplete due max_output_tokens")
+			}
 		}
-		log.Printf("openai response had no extractable answer: %s", truncateForLog(string(responseBody), 1200))
-		return AIModelResponse{}, errors.New("openai response answer is empty")
+		if strings.TrimSpace(answer) == "" {
+			log.Printf("openai response had no extractable answer: %s", truncateForLog(string(responseBody), 1200))
+			return AIModelResponse{}, errors.New("openai response answer is empty")
+		}
 	}
 
 	usageMap, _ := parsed["usage"].(map[string]any)

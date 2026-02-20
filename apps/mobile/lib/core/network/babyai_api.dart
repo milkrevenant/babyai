@@ -176,25 +176,27 @@ class BabyAIApi {
 
   void _requireToken() {
     if (_runtimeBearerToken.isEmpty) {
-      throw ApiFailure("Set API_BEARER_TOKEN via --dart-define.");
+      throw ApiFailure(
+        "로그인이 필요합니다. 설정에서 Google 로그인 후 다시 시도해 주세요.",
+      );
     }
   }
 
   void _requireBabyId() {
     if (activeBabyId.isEmpty) {
-      throw ApiFailure("Set BABY_ID via --dart-define.");
+      throw ApiFailure("아이 프로필이 없습니다. 아이 등록 후 다시 시도해 주세요.");
     }
   }
 
   void _requireHouseholdId() {
     if (activeHouseholdId.isEmpty) {
-      throw ApiFailure("Set HOUSEHOLD_ID via --dart-define.");
+      throw ApiFailure("가정 정보가 없습니다. 다시 로그인하거나 아이를 등록해 주세요.");
     }
   }
 
   void _requireAlbumId() {
     if (activeAlbumId.isEmpty) {
-      throw ApiFailure("Set ALBUM_ID via --dart-define.");
+      throw ApiFailure("앨범 정보가 없습니다. 잠시 후 다시 시도해 주세요.");
     }
   }
 
@@ -250,7 +252,14 @@ class BabyAIApi {
 
   bool _isBabyNotFoundFailure(ApiFailure failure) {
     final String message = failure.message.toLowerCase();
-    return failure.statusCode == 404 && message.contains("baby not found");
+    final bool statusMatched =
+        failure.statusCode == 404 || failure.statusCode == 400;
+    if (!statusMatched) {
+      return false;
+    }
+    return message.contains("baby not found") ||
+        message.contains("child not found") ||
+        message.contains("baby profile not found");
   }
 
   Future<bool> _recoverLocalDevIdentityForMissingBaby() async {

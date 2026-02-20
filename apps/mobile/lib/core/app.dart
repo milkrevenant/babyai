@@ -2023,7 +2023,10 @@ class _HomeShellState extends State<_HomeShell> {
   }
 
   void _setReportRange(ReportRange next) {
-    _applySharedScope(next, _sharedScopeAnchorDateLocal);
+    final DateTime nextAnchor = next == ReportRange.daily
+        ? DateTime.now()
+        : _sharedScopeAnchorDateLocal;
+    _applySharedScope(next, nextAnchor);
   }
 
   Future<void> _openReportComparePicker() async {

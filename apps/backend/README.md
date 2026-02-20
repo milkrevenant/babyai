@@ -58,7 +58,7 @@ Optional:
 - `CORS_ALLOW_ORIGINS`
 - `OPENAI_MODEL` (default `gpt-5-mini`)
 - `OPENAI_BASE_URL` (default `https://api.openai.com/v1`)
-- `AI_MAX_OUTPUT_TOKENS` (default `600`)
+- `AI_MAX_OUTPUT_TOKENS` (default `1200`)
 - `AI_TIMEOUT_SECONDS` (default `60`)
 
 Required for real AI routes in non-test env:
@@ -83,7 +83,7 @@ CORS_ALLOW_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://localhost:
 OPENAI_API_KEY=<your-openai-api-key>
 OPENAI_MODEL=gpt-5-mini
 OPENAI_BASE_URL=https://api.openai.com/v1
-AI_MAX_OUTPUT_TOKENS=600
+AI_MAX_OUTPUT_TOKENS=1200
 AI_TIMEOUT_SECONDS=60
 ```
 

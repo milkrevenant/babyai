@@ -143,7 +143,10 @@ class ReportPageState extends State<ReportPage> {
   Map<DateTime, _DayStats> _statsByDay = <DateTime, _DayStats>{};
   Map<String, dynamic>? _weeklyReport;
   ReportRange? _inlineComparisonRange;
-  Future<ReportRangeComparison>? _inlineComparisonFuture;
+  bool _inlineComparisonLoading = false;
+  ReportRangeComparison? _inlineComparisonData;
+  String? _inlineComparisonError;
+  int _inlineComparisonRequestId = 0;
 
   @override
   void initState() {
@@ -159,7 +162,8 @@ class ReportPageState extends State<ReportPage> {
       1,
     );
     _selected = widget.initialRange;
-    _setInlineComparisonRange(widget.inlineComparisonRange, refreshFuture: false);
+    _setInlineComparisonRange(widget.inlineComparisonRange,
+        refreshFuture: false);
     unawaited(_loadReports());
   }
 
@@ -189,7 +193,7 @@ class ReportPageState extends State<ReportPage> {
       return;
     }
     setState(() => _selected = next);
-    _refreshInlineComparison();
+    unawaited(_refreshInlineComparison());
   }
 
   void _setInlineComparisonRange(
@@ -197,27 +201,90 @@ class ReportPageState extends State<ReportPage> {
     bool refreshFuture = true,
   }) {
     _inlineComparisonRange = range;
-    if (!refreshFuture) {
-      return;
-    }
-    _refreshInlineComparison();
-  }
-
-  void _refreshInlineComparison() {
-    final ReportRange? range = _inlineComparisonRange;
     if (range == null) {
       if (mounted) {
-        setState(() => _inlineComparisonFuture = null);
+        setState(() {
+          _inlineComparisonLoading = false;
+          _inlineComparisonData = null;
+          _inlineComparisonError = null;
+        });
       } else {
-        _inlineComparisonFuture = null;
+        _inlineComparisonLoading = false;
+        _inlineComparisonData = null;
+        _inlineComparisonError = null;
       }
       return;
     }
-    final Future<ReportRangeComparison> nextFuture = buildRangeComparison(range);
+    if (!refreshFuture) {
+      _inlineComparisonLoading = false;
+      _inlineComparisonData = null;
+      _inlineComparisonError = null;
+      return;
+    }
+    unawaited(_refreshInlineComparison());
+  }
+
+  Future<void> _refreshInlineComparison() async {
+    final ReportRange? range = _inlineComparisonRange;
+    if (range == null) {
+      if (mounted) {
+        setState(() {
+          _inlineComparisonLoading = false;
+          _inlineComparisonData = null;
+          _inlineComparisonError = null;
+        });
+      } else {
+        _inlineComparisonLoading = false;
+        _inlineComparisonData = null;
+        _inlineComparisonError = null;
+      }
+      return;
+    }
+    final int requestId = ++_inlineComparisonRequestId;
     if (mounted) {
-      setState(() => _inlineComparisonFuture = nextFuture);
+      setState(() {
+        _inlineComparisonLoading = true;
+        _inlineComparisonData = null;
+        _inlineComparisonError = null;
+      });
     } else {
-      _inlineComparisonFuture = nextFuture;
+      _inlineComparisonLoading = true;
+      _inlineComparisonData = null;
+      _inlineComparisonError = null;
+    }
+
+    try {
+      final ReportRangeComparison comparison =
+          await buildRangeComparison(range);
+      if (requestId != _inlineComparisonRequestId) {
+        return;
+      }
+      if (!mounted) {
+        _inlineComparisonLoading = false;
+        _inlineComparisonData = comparison;
+        _inlineComparisonError = null;
+        return;
+      }
+      setState(() {
+        _inlineComparisonLoading = false;
+        _inlineComparisonData = comparison;
+        _inlineComparisonError = null;
+      });
+    } catch (error) {
+      if (requestId != _inlineComparisonRequestId) {
+        return;
+      }
+      if (!mounted) {
+        _inlineComparisonLoading = false;
+        _inlineComparisonData = null;
+        _inlineComparisonError = error.toString();
+        return;
+      }
+      setState(() {
+        _inlineComparisonLoading = false;
+        _inlineComparisonData = null;
+        _inlineComparisonError = error.toString();
+      });
     }
   }
 
@@ -455,7 +522,7 @@ class ReportPageState extends State<ReportPage> {
         setState(() => _loading = false);
       }
       if (_inlineComparisonRange != null) {
-        _refreshInlineComparison();
+        unawaited(_refreshInlineComparison());
       }
     }
   }
@@ -556,7 +623,12 @@ class ReportPageState extends State<ReportPage> {
           if (_inlineComparisonRange != null) ...<Widget>[
             const SizedBox(height: 10),
             _InlineComparisonSection(
-              future: _inlineComparisonFuture,
+              key: ValueKey<String>(
+                "inline_compare_${_inlineComparisonRange?.name}_${_selectedRangeDateLabel()}_${_inlineComparisonLoading ? "loading" : "ready"}",
+              ),
+              loading: _inlineComparisonLoading,
+              comparison: _inlineComparisonData,
+              errorText: _inlineComparisonError,
             ),
           ],
           const SizedBox(height: 10),
@@ -1198,9 +1270,16 @@ class _MonthlyView extends StatelessWidget {
 }
 
 class _InlineComparisonSection extends StatelessWidget {
-  const _InlineComparisonSection({required this.future});
+  const _InlineComparisonSection({
+    super.key,
+    required this.loading,
+    required this.comparison,
+    this.errorText,
+  });
 
-  final Future<ReportRangeComparison>? future;
+  final bool loading;
+  final ReportRangeComparison? comparison;
+  final String? errorText;
 
   @override
   Widget build(BuildContext context) {
@@ -1221,44 +1300,35 @@ class _InlineComparisonSection extends StatelessWidget {
               style: const TextStyle(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 10),
-            if (future == null)
+            if (loading)
               const SizedBox(
                 height: 64,
                 child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
               )
-            else
-              FutureBuilder<ReportRangeComparison>(
-                future: future,
-                builder: (
-                  BuildContext context,
-                  AsyncSnapshot<ReportRangeComparison> snapshot,
-                ) {
-                  if (snapshot.connectionState != ConnectionState.done) {
-                    return const SizedBox(
-                      height: 64,
-                      child:
-                          Center(child: CircularProgressIndicator(strokeWidth: 2)),
-                    );
-                  }
-                  if (!snapshot.hasData) {
-                    return SizedBox(
-                      height: 64,
-                      child: Center(
-                        child: Text(
-                          tr(
+            else if (comparison == null)
+              SizedBox(
+                height: 64,
+                child: Center(
+                  child: Text(
+                    errorText?.trim().isNotEmpty == true
+                        ? errorText!
+                        : tr(
                             context,
                             ko: "비교 데이터를 불러오지 못했습니다.",
                             en: "Failed to load comparison.",
                             es: "No se pudo cargar la comparacion.",
                           ),
-                        ),
-                      ),
-                    );
-                  }
-
-                  final ReportRangeComparison compare = snapshot.data!;
-                  final ReportRangeSnapshot current = compare.current;
-                  final ReportRangeSnapshot previous = compare.previous;
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              )
+            else
+              Builder(
+                builder: (BuildContext context) {
+                  final ReportRangeSnapshot current = comparison!.current;
+                  final ReportRangeSnapshot previous = comparison!.previous;
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
@@ -1288,16 +1358,19 @@ class _InlineComparisonSection extends StatelessWidget {
                       ),
                       const SizedBox(height: 8),
                       _ComparisonMetricRow(
-                        label: tr(context, ko: "총 수면", en: "Sleep", es: "Sueno"),
+                        label:
+                            tr(context, ko: "총 수면", en: "Sleep", es: "Sueno"),
                         current: _formatComparisonMinutes(current.sleepMinutes),
-                        previous: _formatComparisonMinutes(previous.sleepMinutes),
+                        previous:
+                            _formatComparisonMinutes(previous.sleepMinutes),
                         delta: _formatComparisonDelta(
                           current.sleepMinutes,
                           previous.sleepMinutes,
                         ),
                       ),
                       _ComparisonMetricRow(
-                        label: tr(context, ko: "분유량", en: "Formula", es: "Formula"),
+                        label: tr(context,
+                            ko: "분유량", en: "Formula", es: "Formula"),
                         current: "${current.formulaMl}ml",
                         previous: "${previous.formulaMl}ml",
                         delta: _formatComparisonDelta(
@@ -1306,7 +1379,8 @@ class _InlineComparisonSection extends StatelessWidget {
                         ),
                       ),
                       _ComparisonMetricRow(
-                        label: tr(context, ko: "분유 횟수", en: "Feeds", es: "Tomas"),
+                        label:
+                            tr(context, ko: "분유 횟수", en: "Feeds", es: "Tomas"),
                         current: "${current.feedCount}",
                         previous: "${previous.feedCount}",
                         delta: _formatComparisonDelta(
@@ -1385,7 +1459,8 @@ class _ComparisonMetricRow extends StatelessWidget {
         children: <Widget>[
           Expanded(
             flex: 3,
-            child: Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
+            child: Text(label,
+                style: const TextStyle(fontWeight: FontWeight.w700)),
           ),
           Expanded(flex: 2, child: Text(current, textAlign: TextAlign.right)),
           Expanded(

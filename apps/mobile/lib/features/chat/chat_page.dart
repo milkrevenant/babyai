@@ -283,8 +283,10 @@ class ChatPageState extends State<ChatPage> {
     if (mode == _dateMode) {
       return;
     }
+    final DateTime nextAnchor =
+        mode == ChatDateMode.day ? DateTime.now() : _anchorDateLocal;
     _applyDateScope(
-      ChatDateScope(mode: mode, anchorDateLocal: _anchorDateLocal),
+      ChatDateScope(mode: mode, anchorDateLocal: nextAnchor),
       notifyParent: true,
     );
   }
