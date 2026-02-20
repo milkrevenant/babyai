@@ -154,13 +154,20 @@ func (a *App) issueLocalDevToken(c *gin.Context) {
 		return
 	}
 
-	sub := strings.TrimSpace(c.Query("sub"))
+	querySub := strings.TrimSpace(c.Query("sub"))
+	sub := querySub
+	if sub == "" {
+		sub = strings.TrimSpace(a.cfg.LocalDevDefaultSub)
+	}
 	if sub == "" {
 		sub = uuid.NewString()
 	}
 	if _, err := uuid.Parse(sub); err != nil {
-		writeError(c, http.StatusBadRequest, "sub must be UUID format")
-		return
+		if querySub != "" {
+			writeError(c, http.StatusBadRequest, "sub must be UUID format")
+			return
+		}
+		sub = uuid.NewString()
 	}
 
 	name := strings.TrimSpace(c.DefaultQuery("name", "Local Dev User"))
@@ -210,11 +217,31 @@ func (a *App) issueLocalDevToken(c *gin.Context) {
 		return
 	}
 
+	latestBabyID := ""
+	latestHouseholdID := ""
+	_ = a.db.QueryRow(
+		c.Request.Context(),
+		`SELECT b.id, b."householdId"
+		   FROM "Baby" b
+		   JOIN "Household" h ON h.id = b."householdId"
+		   LEFT JOIN "HouseholdMember" hm
+		     ON hm."householdId" = h.id
+		    AND hm."userId" = $1
+		    AND hm.status = 'ACTIVE'
+		  WHERE h."ownerUserId" = $1
+		     OR hm.id IS NOT NULL
+		  ORDER BY b."createdAt" DESC
+		  LIMIT 1`,
+		sub,
+	).Scan(&latestBabyID, &latestHouseholdID)
+
 	c.JSON(http.StatusOK, gin.H{
 		"token":          signed,
 		"sub":            sub,
 		"name":           name,
 		"provider":       provider,
+		"baby_id":        latestBabyID,
+		"household_id":   latestHouseholdID,
 		"reference_text": "Local development token generated from backend JWT settings.",
 	})
 }

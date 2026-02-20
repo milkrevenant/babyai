@@ -155,10 +155,20 @@ class BabyAIApi {
       return;
     }
     try {
-      await issueLocalDevToken(
+      final Map<String, dynamic> issued = await issueLocalDevToken(
+        sub: AppEnv.localDevDefaultSub,
         name: "Local Dev User",
         provider: "google",
       );
+      final String issuedBabyId = (issued["baby_id"] ?? "").toString().trim();
+      final String issuedHouseholdId =
+          (issued["household_id"] ?? "").toString().trim();
+      if (issuedBabyId.isNotEmpty || issuedHouseholdId.isNotEmpty) {
+        setRuntimeIds(
+          babyId: issuedBabyId.isNotEmpty ? issuedBabyId : null,
+          householdId: issuedHouseholdId.isNotEmpty ? issuedHouseholdId : null,
+        );
+      }
     } catch (_) {
       // Keep existing behavior when local backend is unavailable.
     }
@@ -1632,6 +1642,15 @@ class BabyAIApi {
       final String token = (payload["token"] ?? "").toString().trim();
       if (token.isNotEmpty) {
         setBearerToken(token);
+      }
+      final String issuedBabyId = (payload["baby_id"] ?? "").toString().trim();
+      final String issuedHouseholdId =
+          (payload["household_id"] ?? "").toString().trim();
+      if (issuedBabyId.isNotEmpty || issuedHouseholdId.isNotEmpty) {
+        setRuntimeIds(
+          babyId: issuedBabyId.isNotEmpty ? issuedBabyId : null,
+          householdId: issuedHouseholdId.isNotEmpty ? issuedHouseholdId : null,
+        );
       }
       return payload;
     } catch (error) {

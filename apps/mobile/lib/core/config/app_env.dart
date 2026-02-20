@@ -30,4 +30,8 @@ class AppEnv {
     "ALBUM_ID",
     defaultValue: "",
   );
+  static const String localDevDefaultSub = String.fromEnvironment(
+    "LOCAL_DEV_DEFAULT_SUB",
+    defaultValue: "00000000-0000-0000-0000-000000000001",
+  );
 }

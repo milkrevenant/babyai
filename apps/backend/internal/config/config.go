@@ -21,6 +21,7 @@ type Config struct {
 	JWTAlgorithm               string
 	JWTAudience                string
 	JWTIssuer                  string
+	LocalDevDefaultSub         string
 	AuthAutoCreateUser         bool
 	LocalForceSubscriptionPlan string
 	OnboardingSeedDummyData    bool
@@ -47,6 +48,7 @@ func Load() Config {
 		JWTAlgorithm:               getEnv("JWT_ALGORITHM", "HS256"),
 		JWTAudience:                getEnv("JWT_AUDIENCE", ""),
 		JWTIssuer:                  getEnv("JWT_ISSUER", ""),
+		LocalDevDefaultSub:         getEnv("LOCAL_DEV_DEFAULT_SUB", "00000000-0000-0000-0000-000000000001"),
 		AuthAutoCreateUser:         getEnvBool("AUTH_AUTOCREATE_USER", false),
 		LocalForceSubscriptionPlan: getEnv("LOCAL_FORCE_SUBSCRIPTION_PLAN", ""),
 		OnboardingSeedDummyData:    getEnvBool("ONBOARDING_SEED_DUMMY_DATA", false),

@@ -14,6 +14,7 @@ import "../features/recording/recording_page.dart";
 import "../features/report/report_page.dart";
 import "../features/settings/child_profile_page.dart";
 import "../features/settings/settings_page.dart";
+import "config/app_env.dart";
 import "config/session_store.dart";
 import "i18n/app_i18n.dart";
 import "network/babyai_api.dart";
@@ -348,10 +349,21 @@ class _HomeShellState extends State<_HomeShell> {
       return;
     }
     try {
-      await BabyAIApi.instance.issueLocalDevToken(
+      final Map<String, dynamic> issued =
+          await BabyAIApi.instance.issueLocalDevToken(
+        sub: AppEnv.localDevDefaultSub,
         name: "Local Dev User",
         provider: "google",
       );
+      final String issuedBabyId = (issued["baby_id"] ?? "").toString().trim();
+      final String issuedHouseholdId =
+          (issued["household_id"] ?? "").toString().trim();
+      if (issuedBabyId.isNotEmpty || issuedHouseholdId.isNotEmpty) {
+        BabyAIApi.setRuntimeIds(
+          babyId: issuedBabyId.isNotEmpty ? issuedBabyId : null,
+          householdId: issuedHouseholdId.isNotEmpty ? issuedHouseholdId : null,
+        );
+      }
       await AppSessionStore.persistRuntimeState();
       if (mounted) {
         _bootstrapAccountFromToken();
@@ -387,6 +399,41 @@ class _HomeShellState extends State<_HomeShell> {
       unawaited(_loadChatHistory());
       _flushPendingAssistantActionIfAny();
     } catch (_) {
+      if (!kReleaseMode) {
+        try {
+          final Map<String, dynamic> issued =
+              await BabyAIApi.instance.issueLocalDevToken(
+            sub: AppEnv.localDevDefaultSub,
+            name: "Local Dev User",
+            provider: "google",
+          );
+          final String recoveredBabyId =
+              (issued["baby_id"] ?? "").toString().trim();
+          final String recoveredHouseholdId =
+              (issued["household_id"] ?? "").toString().trim();
+          if (recoveredBabyId.isNotEmpty && recoveredHouseholdId.isNotEmpty) {
+            BabyAIApi.setRuntimeIds(
+              babyId: recoveredBabyId,
+              householdId: recoveredHouseholdId,
+            );
+            await AppSessionStore.persistRuntimeState();
+            await BabyAIApi.instance.getBabyProfile();
+            if (!mounted) {
+              return;
+            }
+            setState(() {
+              _needsChildOnboarding = false;
+              _startupGateResolved = true;
+            });
+            unawaited(_refreshChatFeatureAccess());
+            unawaited(_loadChatHistory());
+            _flushPendingAssistantActionIfAny();
+            return;
+          }
+        } catch (_) {
+          // Fall through to onboarding when recovery cannot resolve a child.
+        }
+      }
       BabyAIApi.setRuntimeIds(
         babyId: "",
         householdId: "",
@@ -2311,7 +2358,8 @@ class _HomeShellState extends State<_HomeShell> {
           _RoundTopButton(
             icon: Icons.menu,
             onTap: _openChatHistoryDrawer,
-            tooltip: tr(context, ko: "메뉴 열기", en: "Open menu", es: "Abrir menu"),
+            tooltip:
+                tr(context, ko: "메뉴 열기", en: "Open menu", es: "Abrir menu"),
           ),
           const SizedBox(width: 8),
           Expanded(child: _buildHeaderControls(context)),
@@ -2472,7 +2520,8 @@ class _HomeShellState extends State<_HomeShell> {
             child: ConstrainedBox(
               constraints: const BoxConstraints(minWidth: 82, maxWidth: 96),
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: List<Widget>.generate(
@@ -2628,15 +2677,14 @@ class _HomeShellState extends State<_HomeShell> {
 
     final ColorScheme color = Theme.of(context).colorScheme;
     final String normalizedChatSearch = _chatSearchQuery.trim().toLowerCase();
-    final List<_ChatHistoryItem> filteredChatHistory = normalizedChatSearch.isEmpty
-        ? _chatHistory
-        : _chatHistory
-            .where((_ChatHistoryItem item) {
-              final String haystack =
-                  "${item.title} ${item.preview}".toLowerCase();
-              return haystack.contains(normalizedChatSearch);
-            })
-            .toList(growable: false);
+    final List<_ChatHistoryItem> filteredChatHistory =
+        normalizedChatSearch.isEmpty
+            ? _chatHistory
+            : _chatHistory.where((_ChatHistoryItem item) {
+                final String haystack =
+                    "${item.title} ${item.preview}".toLowerCase();
+                return haystack.contains(normalizedChatSearch);
+              }).toList(growable: false);
     final List<_BottomMenuTab> bottomTabs = _buildBottomTabs();
     final int selectedBottomIndex = bottomTabs.indexWhere(
       (_BottomMenuTab tab) => tab.pageIndex == _index,
@@ -2704,7 +2752,8 @@ class _HomeShellState extends State<_HomeShell> {
                             en: "Search titles and messages",
                             es: "Buscar titulos y mensajes",
                           ),
-                          prefixIcon: const Icon(Icons.search_rounded, size: 20),
+                          prefixIcon:
+                              const Icon(Icons.search_rounded, size: 20),
                           suffixIcon: normalizedChatSearch.isEmpty
                               ? null
                               : IconButton(
@@ -2714,15 +2763,16 @@ class _HomeShellState extends State<_HomeShell> {
                                     en: "Clear search",
                                     es: "Limpiar busqueda",
                                   ),
-                                  icon: const Icon(Icons.close_rounded, size: 18),
+                                  icon:
+                                      const Icon(Icons.close_rounded, size: 18),
                                   onPressed: () {
                                     _chatSearchController.clear();
                                     setState(() => _chatSearchQuery = "");
                                   },
                                 ),
                           filled: true,
-                          fillColor:
-                              color.surfaceContainerHighest.withValues(alpha: 0.45),
+                          fillColor: color.surfaceContainerHighest
+                              .withValues(alpha: 0.45),
                           contentPadding: const EdgeInsets.symmetric(
                             horizontal: 12,
                             vertical: 10,

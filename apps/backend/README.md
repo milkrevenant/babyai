@@ -51,6 +51,7 @@ Set in `.env`:
 Optional:
 - `JWT_AUDIENCE`
 - `JWT_ISSUER`
+- `LOCAL_DEV_DEFAULT_SUB` (default `00000000-0000-0000-0000-000000000001`, local only)
 - `AUTH_AUTOCREATE_USER` (default `false`)
 - `LOCAL_FORCE_SUBSCRIPTION_PLAN` (local only: `AI_ONLY` | `AI_PHOTO` | `PHOTO_SHARE`)
 - `ONBOARDING_SEED_DUMMY_DATA` (default `false`, local only)
@@ -74,6 +75,7 @@ JWT_SECRET=replace-with-long-random-secret
 JWT_ALGORITHM=HS256
 JWT_AUDIENCE=
 JWT_ISSUER=
+LOCAL_DEV_DEFAULT_SUB=00000000-0000-0000-0000-000000000001
 AUTH_AUTOCREATE_USER=false
 LOCAL_FORCE_SUBSCRIPTION_PLAN=
 ONBOARDING_SEED_DUMMY_DATA=false
@@ -159,7 +161,7 @@ Local-only quick endpoint (enabled only when `APP_ENV=local`):
 ```bash
 curl -X POST http://127.0.0.1:8000/dev/local-token
 ```
-Response includes `token` and `sub`.  
+Response includes `token`, `sub`, and (when available) latest `baby_id`/`household_id` for that local user.  
 `Child Registration` in mobile onboarding also tries this endpoint automatically when token input is empty.
 
 ## Build
