@@ -1,3 +1,4 @@
+import "package:flutter/foundation.dart";
 import "package:flutter/material.dart";
 
 import "../../core/i18n/app_i18n.dart";
@@ -384,8 +385,9 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
     });
 
     try {
-      final String typedToken = _tokenController.text.trim();
-      if (typedToken.isNotEmpty) {
+      final String typedToken =
+          kReleaseMode ? "" : _tokenController.text.trim();
+      if (!kReleaseMode && typedToken.isNotEmpty) {
         BabyAIApi.setBearerToken(typedToken);
       }
       final double? weight =
@@ -622,6 +624,7 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
   @override
   Widget build(BuildContext context) {
     final bool initial = widget.initialOnboarding;
+    final bool showDevJwtInput = initial && !kReleaseMode;
     return Scaffold(
       appBar: AppBar(
         automaticallyImplyLeading: !initial,
@@ -643,7 +646,7 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
               const SizedBox(height: 12),
             ],
             if (!initial || _step == 0) ...<Widget>[
-              if (initial) ...<Widget>[
+              if (showDevJwtInput) ...<Widget>[
                 TextFormField(
                   controller: _tokenController,
                   minLines: 1,

@@ -1229,6 +1229,34 @@ class BabyAIApi {
     return snapshot;
   }
 
+  Future<Map<String, dynamic>> _buildFallbackOfflineLandingSnapshot({
+    required String normalizedRange,
+  }) async {
+    _requireBabyId();
+    final Map<String, dynamic>? profile =
+        await _readCachedBabyProfile(babyId: activeBabyId);
+    final String babyName =
+        (profile?["baby_name"] ?? profile?["name"] ?? "우리 아기").toString();
+    final int rangeDayCount = switch (normalizedRange) {
+      "week" => 7,
+      "month" => _daysInMonth(DateTime.now().toLocal()),
+      _ => 1,
+    };
+    final Map<String, dynamic> payload = _buildOfflineLandingSnapshot(
+      babyId: activeBabyId,
+      babyName: babyName,
+      range: normalizedRange,
+      rangeDayCount: rangeDayCount,
+    );
+    await OfflineDataStore.instance.writeCache(
+      namespace: _cacheQuickLanding,
+      babyId: activeBabyId,
+      key: normalizedRange,
+      data: payload,
+    );
+    return payload;
+  }
+
   Future<Map<String, dynamic>> _buildLocalDailyReport(
       DateTime targetDate) async {
     _requireBabyId();
@@ -1949,43 +1977,56 @@ class BabyAIApi {
     String range = "day",
     bool preferOffline = true,
   }) async {
+    final String normalizedRange = range.trim().toLowerCase();
+    final String cacheKey = normalizedRange.isEmpty ? "day" : normalizedRange;
     try {
       _requireBabyId();
-      final String normalizedRange = range.trim().toLowerCase();
-      final String cacheKey = normalizedRange.isEmpty ? "day" : normalizedRange;
-      if (!_hasServerLinkedProfile) {
-        return await _buildLocalLandingSnapshot(normalizedRange: cacheKey);
-      }
       final Map<String, dynamic>? cached =
           await OfflineDataStore.instance.readCache(
         namespace: _cacheQuickLanding,
         babyId: activeBabyId,
         key: cacheKey,
       );
-      if (preferOffline && cached != null) {
-        if (_hasServerLinkedProfile) {
-          unawaited(_refreshQuickLandingSnapshotCache(cacheKey));
+      if (preferOffline || !_hasServerLinkedProfile) {
+        try {
+          final Map<String, dynamic> local =
+              await _buildLocalLandingSnapshot(normalizedRange: cacheKey);
+          if (_hasServerLinkedProfile) {
+            unawaited(_refreshQuickLandingSnapshotCache(cacheKey));
+          }
+          return _withOfflineCacheFlag(local);
+        } catch (_) {
+          if (cached != null) {
+            return _withOfflineCacheFlag(cached);
+          }
+          return await _buildFallbackOfflineLandingSnapshot(
+            normalizedRange: cacheKey,
+          );
         }
-        return _withOfflineCacheFlag(cached);
-      }
-      if (!_hasServerLinkedProfile && cached != null) {
-        return _withOfflineCacheFlag(cached);
       }
       await flushOfflineMutations();
       return await _fetchQuickLandingSnapshotRemote(cacheKey);
     } catch (error) {
-      final Map<String, dynamic>? cached =
-          await OfflineDataStore.instance.readCache(
-        namespace: _cacheQuickLanding,
-        babyId: activeBabyId,
-        key: range.trim().toLowerCase().isEmpty
-            ? "day"
-            : range.trim().toLowerCase(),
-      );
-      if (cached != null) {
-        return _withOfflineCacheFlag(cached);
+      try {
+        return await _buildLocalLandingSnapshot(normalizedRange: cacheKey);
+      } catch (_) {
+        final Map<String, dynamic>? cached =
+            await OfflineDataStore.instance.readCache(
+          namespace: _cacheQuickLanding,
+          babyId: activeBabyId,
+          key: cacheKey,
+        );
+        if (cached != null) {
+          return _withOfflineCacheFlag(cached);
+        }
+        try {
+          return await _buildFallbackOfflineLandingSnapshot(
+            normalizedRange: cacheKey,
+          );
+        } catch (_) {
+          throw _toFailure(error);
+        }
       }
-      throw _toFailure(error);
     }
   }
 
@@ -2082,6 +2123,12 @@ class BabyAIApi {
     int limit = 50,
   }) async {
     try {
+      if (!_hasServerLinkedProfile) {
+        return <String, dynamic>{
+          "sessions": <dynamic>[],
+          "offline_cached": true,
+        };
+      }
       final Map<String, dynamic> params = <String, dynamic>{
         "limit": limit.clamp(1, 100),
       };
@@ -2096,8 +2143,11 @@ class BabyAIApi {
         options: _authOptions(),
       );
       return _requireMap(response);
-    } catch (error) {
-      throw _toFailure(error);
+    } catch (_) {
+      return <String, dynamic>{
+        "sessions": <dynamic>[],
+        "offline_cached": true,
+      };
     }
   }
 
@@ -2599,26 +2649,36 @@ class BabyAIApi {
       babyId: activeBabyId,
       key: day,
     );
-    if (!_hasServerLinkedProfile) {
-      return await _buildLocalDailyReport(targetDate);
-    }
-    if (preferOffline && cached != null) {
-      if (_hasServerLinkedProfile) {
-        unawaited(_refreshDailyReportCache(targetDate));
+    if (preferOffline || !_hasServerLinkedProfile) {
+      try {
+        final Map<String, dynamic> local =
+            await _buildLocalDailyReport(targetDate);
+        if (_hasServerLinkedProfile) {
+          unawaited(_refreshDailyReportCache(targetDate));
+        }
+        return _withOfflineCacheFlag(local);
+      } catch (_) {
+        if (cached != null) {
+          return _withOfflineCacheFlag(cached);
+        }
+        return <String, dynamic>{
+          "baby_id": activeBabyId,
+          "date": day,
+          "summary": <String>[],
+          "events": <dynamic>[],
+          "labels": <dynamic>[],
+          "offline_cached": true,
+        };
       }
-      return _withOfflineCacheFlag(cached);
-    }
-    if (!_hasServerLinkedProfile && cached != null) {
-      return _withOfflineCacheFlag(cached);
     }
     try {
       await flushOfflineMutations();
       return await _fetchDailyReportRemote(targetDate);
-    } catch (error) {
+    } catch (_) {
       if (cached != null) {
         return _withOfflineCacheFlag(cached);
       }
-      throw _toFailure(error);
+      return await _buildLocalDailyReport(targetDate);
     }
   }
 
@@ -2666,26 +2726,36 @@ class BabyAIApi {
       babyId: activeBabyId,
       key: day,
     );
-    if (!_hasServerLinkedProfile) {
-      return await _buildLocalWeeklyReport(weekStart);
-    }
-    if (preferOffline && cached != null) {
-      if (_hasServerLinkedProfile) {
-        unawaited(_refreshWeeklyReportCache(weekStart));
+    if (preferOffline || !_hasServerLinkedProfile) {
+      try {
+        final Map<String, dynamic> local =
+            await _buildLocalWeeklyReport(weekStart);
+        if (_hasServerLinkedProfile) {
+          unawaited(_refreshWeeklyReportCache(weekStart));
+        }
+        return _withOfflineCacheFlag(local);
+      } catch (_) {
+        if (cached != null) {
+          return _withOfflineCacheFlag(cached);
+        }
+        return <String, dynamic>{
+          "baby_id": activeBabyId,
+          "week_start": day,
+          "trend": <String, dynamic>{},
+          "suggestions": <String>[],
+          "labels": <dynamic>[],
+          "offline_cached": true,
+        };
       }
-      return _withOfflineCacheFlag(cached);
-    }
-    if (!_hasServerLinkedProfile && cached != null) {
-      return _withOfflineCacheFlag(cached);
     }
     try {
       await flushOfflineMutations();
       return await _fetchWeeklyReportRemote(weekStart);
-    } catch (error) {
+    } catch (_) {
       if (cached != null) {
         return _withOfflineCacheFlag(cached);
       }
-      throw _toFailure(error);
+      return await _buildLocalWeeklyReport(weekStart);
     }
   }
 

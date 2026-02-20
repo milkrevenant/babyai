@@ -1,6 +1,7 @@
 import "dart:async";
 import "dart:convert";
 
+import "package:flutter/foundation.dart";
 import "package:flutter/material.dart";
 import "package:flutter/services.dart";
 
@@ -256,6 +257,10 @@ class _HomeShellState extends State<_HomeShell> {
   static const int _photosPage = 3;
   static const int _marketPage = 4;
   static const int _communityPage = 5;
+  static const Set<String> _chatEnabledPlans = <String>{
+    "AI_ONLY",
+    "AI_PHOTO",
+  };
 
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final GlobalKey<RecordingPageState> _recordPageKey =
@@ -271,6 +276,8 @@ class _HomeShellState extends State<_HomeShell> {
   bool _isBusinessAccount = false;
   String _accountName = "Google account";
   String _accountEmail = "Not connected";
+  bool _startupGateResolved = false;
+  bool _needsChildOnboarding = false;
   bool _chatHistoryLoading = false;
   String? _chatHistoryError;
   List<_ChatHistoryItem> _chatHistory = <_ChatHistoryItem>[];
@@ -278,6 +285,7 @@ class _HomeShellState extends State<_HomeShell> {
   bool _loginSyncInProgress = false;
   String _homeBabyName = "우리 아기";
   String? _homeBabyPhotoUrl;
+  bool _chatEnabledBySubscription = false;
   final Set<String> _pinnedChatSessionIds = <String>{};
   final Set<String> _hiddenChatSessionIds = <String>{};
   final Map<String, String> _chatRenamedTitles = <String, String>{};
@@ -287,6 +295,13 @@ class _HomeShellState extends State<_HomeShell> {
   MarketSection _marketSection = MarketSection.used;
   CommunitySection _communitySection = CommunitySection.free;
 
+  bool get _chatFeatureEnabled {
+    if (!kReleaseMode) {
+      return true;
+    }
+    return _chatEnabledBySubscription;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -294,9 +309,8 @@ class _HomeShellState extends State<_HomeShell> {
         _normalizeScopeAnchorForRange(_reportRange, DateTime.now());
     _bootstrapAccountFromToken();
     _initializeAssistantBridge();
-    if (BabyAIApi.activeBabyId.isNotEmpty) {
-      unawaited(_loadChatHistory());
-    }
+    unawaited(_refreshChatFeatureAccess());
+    unawaited(_resolveInitialChildGate());
   }
 
   @override
@@ -310,6 +324,143 @@ class _HomeShellState extends State<_HomeShell> {
     _assistantSubscription = AssistantIntentBridge.stream.listen(
       _handleAssistantAction,
     );
+  }
+
+  Future<void> _resolveInitialChildGate() async {
+    final String babyId = BabyAIApi.activeBabyId.trim();
+    if (babyId.isEmpty) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _needsChildOnboarding = true;
+        _startupGateResolved = true;
+      });
+      return;
+    }
+    try {
+      await BabyAIApi.instance.getBabyProfile();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _needsChildOnboarding = false;
+        _startupGateResolved = true;
+      });
+      unawaited(_refreshChatFeatureAccess());
+      unawaited(_loadChatHistory());
+      _flushPendingAssistantActionIfAny();
+    } catch (_) {
+      BabyAIApi.setRuntimeIds(
+        babyId: "",
+        householdId: "",
+        albumId: "",
+      );
+      await AppSessionStore.persistRuntimeState();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _needsChildOnboarding = true;
+        _startupGateResolved = true;
+      });
+      unawaited(_refreshChatFeatureAccess());
+    }
+  }
+
+  bool _isChatPlanEnabled({
+    required String plan,
+    required String status,
+  }) {
+    if (!_chatEnabledPlans.contains(plan)) {
+      return false;
+    }
+    return status == "active" || status == "trialing";
+  }
+
+  String _chatSubscriptionLockedMessage(BuildContext context) {
+    return tr(
+      context,
+      ko: "채팅은 구독 플랜에서 활성화됩니다. 설정 > 구독에서 AI 플랜을 선택해 주세요.",
+      en: "Chat is available on subscription plans. Open Settings > Subscription and choose an AI plan.",
+      es: "El chat requiere suscripcion. Abre Configuracion > Suscripcion y elige un plan de IA.",
+    );
+  }
+
+  Future<void> _refreshChatFeatureAccess() async {
+    if (!mounted) {
+      return;
+    }
+    if (!kReleaseMode) {
+      setState(() {
+        _chatEnabledBySubscription = true;
+      });
+      return;
+    }
+    if (!BabyAIApi.isGoogleLinked || BabyAIApi.activeHouseholdId.isEmpty) {
+      setState(() {
+        _chatEnabledBySubscription = false;
+        if (_index == _chatPage) {
+          _index = _homePage;
+        }
+      });
+      return;
+    }
+    try {
+      final Map<String, dynamic> result =
+          await BabyAIApi.instance.subscriptionMe();
+      final String normalizedPlan =
+          (result["plan"] ?? "").toString().trim().toUpperCase();
+      final String normalizedStatus =
+          (result["status"] ?? "none").toString().trim().toLowerCase();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _chatEnabledBySubscription = _isChatPlanEnabled(
+          plan: normalizedPlan,
+          status: normalizedStatus,
+        );
+      });
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _chatEnabledBySubscription = false;
+        if (_index == _chatPage) {
+          _index = _homePage;
+        }
+      });
+    }
+  }
+
+  Future<bool> _ensureChatFeatureEnabled({bool showPrompt = true}) async {
+    if (_chatFeatureEnabled) {
+      return true;
+    }
+    await _refreshChatFeatureAccess();
+    if (_chatFeatureEnabled) {
+      return true;
+    }
+    if (showPrompt && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_chatSubscriptionLockedMessage(context))),
+      );
+    }
+    return false;
+  }
+
+  Future<void> _openChatFromNavigationIntent() async {
+    final bool enabled = await _ensureChatFeatureEnabled(showPrompt: true);
+    if (!mounted) {
+      return;
+    }
+    if (!enabled) {
+      setState(() => _index = _photosPage);
+      return;
+    }
+    setState(() => _index = _chatPage);
   }
 
   void _handleAssistantAction(AssistantActionPayload payload) {
@@ -621,12 +772,18 @@ class _HomeShellState extends State<_HomeShell> {
     }
 
     if (action.routeToChat) {
-      setState(() => _index = _chatPage);
-      if (action.chatPrompt != null && action.chatPrompt!.trim().isNotEmpty) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _chatPageKey.currentState?.sendAssistantPrompt(action.chatPrompt!);
-        });
-      }
+      unawaited(() async {
+        final bool enabled = await _ensureChatFeatureEnabled(showPrompt: true);
+        if (!enabled || !mounted) {
+          return;
+        }
+        setState(() => _index = _chatPage);
+        if (action.chatPrompt != null && action.chatPrompt!.trim().isNotEmpty) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _chatPageKey.currentState?.sendAssistantPrompt(action.chatPrompt!);
+          });
+        }
+      }());
       return;
     }
 
@@ -674,6 +831,10 @@ class _HomeShellState extends State<_HomeShell> {
   }
 
   void _setIndex(int next) {
+    if (next == _chatPage && !_chatFeatureEnabled) {
+      unawaited(_openChatFromNavigationIntent());
+      return;
+    }
     setState(() => _index = next);
     if (next == _homePage) {
       unawaited(_recordPageKey.currentState?.refreshData());
@@ -681,6 +842,16 @@ class _HomeShellState extends State<_HomeShell> {
   }
 
   Future<void> _loadChatHistory() async {
+    if (!_chatFeatureEnabled) {
+      if (mounted) {
+        setState(() {
+          _chatHistoryLoading = false;
+          _chatHistory = <_ChatHistoryItem>[];
+          _chatHistoryError = null;
+        });
+      }
+      return;
+    }
     if (BabyAIApi.activeBabyId.isEmpty) {
       return;
     }
@@ -1034,6 +1205,10 @@ class _HomeShellState extends State<_HomeShell> {
   }
 
   Future<void> _openChatSessionFromDrawer(String sessionId) async {
+    final bool enabled = await _ensureChatFeatureEnabled(showPrompt: true);
+    if (!enabled || !mounted) {
+      return;
+    }
     if (Navigator.of(context).canPop()) {
       Navigator.of(context).pop();
     }
@@ -1052,6 +1227,10 @@ class _HomeShellState extends State<_HomeShell> {
   }
 
   Future<void> _createNewChatFromDrawer() async {
+    final bool enabled = await _ensureChatFeatureEnabled(showPrompt: true);
+    if (!enabled || !mounted) {
+      return;
+    }
     if (Navigator.of(context).canPop()) {
       Navigator.of(context).pop();
     }
@@ -1092,10 +1271,11 @@ class _HomeShellState extends State<_HomeShell> {
       ));
     }
     if (widget.themeController.isBottomMenuEnabled(AppBottomMenu.chat)) {
-      tabs.add(const _BottomMenuTab(
+      tabs.add(_BottomMenuTab(
         pageIndex: _chatPage,
         iconAsset: AppSvgAsset.aiChatSparkles,
         label: "chat",
+        locked: !_chatFeatureEnabled,
       ));
     }
     if (widget.themeController.isBottomMenuEnabled(AppBottomMenu.market)) {
@@ -1201,7 +1381,14 @@ class _HomeShellState extends State<_HomeShell> {
       householdId: result.householdId,
     );
     await AppSessionStore.persistRuntimeState();
+    if (mounted) {
+      setState(() {
+        _needsChildOnboarding = false;
+        _startupGateResolved = true;
+      });
+    }
     _bootstrapAccountFromToken();
+    unawaited(_refreshChatFeatureAccess());
     unawaited(_loadChatHistory());
     _flushPendingAssistantActionIfAny();
   }
@@ -1395,6 +1582,8 @@ class _HomeShellState extends State<_HomeShell> {
     _selectedChatSessionId = null;
     _chatHistory = <_ChatHistoryItem>[];
     _homeBabyName = "우리 아기";
+    _needsChildOnboarding = true;
+    _startupGateResolved = true;
     _pinnedChatSessionIds.clear();
     _hiddenChatSessionIds.clear();
     _chatRenamedTitles.clear();
@@ -1494,6 +1683,7 @@ class _HomeShellState extends State<_HomeShell> {
         }
       }
       await BabyAIApi.instance.syncAllLocalDataToServer();
+      await _refreshChatFeatureAccess();
       if (BabyAIApi.activeBabyId.isNotEmpty) {
         await _loadChatHistory();
       }
@@ -1627,6 +1817,7 @@ class _HomeShellState extends State<_HomeShell> {
       _isBusinessAccount = false;
       _accountName = "Google account";
       _accountEmail = "Not connected";
+      _chatEnabledBySubscription = false;
     });
     unawaited(AppSessionStore.persistRuntimeState());
   }
@@ -2110,6 +2301,9 @@ class _HomeShellState extends State<_HomeShell> {
     required Color color,
     required bool selected,
   }) {
+    if (tab.locked) {
+      return Icon(Icons.lock_outline_rounded, size: 20, color: color);
+    }
     final String? iconAsset = tab.iconAsset;
     if (iconAsset != null) {
       return AppSvgIcon(
@@ -2197,7 +2391,12 @@ class _HomeShellState extends State<_HomeShell> {
 
   @override
   Widget build(BuildContext context) {
-    if (BabyAIApi.activeBabyId.isEmpty) {
+    if (!_startupGateResolved) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (_needsChildOnboarding || BabyAIApi.activeBabyId.isEmpty) {
       return ChildProfilePage(
         initialOnboarding: true,
         onCompleted: (ChildProfileSaveResult result) async {
@@ -2243,9 +2442,9 @@ class _HomeShellState extends State<_HomeShell> {
                       ),
                     ),
                     IconButton(
-                      onPressed: _chatHistoryLoading
-                          ? null
-                          : () => unawaited(_createNewChatFromDrawer()),
+                      onPressed: _chatFeatureEnabled && !_chatHistoryLoading
+                          ? () => unawaited(_createNewChatFromDrawer())
+                          : null,
                       icon: const Icon(Icons.add_comment_outlined),
                       tooltip: "New conversation",
                     ),
@@ -2264,99 +2463,116 @@ class _HomeShellState extends State<_HomeShell> {
                   ),
                 ),
               Expanded(
-                child: _chatHistoryLoading && _chatHistory.isEmpty
-                    ? const Center(child: CircularProgressIndicator())
-                    : _chatHistory.isEmpty
-                        ? Center(
-                            child: Text(
-                              "No previous chats yet.",
-                              style: TextStyle(
-                                color: color.onSurfaceVariant,
-                                fontWeight: FontWeight.w500,
-                              ),
+                child: !_chatFeatureEnabled
+                    ? Center(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 22),
+                          child: Text(
+                            _chatSubscriptionLockedMessage(context),
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: color.onSurfaceVariant,
+                              fontWeight: FontWeight.w600,
                             ),
-                          )
-                        : ListView.separated(
-                            padding: const EdgeInsets.fromLTRB(8, 4, 8, 12),
-                            itemCount: _chatHistory.length,
-                            separatorBuilder: (_, __) =>
-                                const SizedBox(height: 2),
-                            itemBuilder: (BuildContext context, int index) {
-                              final _ChatHistoryItem item = _chatHistory[index];
-                              final bool selected =
-                                  item.sessionId == _selectedChatSessionId;
-                              return ListTile(
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(14),
-                                ),
-                                selected: selected,
-                                selectedTileColor: color.primaryContainer
-                                    .withValues(alpha: 0.35),
-                                onTap: () => unawaited(
-                                  _openChatSessionFromDrawer(item.sessionId),
-                                ),
-                                leading: CircleAvatar(
-                                  radius: 16,
-                                  backgroundColor:
-                                      color.surfaceContainerHighest,
-                                  child: AppSvgIcon(
-                                    AppSvgAsset.aiChatSparkles,
-                                    size: 15,
-                                    color: selected
-                                        ? color.primary
-                                        : color.onSurfaceVariant,
-                                  ),
-                                ),
-                                title: Text(
-                                  item.title,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                                subtitle: Text(
-                                  item.preview.isEmpty
-                                      ? "No preview"
-                                      : item.preview,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                trailing: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: <Widget>[
-                                    if (_pinnedChatSessionIds
-                                        .contains(item.sessionId)) ...<Widget>[
-                                      Icon(
-                                        Icons.push_pin,
-                                        size: 14,
-                                        color: color.primary,
-                                      ),
-                                      const SizedBox(width: 4),
-                                    ],
-                                    Text(
-                                      _formatChatHistoryTime(item.updatedAt),
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: color.onSurfaceVariant,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 6),
-                                    _buildChatSessionPopupButton(
-                                      item: item,
-                                      color: color,
-                                      iconSize: 18,
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 6,
-                                        vertical: 6,
-                                      ),
-                                      compact: true,
-                                    ),
-                                  ],
-                                ),
-                              );
-                            },
                           ),
+                        ),
+                      )
+                    : _chatHistoryLoading && _chatHistory.isEmpty
+                        ? const Center(child: CircularProgressIndicator())
+                        : _chatHistory.isEmpty
+                            ? Center(
+                                child: Text(
+                                  "No previous chats yet.",
+                                  style: TextStyle(
+                                    color: color.onSurfaceVariant,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              )
+                            : ListView.separated(
+                                padding: const EdgeInsets.fromLTRB(8, 4, 8, 12),
+                                itemCount: _chatHistory.length,
+                                separatorBuilder: (_, __) =>
+                                    const SizedBox(height: 2),
+                                itemBuilder: (BuildContext context, int index) {
+                                  final _ChatHistoryItem item =
+                                      _chatHistory[index];
+                                  final bool selected =
+                                      item.sessionId == _selectedChatSessionId;
+                                  return ListTile(
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(14),
+                                    ),
+                                    selected: selected,
+                                    selectedTileColor: color.primaryContainer
+                                        .withValues(alpha: 0.35),
+                                    onTap: () => unawaited(
+                                      _openChatSessionFromDrawer(
+                                          item.sessionId),
+                                    ),
+                                    leading: CircleAvatar(
+                                      radius: 16,
+                                      backgroundColor:
+                                          color.surfaceContainerHighest,
+                                      child: AppSvgIcon(
+                                        AppSvgAsset.aiChatSparkles,
+                                        size: 15,
+                                        color: selected
+                                            ? color.primary
+                                            : color.onSurfaceVariant,
+                                      ),
+                                    ),
+                                    title: Text(
+                                      item.title,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                    subtitle: Text(
+                                      item.preview.isEmpty
+                                          ? "No preview"
+                                          : item.preview,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    trailing: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: <Widget>[
+                                        if (_pinnedChatSessionIds.contains(
+                                            item.sessionId)) ...<Widget>[
+                                          Icon(
+                                            Icons.push_pin,
+                                            size: 14,
+                                            color: color.primary,
+                                          ),
+                                          const SizedBox(width: 4),
+                                        ],
+                                        Text(
+                                          _formatChatHistoryTime(
+                                              item.updatedAt),
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: color.onSurfaceVariant,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 6),
+                                        _buildChatSessionPopupButton(
+                                          item: item,
+                                          color: color,
+                                          iconSize: 18,
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 6,
+                                            vertical: 6,
+                                          ),
+                                          compact: true,
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                },
+                              ),
               ),
               _buildDrawerFooterAccount(context),
             ],
@@ -2377,7 +2593,12 @@ class _HomeShellState extends State<_HomeShell> {
               labelBehavior: NavigationDestinationLabelBehavior.alwaysHide,
               selectedIndex: selectedBottomIndexResolved,
               onDestinationSelected: (int i) {
-                _setIndex(bottomTabs[i].pageIndex);
+                final _BottomMenuTab target = bottomTabs[i];
+                if (target.pageIndex == _chatPage && target.locked) {
+                  unawaited(_openChatFromNavigationIntent());
+                  return;
+                }
+                _setIndex(target.pageIndex);
               },
               destinations: bottomTabs
                   .map(
@@ -2409,6 +2630,7 @@ class _BottomMenuTab {
     this.iconAsset,
     this.iconData,
     this.selectedIconData,
+    this.locked = false,
   }) : assert(iconAsset != null || iconData != null);
 
   final int pageIndex;
@@ -2416,6 +2638,7 @@ class _BottomMenuTab {
   final IconData? iconData;
   final IconData? selectedIconData;
   final String label;
+  final bool locked;
 }
 
 class _ChatHistoryItem {
