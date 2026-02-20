@@ -1,0 +1,25 @@
+# Flutter
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.env
+
+# Node / Prisma
+node_modules/
+pnpm-lock.yaml
+yarn.lock
+
+# Backend runtime artifacts
+apps/backend/backend_run_stdout.log
+apps/backend/backend_run_stderr.log
+
+# IDE
+.idea/
+.vscode/

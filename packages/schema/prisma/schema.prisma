@@ -1,0 +1,629 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum AuthProvider {
+  apple
+  google
+  phone
+}
+
+enum HouseholdRole {
+  OWNER
+  PARENT
+  FAMILY_VIEWER
+  CAREGIVER
+}
+
+enum MemberStatus {
+  ACTIVE
+  INVITED
+  REMOVED
+}
+
+enum EventType {
+  FORMULA
+  BREASTFEED
+  SLEEP
+  PEE
+  POO
+  GROWTH
+  MEMO
+  SYMPTOM
+  MEDICATION
+}
+
+enum EventSource {
+  VOICE
+  TEXT
+  MANUAL
+  IMPORT
+}
+
+enum VoiceClipStatus {
+  PARSED
+  CONFIRMED
+  FAILED
+}
+
+enum ReportPeriodType {
+  DAILY
+  WEEKLY
+}
+
+enum AiTone {
+  FRIENDLY
+  NEUTRAL
+  FORMAL
+  BRIEF
+  COACH
+}
+
+enum PhotoVisibility {
+  HOUSEHOLD
+  BABY_SCOPED
+}
+
+enum SubscriptionPlan {
+  PHOTO_SHARE
+  AI_ONLY
+  AI_PHOTO
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  TRIALING
+}
+
+enum ConsentType {
+  TERMS
+  PRIVACY
+  DATA_PROCESSING
+  COMMUNITY_UPLOAD
+  AD_TARGETING
+  LOCATION_BASED
+  PHOTO_SHARE
+}
+
+enum AiBillingMode {
+  PAID
+  GRACE
+}
+
+enum CreditGrantType {
+  SUBSCRIPTION_MONTHLY
+}
+
+enum ChatSessionStatus {
+  ACTIVE
+  CLOSED
+}
+
+model User {
+  id              String             @id @default(uuid())
+  provider        AuthProvider
+  providerUid     String?
+  phone           String?
+  name            String
+  createdAt       DateTime           @default(now())
+  ownedHouseholds Household[]        @relation("HouseholdOwner")
+  memberships     HouseholdMember[]
+  consents        Consent[]
+  personaProfile  PersonaProfile?
+  aiToneProfile   AiToneProfile?
+  eventsCreated   Event[]            @relation("EventCreator")
+  invitesSent     Invite[]           @relation("InviteSender")
+  photosUploaded  PhotoAsset[]       @relation("PhotoUploader")
+  auditLogs       AuditLog[]         @relation("AuditActor")
+  creditWallet    UserCreditWallet?
+  aiUsageLogs     AiUsageLog[]
+  creditGrants    UserCreditGrantLedger[]
+  chatSessions    ChatSession[]
+  chatMessages    ChatMessage[]
+
+  @@unique([provider, providerUid])
+  @@unique([phone])
+}
+
+model Household {
+  id             String           @id @default(uuid())
+  ownerUserId    String
+  createdAt      DateTime         @default(now())
+  ownerUser      User             @relation("HouseholdOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
+  members        HouseholdMember[]
+  babies         Baby[]
+  voiceClips     VoiceClip[]
+  reports        Report[]
+  albums         Album[]
+  invites        Invite[]
+  subscription   Subscription?
+  auditLogs      AuditLog[]
+  aiUsageLogs    AiUsageLog[]
+  creditGrants   UserCreditGrantLedger[]
+  chatSessions   ChatSession[]
+  chatMessages   ChatMessage[]
+
+  @@index([ownerUserId])
+}
+
+model HouseholdMember {
+  id          String        @id @default(uuid())
+  householdId String
+  userId      String
+  role        HouseholdRole
+  status      MemberStatus  @default(ACTIVE)
+  createdAt   DateTime      @default(now())
+  household   Household     @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([householdId, userId])
+  @@index([householdId])
+  @@index([userId])
+}
+
+model Baby {
+  id          String   @id @default(uuid())
+  householdId String
+  name        String
+  birthDate   DateTime
+  sex         String?
+  createdAt   DateTime @default(now())
+  household   Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  events      Event[]
+  voiceClips  VoiceClip[]
+  reports     Report[]
+  albums      Album[]
+  aiUsageLogs AiUsageLog[]
+  chatSessions ChatSession[]
+  chatMessages ChatMessage[]
+  sleepEvents SleepEvent[]
+  intakeEvents IntakeEvent[]
+  temperatureEvents TemperatureEvent[]
+  diaperEvents DiaperEvent[]
+  medicationEvents MedicationEvent[]
+  visitEvents VisitEvent[]
+  activityEvents ActivityEvent[]
+  noteEvents NoteEvent[]
+  dailySummaries DailySummary[]
+  weeklySummaries WeeklySummary[]
+  monthlyMedicalSummaries MonthlyMedicalSummary[]
+
+  @@index([householdId])
+}
+
+model Event {
+  id           String      @id @default(uuid())
+  babyId        String
+  type          EventType
+  startTime     DateTime
+  endTime       DateTime?
+  valueJson     Json
+  metadataJson  Json?
+  source        EventSource
+  createdBy     String
+  createdAt     DateTime    @default(now())
+  baby          Baby        @relation(fields: [babyId], references: [id], onDelete: Cascade)
+  creator       User        @relation("EventCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+
+  @@index([babyId, startTime(sort: Desc)])
+  @@index([babyId, type, startTime(sort: Desc)])
+}
+
+model VoiceClip {
+  id               String         @id @default(uuid())
+  householdId      String
+  babyId           String
+  audioUrl         String
+  transcript       String?
+  parsedEventsJson Json?
+  confidenceJson   Json?
+  status           VoiceClipStatus @default(PARSED)
+  createdAt        DateTime       @default(now())
+  household        Household      @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  baby             Baby           @relation(fields: [babyId], references: [id], onDelete: Cascade)
+
+  @@index([householdId, createdAt(sort: Desc)])
+}
+
+model Report {
+  id          String           @id @default(uuid())
+  householdId String
+  babyId      String
+  periodType  ReportPeriodType
+  periodStart DateTime
+  periodEnd   DateTime
+  metricsJson Json
+  summaryText String
+  modelVersion String
+  createdAt   DateTime         @default(now())
+  household   Household        @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  baby        Baby             @relation(fields: [babyId], references: [id], onDelete: Cascade)
+
+  @@index([householdId, babyId, periodType, periodStart])
+}
+
+model PersonaProfile {
+  id          String   @id @default(uuid())
+  userId      String   @unique
+  personaJson Json
+  updatedAt   DateTime @updatedAt
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model AiToneProfile {
+  id               String   @id @default(uuid())
+  userId           String   @unique
+  tone             AiTone   @default(NEUTRAL)
+  verbosityLevel   Int      @default(2)
+  safetyStrictness Int      @default(2)
+  updatedAt        DateTime @updatedAt
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Album {
+  id          String   @id @default(uuid())
+  householdId String
+  babyId      String?
+  title       String
+  monthKey    String
+  createdAt   DateTime @default(now())
+  household   Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  baby        Baby?     @relation(fields: [babyId], references: [id], onDelete: SetNull)
+  photos      PhotoAsset[]
+
+  @@index([householdId, monthKey])
+}
+
+model PhotoAsset {
+  id             String          @id @default(uuid())
+  albumId        String
+  uploaderUserId String
+  variantsJson   Json
+  visibility     PhotoVisibility @default(HOUSEHOLD)
+  downloadable   Boolean         @default(false)
+  createdAt      DateTime        @default(now())
+  album          Album           @relation(fields: [albumId], references: [id], onDelete: Cascade)
+  uploader       User            @relation("PhotoUploader", fields: [uploaderUserId], references: [id], onDelete: Restrict)
+
+  @@index([albumId, createdAt(sort: Desc)])
+}
+
+model Invite {
+  id          String        @id @default(uuid())
+  householdId String
+  token       String        @unique
+  role        HouseholdRole
+  expiresAt   DateTime
+  invitedBy   String
+  createdAt   DateTime      @default(now())
+  usedAt      DateTime?
+  household   Household     @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  sender      User          @relation("InviteSender", fields: [invitedBy], references: [id], onDelete: Restrict)
+
+  @@index([householdId, expiresAt])
+}
+
+model Subscription {
+  id          String              @id @default(uuid())
+  householdId String              @unique
+  plan        SubscriptionPlan
+  status      SubscriptionStatus  @default(ACTIVE)
+  renewAt     DateTime?
+  createdAt   DateTime            @default(now())
+  household   Household           @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  creditGrants UserCreditGrantLedger[]
+}
+
+model Consent {
+  id         String      @id @default(uuid())
+  userId     String
+  type       ConsentType
+  granted    Boolean
+  grantedAt  DateTime    @default(now())
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  householdId String
+  actorUserId String?
+  action     String
+  targetType String
+  targetId   String?
+  payloadJson Json?
+  createdAt  DateTime @default(now())
+  household  Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  actor      User?     @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([householdId, createdAt(sort: Desc)])
+}
+
+model UserCreditWallet {
+  id                   String   @id @default(uuid())
+  userId               String   @unique
+  balanceCredits       Int      @default(0)
+  lifetimeGrantedCredits Int    @default(0)
+  lifetimeSpentCredits Int      @default(0)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model AiUsageLog {
+  id               String        @id @default(uuid())
+  userId           String
+  householdId      String
+  childId          String
+  model            String
+  promptTokens     Int
+  completionTokens Int
+  totalTokens      Int
+  chargedCredits   Int
+  billingMode      AiBillingMode
+  questionChars    Int
+  createdAt        DateTime      @default(now())
+  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  household        Household     @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  child            Baby          @relation(fields: [childId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([householdId, createdAt(sort: Desc)])
+  @@index([childId, createdAt(sort: Desc)])
+}
+
+model UserCreditGrantLedger {
+  id             String          @id @default(uuid())
+  userId         String
+  householdId    String
+  subscriptionId String?
+  grantType      CreditGrantType
+  periodKey      String
+  credits        Int
+  createdAt      DateTime        @default(now())
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  household      Household       @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  subscription   Subscription?   @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, householdId, grantType, periodKey])
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([householdId, createdAt(sort: Desc)])
+}
+
+model ChatSession {
+  id          String            @id @default(uuid())
+  userId      String
+  householdId String
+  childId     String?
+  status      ChatSessionStatus @default(ACTIVE)
+  startedAt   DateTime          @default(now())
+  endedAt     DateTime?
+  updatedAt   DateTime          @updatedAt
+  memorySummary         String?
+  memorySummarizedCount Int      @default(0)
+  memorySummaryUpdatedAt DateTime?
+  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  household   Household         @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  child       Baby?             @relation(fields: [childId], references: [id], onDelete: SetNull)
+  messages    ChatMessage[]
+
+  @@index([userId, startedAt(sort: Desc)])
+  @@index([householdId, startedAt(sort: Desc)])
+  @@index([childId, startedAt(sort: Desc)])
+}
+
+model ChatMessage {
+  id          String   @id @default(uuid())
+  sessionId   String
+  userId      String
+  householdId String
+  childId     String?
+  role        String
+  content     String
+  intent      String?
+  contextJson Json?
+  createdAt   DateTime @default(now())
+  session     ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  household   Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  child       Baby?    @relation(fields: [childId], references: [id], onDelete: SetNull)
+
+  @@index([sessionId, createdAt])
+  @@index([userId, createdAt(sort: Desc)])
+}
+
+model SleepEvent {
+  id                   String   @id @default(uuid())
+  childId              String
+  startAt              DateTime
+  endAt                DateTime?
+  note                 String?
+  endIsEstimated       Boolean  @default(false)
+  estimationMethod     String?
+  estimationConfidence Int?
+  sleepType            String   @default("unknown")
+  sleepTypeSource      String   @default("auto")
+  qualityScore         Int?
+  wakeCount            Int?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  child                Baby     @relation(fields: [childId], references: [id], onDelete: Cascade)
+
+  @@index([childId, startAt(sort: Desc)])
+}
+
+model IntakeEvent {
+  id                   String   @id @default(uuid())
+  childId              String
+  startAt              DateTime
+  endAt                DateTime?
+  note                 String?
+  endIsEstimated       Boolean  @default(false)
+  estimationMethod     String?
+  estimationConfidence Int?
+  intakeType           String
+  amountMl             Int?
+  amountText           String?
+  side                 String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  child                Baby     @relation(fields: [childId], references: [id], onDelete: Cascade)
+
+  @@index([childId, startAt(sort: Desc)])
+}
+
+model TemperatureEvent {
+  id           String   @id @default(uuid())
+  childId      String
+  measuredAt   DateTime
+  tempC        Decimal  @db.Decimal(4, 1)
+  method       String   @default("ear")
+  methodSource String   @default("default")
+  note         String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  child        Baby     @relation(fields: [childId], references: [id], onDelete: Cascade)
+
+  @@index([childId, measuredAt(sort: Desc)])
+}
+
+model DiaperEvent {
+  id        String   @id @default(uuid())
+  childId   String
+  at        DateTime
+  pee       Boolean?
+  poo       Boolean?
+  pooType   String?
+  color     String?
+  texture   String?
+  note      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  child     Baby     @relation(fields: [childId], references: [id], onDelete: Cascade)
+
+  @@index([childId, at(sort: Desc)])
+}
+
+model MedicationEvent {
+  id           String   @id @default(uuid())
+  childId      String
+  at           DateTime
+  medName      String
+  doseText     String?
+  route        String?
+  isPrescribed Boolean?
+  note         String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  child        Baby     @relation(fields: [childId], references: [id], onDelete: Cascade)
+
+  @@index([childId, at(sort: Desc)])
+}
+
+model VisitEvent {
+  id           String   @id @default(uuid())
+  childId      String
+  at           DateTime
+  facilityType String?
+  reason       String?
+  diagnosisText String?
+  treatmentText String?
+  note         String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  child        Baby     @relation(fields: [childId], references: [id], onDelete: Cascade)
+
+  @@index([childId, at(sort: Desc)])
+}
+
+model ActivityEvent {
+  id          String   @id @default(uuid())
+  childId     String
+  activityType String
+  startAt     DateTime
+  endAt       DateTime?
+  durationSec Int?
+  note        String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  child       Baby     @relation(fields: [childId], references: [id], onDelete: Cascade)
+
+  @@index([childId, startAt(sort: Desc)])
+}
+
+model NoteEvent {
+  id        String   @id @default(uuid())
+  childId   String
+  at        DateTime
+  content   String
+  tagsJson  Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  child     Baby     @relation(fields: [childId], references: [id], onDelete: Cascade)
+
+  @@index([childId, at(sort: Desc)])
+}
+
+model DailySummary {
+  id                  String   @id @default(uuid())
+  childId             String
+  date                DateTime
+  sleepTotalMin       Int?
+  sleepLongestMin     Int?
+  sleepNightMin       Int?
+  sleepNapMin         Int?
+  intakeCount         Int?
+  formulaTotalMl      Int?
+  intakeTotalMl       Int?
+  diaperPeeCount      Int?
+  diaperPooCount      Int?
+  diarrheaCount       Int?
+  tempMaxC            Decimal? @db.Decimal(4, 1)
+  tempMinC            Decimal? @db.Decimal(4, 1)
+  activityTotalMin    Int?
+  missingnessJson     Json?
+  estimatedFieldsJson Json?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  child               Baby     @relation(fields: [childId], references: [id], onDelete: Cascade)
+
+  @@unique([childId, date])
+  @@index([childId, date(sort: Desc)])
+}
+
+model WeeklySummary {
+  id                  String   @id @default(uuid())
+  childId             String
+  weekStartDate       DateTime
+  metricsJson         Json?
+  missingnessJson     Json?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  child               Baby     @relation(fields: [childId], references: [id], onDelete: Cascade)
+
+  @@unique([childId, weekStartDate])
+  @@index([childId, weekStartDate(sort: Desc)])
+}
+
+model MonthlyMedicalSummary {
+  id                  String   @id @default(uuid())
+  childId             String
+  month               DateTime
+  medicalTimelineJson Json?
+  missingnessJson     Json?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  child               Baby     @relation(fields: [childId], references: [id], onDelete: Cascade)
+
+  @@unique([childId, month])
+  @@index([childId, month(sort: Desc)])
+}
+

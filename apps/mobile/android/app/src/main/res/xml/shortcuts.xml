@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <capability android:name="actions.intent.GET_THING">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.example.babyai"
+            android:targetClass="com.example.babyai.MainActivity"
+            android:data="babyai://assistant/query">
+            <parameter android:name="thing.name" android:key="query" />
+        </intent>
+    </capability>
+
+    <capability android:name="actions.intent.OPEN_APP_FEATURE">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.example.babyai"
+            android:targetClass="com.example.babyai.MainActivity"
+            android:data="babyai://assistant/open">
+            <parameter android:name="feature" android:key="feature" />
+        </intent>
+    </capability>
+
+    <shortcut
+        android:shortcutId="feature_record_formula"
+        android:enabled="true"
+        android:shortcutShortLabel="@string/shortcut_record_formula"
+        android:shortcutLongLabel="@string/shortcut_record_formula">
+        <capability-binding android:key="actions.intent.OPEN_APP_FEATURE">
+            <parameter-binding android:key="feature" android:value="formula" />
+        </capability-binding>
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="feature_record_breastfeed"
+        android:enabled="true"
+        android:shortcutShortLabel="@string/shortcut_record_breastfeed"
+        android:shortcutLongLabel="@string/shortcut_record_breastfeed">
+        <capability-binding android:key="actions.intent.OPEN_APP_FEATURE">
+            <parameter-binding android:key="feature" android:value="breastfeed" />
+        </capability-binding>
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="feature_record_weaning"
+        android:enabled="true"
+        android:shortcutShortLabel="@string/shortcut_record_weaning"
+        android:shortcutLongLabel="@string/shortcut_record_weaning">
+        <capability-binding android:key="actions.intent.OPEN_APP_FEATURE">
+            <parameter-binding android:key="feature" android:value="weaning" />
+        </capability-binding>
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="feature_record_diaper"
+        android:enabled="true"
+        android:shortcutShortLabel="@string/shortcut_record_diaper"
+        android:shortcutLongLabel="@string/shortcut_record_diaper">
+        <capability-binding android:key="actions.intent.OPEN_APP_FEATURE">
+            <parameter-binding android:key="feature" android:value="diaper" />
+        </capability-binding>
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="feature_record_sleep"
+        android:enabled="true"
+        android:shortcutShortLabel="@string/shortcut_record_sleep"
+        android:shortcutLongLabel="@string/shortcut_record_sleep">
+        <capability-binding android:key="actions.intent.OPEN_APP_FEATURE">
+            <parameter-binding android:key="feature" android:value="sleep" />
+        </capability-binding>
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="feature_record_medication"
+        android:enabled="true"
+        android:shortcutShortLabel="@string/shortcut_record_medication"
+        android:shortcutLongLabel="@string/shortcut_record_medication">
+        <capability-binding android:key="actions.intent.OPEN_APP_FEATURE">
+            <parameter-binding android:key="feature" android:value="medication" />
+        </capability-binding>
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="feature_open_chat"
+        android:enabled="true"
+        android:shortcutShortLabel="@string/shortcut_open_chat"
+        android:shortcutLongLabel="@string/shortcut_open_chat">
+        <capability-binding android:key="actions.intent.OPEN_APP_FEATURE">
+            <parameter-binding android:key="feature" android:value="chat" />
+        </capability-binding>
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="feature_last_feeding"
+        android:enabled="true"
+        android:shortcutShortLabel="@string/shortcut_last_feeding"
+        android:shortcutLongLabel="@string/shortcut_last_feeding">
+        <capability-binding android:key="actions.intent.OPEN_APP_FEATURE">
+            <parameter-binding android:key="feature" android:value="last_feeding" />
+        </capability-binding>
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="feature_recent_sleep"
+        android:enabled="true"
+        android:shortcutShortLabel="@string/shortcut_recent_sleep"
+        android:shortcutLongLabel="@string/shortcut_recent_sleep">
+        <capability-binding android:key="actions.intent.OPEN_APP_FEATURE">
+            <parameter-binding android:key="feature" android:value="recent_sleep" />
+        </capability-binding>
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="feature_last_diaper"
+        android:enabled="true"
+        android:shortcutShortLabel="@string/shortcut_last_diaper"
+        android:shortcutLongLabel="@string/shortcut_last_diaper">
+        <capability-binding android:key="actions.intent.OPEN_APP_FEATURE">
+            <parameter-binding android:key="feature" android:value="last_diaper" />
+        </capability-binding>
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="feature_last_medication"
+        android:enabled="true"
+        android:shortcutShortLabel="@string/shortcut_last_medication"
+        android:shortcutLongLabel="@string/shortcut_last_medication">
+        <capability-binding android:key="actions.intent.OPEN_APP_FEATURE">
+            <parameter-binding android:key="feature" android:value="last_medication" />
+        </capability-binding>
+    </shortcut>
+</shortcuts>

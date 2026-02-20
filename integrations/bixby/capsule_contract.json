@@ -1,0 +1,37 @@
+{
+  "capsule": "babyai.ai",
+  "version": "0.1.0",
+  "actions": [
+    {
+      "name": "GetLastPooTime",
+      "description": "마지막 대변 기록 시각 조회",
+      "endpoint": "/api/v1/assistants/bixby/query",
+      "payload": {
+        "capsule_action": "GetLastPooTime",
+        "baby_id": "baby_123",
+        "tone": "friendly"
+      }
+    },
+    {
+      "name": "GetNextFeedingEta",
+      "description": "다음 수유 남은 시간 조회",
+      "endpoint": "/api/v1/assistants/bixby/query",
+      "payload": {
+        "capsule_action": "GetNextFeedingEta",
+        "baby_id": "baby_123",
+        "tone": "formal"
+      }
+    },
+    {
+      "name": "GetTodaySummary",
+      "description": "오늘 요약 조회",
+      "endpoint": "/api/v1/assistants/bixby/query",
+      "payload": {
+        "capsule_action": "GetTodaySummary",
+        "baby_id": "baby_123",
+        "tone": "neutral"
+      }
+    }
+  ]
+}
+
