@@ -296,6 +296,7 @@ class _HomeShellState extends State<_HomeShell> {
   final Map<String, String> _chatRenamedTitles = <String, String>{};
 
   ReportRange _reportRange = ReportRange.daily;
+  bool _showInlineReportCompare = false;
   DateTime _sharedScopeAnchorDateLocal = DateTime.now();
   MarketSection _marketSection = MarketSection.used;
   CommunitySection _communitySection = CommunitySection.free;
@@ -1360,6 +1361,7 @@ class _HomeShellState extends State<_HomeShell> {
           key: _reportPageKey,
           initialRange: _reportRange,
           initialFocusDateLocal: _sharedScopeAnchorDateLocal,
+          inlineComparisonRange: _showInlineReportCompare ? _reportRange : null,
         );
       case _photosPage:
         return SettingsPage(
@@ -1978,292 +1980,12 @@ class _HomeShellState extends State<_HomeShell> {
   }
 
   Future<void> _openReportComparePicker() async {
-    if (_index != _statisticsPage) {
+    if (_index != _statisticsPage || !mounted) {
       return;
     }
-    final ReportRange? picked = await showModalBottomSheet<ReportRange>(
-      context: context,
-      showDragHandle: true,
-      builder: (BuildContext context) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                ListTile(
-                  leading: const Icon(Icons.today_outlined),
-                  title: Text(
-                    tr(
-                      context,
-                      ko: "일자별 비교",
-                      en: "Daily comparison",
-                      es: "Comparacion diaria",
-                    ),
-                  ),
-                  onTap: () => Navigator.of(context).pop(ReportRange.daily),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.view_week_outlined),
-                  title: Text(
-                    tr(
-                      context,
-                      ko: "주별 비교",
-                      en: "Weekly comparison",
-                      es: "Comparacion semanal",
-                    ),
-                  ),
-                  onTap: () => Navigator.of(context).pop(ReportRange.weekly),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.calendar_month_outlined),
-                  title: Text(
-                    tr(
-                      context,
-                      ko: "월별 비교",
-                      en: "Monthly comparison",
-                      es: "Comparacion mensual",
-                    ),
-                  ),
-                  onTap: () => Navigator.of(context).pop(ReportRange.monthly),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-    if (picked == null || !mounted) {
-      return;
-    }
-    await _openReportCompareResult(picked);
-  }
-
-  Future<void> _openReportCompareResult(ReportRange range) async {
-    final ReportPageState? reportState = _reportPageKey.currentState;
-    if (reportState == null) {
-      return;
-    }
-    await showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (BuildContext context) {
-        final ColorScheme color = Theme.of(context).colorScheme;
-        return SafeArea(
-          child: FutureBuilder<ReportRangeComparison>(
-            future: reportState.buildRangeComparison(range),
-            builder: (
-              BuildContext context,
-              AsyncSnapshot<ReportRangeComparison> snapshot,
-            ) {
-              if (snapshot.connectionState != ConnectionState.done) {
-                return const SizedBox(
-                  height: 220,
-                  child: Center(child: CircularProgressIndicator()),
-                );
-              }
-              if (!snapshot.hasData) {
-                return SizedBox(
-                  height: 220,
-                  child: Center(
-                    child: Text(
-                      tr(
-                        context,
-                        ko: "비교 데이터를 불러오지 못했습니다.",
-                        en: "Failed to load comparison.",
-                        es: "No se pudo cargar la comparacion.",
-                      ),
-                    ),
-                  ),
-                );
-              }
-              final ReportRangeComparison compare = snapshot.data!;
-              final ReportRangeSnapshot current = compare.current;
-              final ReportRangeSnapshot previous = compare.previous;
-              return Padding(
-                padding: const EdgeInsets.fromLTRB(16, 10, 16, 18),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                      tr(
-                        context,
-                        ko: "기간 비교",
-                        en: "Period Comparison",
-                        es: "Comparacion de periodos",
-                      ),
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      tr(
-                        context,
-                        ko: "현재: ${current.label}",
-                        en: "Current: ${current.label}",
-                        es: "Actual: ${current.label}",
-                      ),
-                      style: TextStyle(
-                        color: color.onSurfaceVariant,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    Text(
-                      tr(
-                        context,
-                        ko: "비교: ${previous.label}",
-                        en: "Compared: ${previous.label}",
-                        es: "Comparado: ${previous.label}",
-                      ),
-                      style: TextStyle(
-                        color: color.onSurfaceVariant,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    _comparisonMetricRow(
-                      context,
-                      label: tr(context, ko: "총 수면", en: "Sleep", es: "Sueno"),
-                      current: _formatMinutes(current.sleepMinutes),
-                      previous: _formatMinutes(previous.sleepMinutes),
-                      delta: _formatDelta(
-                          current.sleepMinutes, previous.sleepMinutes),
-                    ),
-                    _comparisonMetricRow(
-                      context,
-                      label:
-                          tr(context, ko: "분유량", en: "Formula", es: "Formula"),
-                      current: "${current.formulaMl}ml",
-                      previous: "${previous.formulaMl}ml",
-                      delta:
-                          _formatDelta(current.formulaMl, previous.formulaMl),
-                    ),
-                    _comparisonMetricRow(
-                      context,
-                      label: tr(
-                        context,
-                        ko: "수유 횟수",
-                        en: "Feeds",
-                        es: "Tomas",
-                      ),
-                      current: "${current.feedCount}",
-                      previous: "${previous.feedCount}",
-                      delta:
-                          _formatDelta(current.feedCount, previous.feedCount),
-                    ),
-                    _comparisonMetricRow(
-                      context,
-                      label: tr(context, ko: "소변", en: "Pee", es: "Pee"),
-                      current: "${current.peeCount}",
-                      previous: "${previous.peeCount}",
-                      delta: _formatDelta(current.peeCount, previous.peeCount),
-                    ),
-                    _comparisonMetricRow(
-                      context,
-                      label: tr(context, ko: "대변", en: "Poo", es: "Poo"),
-                      current: "${current.pooCount}",
-                      previous: "${previous.pooCount}",
-                      delta: _formatDelta(current.pooCount, previous.pooCount),
-                    ),
-                    _comparisonMetricRow(
-                      context,
-                      label: tr(
-                        context,
-                        ko: "투약",
-                        en: "Medication",
-                        es: "Medicación",
-                      ),
-                      current: "${current.medicationCount}",
-                      previous: "${previous.medicationCount}",
-                      delta: _formatDelta(
-                        current.medicationCount,
-                        previous.medicationCount,
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _comparisonMetricRow(
-    BuildContext context, {
-    required String label,
-    required String current,
-    required String previous,
-    required String delta,
-  }) {
-    final ColorScheme color = Theme.of(context).colorScheme;
-    Color deltaColor = color.onSurfaceVariant;
-    if (delta.startsWith("+")) {
-      deltaColor = const Color(0xFF2E7D32);
-    } else if (delta.startsWith("-")) {
-      deltaColor = const Color(0xFFC62828);
-    }
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        children: <Widget>[
-          Expanded(
-            flex: 3,
-            child: Text(
-              label,
-              style: const TextStyle(fontWeight: FontWeight.w700),
-            ),
-          ),
-          Expanded(
-            flex: 2,
-            child: Text(
-              current,
-              textAlign: TextAlign.right,
-            ),
-          ),
-          Expanded(
-            flex: 2,
-            child: Text(
-              previous,
-              textAlign: TextAlign.right,
-              style: TextStyle(color: color.onSurfaceVariant),
-            ),
-          ),
-          Expanded(
-            child: Text(
-              delta,
-              textAlign: TextAlign.right,
-              style: TextStyle(fontWeight: FontWeight.w700, color: deltaColor),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  String _formatDelta(int current, int previous) {
-    final int diff = current - previous;
-    if (diff > 0) {
-      return "+$diff";
-    }
-    if (diff < 0) {
-      return "$diff";
-    }
-    return "0";
-  }
-
-  String _formatMinutes(int minutes) {
-    final int hour = minutes ~/ 60;
-    final int min = minutes % 60;
-    if (hour <= 0) {
-      return "${min}m";
-    }
-    return "${hour}h ${min}m";
+    setState(() {
+      _showInlineReportCompare = !_showInlineReportCompare;
+    });
   }
 
   void _onHomeBabyNameChanged(String name) {
@@ -2522,7 +2244,7 @@ class _HomeShellState extends State<_HomeShell> {
               onTap: () => _setReportRange(ReportRange.monthly),
             ),
             _HeaderChoice(
-              selected: false,
+              selected: _showInlineReportCompare,
               label: tr(context, ko: "비교", en: "Compare", es: "Comparar"),
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
               onTap: () => unawaited(_openReportComparePicker()),

@@ -294,7 +294,7 @@ class RecordingPageState extends State<RecordingPage> {
       case _TimerActivity.sleep:
         return "수면";
       case _TimerActivity.formula:
-        return "수유";
+        return "분유";
       case _TimerActivity.breastfeed:
         return "모유";
       case _TimerActivity.diaper:
@@ -416,7 +416,7 @@ class RecordingPageState extends State<RecordingPage> {
   String _dashboardTileLabel(HomeTileType tile) {
     switch (tile) {
       case HomeTileType.formula:
-        return "수유";
+        return "분유";
       case HomeTileType.breastfeed:
         return "모유";
       case HomeTileType.sleep:
@@ -608,11 +608,11 @@ class RecordingPageState extends State<RecordingPage> {
             MapEntry<String, String>("진행 중 시작",
                 _openStartedAgo(HomeTileType.formula, snapshot) ?? "-"),
           MapEntry<String, String>(
-            isDay ? "총 수유량" : "1일 평균 수유량",
+            isDay ? "총 분유량" : "1일 평균 분유량",
             isDay ? "${formulaTotal}ml" : "${_decimal(avgFormulaPerDay)}ml",
           ),
           MapEntry<String, String>(
-            isDay ? "수유 횟수" : "1일 평균 수유 횟수",
+            isDay ? "분유 횟수" : "1일 평균 분유 횟수",
             isDay ? "$feedingsCount" : _decimal(avgFeedingsPerDay),
           ),
           MapEntry<String, String>(

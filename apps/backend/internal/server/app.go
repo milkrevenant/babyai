@@ -90,6 +90,8 @@ func (a *App) Router() *gin.Engine {
 	}))
 
 	router.GET("/health", a.health)
+	router.GET("/dev/local-token", a.issueLocalDevToken)
+	router.POST("/dev/local-token", a.issueLocalDevToken)
 
 	api := router.Group(a.cfg.APIPrefix)
 	api.Use(a.authMiddleware())
@@ -137,6 +139,83 @@ func (a *App) health(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"status":  "ok",
 		"service": "babyai-api",
+	})
+}
+
+func (a *App) issueLocalDevToken(c *gin.Context) {
+	if !strings.EqualFold(strings.TrimSpace(a.cfg.AppEnv), "local") {
+		writeError(c, http.StatusNotFound, "Not found")
+		return
+	}
+
+	secret := strings.TrimSpace(a.cfg.JWTSecret)
+	if secret == "" {
+		writeError(c, http.StatusInternalServerError, "JWT_SECRET is not configured")
+		return
+	}
+
+	sub := strings.TrimSpace(c.Query("sub"))
+	if sub == "" {
+		sub = uuid.NewString()
+	}
+	if _, err := uuid.Parse(sub); err != nil {
+		writeError(c, http.StatusBadRequest, "sub must be UUID format")
+		return
+	}
+
+	name := strings.TrimSpace(c.DefaultQuery("name", "Local Dev User"))
+	if name == "" {
+		name = "Local Dev User"
+	}
+	provider := providerFromClaim(c.DefaultQuery("provider", "google"))
+
+	if _, err := a.db.Exec(
+		c.Request.Context(),
+		`INSERT INTO "User" (id, provider, "providerUid", phone, name, "createdAt")
+		 VALUES ($1, $2, NULL, NULL, $3, NOW())
+		 ON CONFLICT (id)
+		 DO UPDATE SET provider = EXCLUDED.provider, name = EXCLUDED.name`,
+		sub,
+		provider,
+		name,
+	); err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to prepare local user")
+		return
+	}
+
+	method := jwt.GetSigningMethod(strings.TrimSpace(a.cfg.JWTAlgorithm))
+	if method == nil {
+		writeError(c, http.StatusInternalServerError, "Unsupported JWT algorithm")
+		return
+	}
+
+	claims := jwt.MapClaims{
+		"sub":      sub,
+		"provider": provider,
+		"name":     name,
+		"iat":      time.Now().UTC().Unix(),
+		"exp":      time.Now().UTC().Add(30 * 24 * time.Hour).Unix(),
+	}
+	if audience := strings.TrimSpace(a.cfg.JWTAudience); audience != "" {
+		claims["aud"] = audience
+	}
+	if issuer := strings.TrimSpace(a.cfg.JWTIssuer); issuer != "" {
+		claims["iss"] = issuer
+	}
+
+	token := jwt.NewWithClaims(method, claims)
+	signed, err := token.SignedString([]byte(secret))
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to sign local token")
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"token":          signed,
+		"sub":            sub,
+		"name":           name,
+		"provider":       provider,
+		"reference_text": "Local development token generated from backend JWT settings.",
 	})
 }
 

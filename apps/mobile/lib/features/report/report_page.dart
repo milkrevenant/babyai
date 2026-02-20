@@ -115,10 +115,12 @@ class ReportPage extends StatefulWidget {
     super.key,
     this.initialRange = ReportRange.daily,
     this.initialFocusDateLocal,
+    this.inlineComparisonRange,
   });
 
   final ReportRange initialRange;
   final DateTime? initialFocusDateLocal;
+  final ReportRange? inlineComparisonRange;
 
   @override
   State<ReportPage> createState() => ReportPageState();
@@ -140,6 +142,8 @@ class ReportPageState extends State<ReportPage> {
 
   Map<DateTime, _DayStats> _statsByDay = <DateTime, _DayStats>{};
   Map<String, dynamic>? _weeklyReport;
+  ReportRange? _inlineComparisonRange;
+  Future<ReportRangeComparison>? _inlineComparisonFuture;
 
   @override
   void initState() {
@@ -155,7 +159,16 @@ class ReportPageState extends State<ReportPage> {
       1,
     );
     _selected = widget.initialRange;
+    _setInlineComparisonRange(widget.inlineComparisonRange, refreshFuture: false);
     unawaited(_loadReports());
+  }
+
+  @override
+  void didUpdateWidget(covariant ReportPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.inlineComparisonRange != widget.inlineComparisonRange) {
+      _setInlineComparisonRange(widget.inlineComparisonRange);
+    }
   }
 
   ReportRange get selectedRange => _selected;
@@ -176,6 +189,36 @@ class ReportPageState extends State<ReportPage> {
       return;
     }
     setState(() => _selected = next);
+    _refreshInlineComparison();
+  }
+
+  void _setInlineComparisonRange(
+    ReportRange? range, {
+    bool refreshFuture = true,
+  }) {
+    _inlineComparisonRange = range;
+    if (!refreshFuture) {
+      return;
+    }
+    _refreshInlineComparison();
+  }
+
+  void _refreshInlineComparison() {
+    final ReportRange? range = _inlineComparisonRange;
+    if (range == null) {
+      if (mounted) {
+        setState(() => _inlineComparisonFuture = null);
+      } else {
+        _inlineComparisonFuture = null;
+      }
+      return;
+    }
+    final Future<ReportRangeComparison> nextFuture = buildRangeComparison(range);
+    if (mounted) {
+      setState(() => _inlineComparisonFuture = nextFuture);
+    } else {
+      _inlineComparisonFuture = nextFuture;
+    }
   }
 
   Future<void> setFocusDate(DateTime pickedDate) async {
@@ -411,6 +454,9 @@ class ReportPageState extends State<ReportPage> {
       if (mounted) {
         setState(() => _loading = false);
       }
+      if (_inlineComparisonRange != null) {
+        _refreshInlineComparison();
+      }
     }
   }
 
@@ -507,19 +553,21 @@ class ReportPageState extends State<ReportPage> {
               ),
             ),
           ],
+          if (_inlineComparisonRange != null) ...<Widget>[
+            const SizedBox(height: 10),
+            _InlineComparisonSection(
+              future: _inlineComparisonFuture,
+            ),
+          ],
           const SizedBox(height: 10),
           AnimatedSwitcher(
             duration: _kTabAnimationDuration,
             switchInCurve: Curves.easeOut,
             switchOutCurve: Curves.easeOut,
             transitionBuilder: (Widget child, Animation<double> animation) {
-              final Animation<Offset> slide = Tween<Offset>(
-                begin: const Offset(0.015, 0),
-                end: Offset.zero,
-              ).animate(animation);
               return FadeTransition(
                 opacity: animation,
-                child: SlideTransition(position: slide, child: child),
+                child: child,
               );
             },
             child: _buildBody(
@@ -1145,6 +1193,218 @@ class _MonthlyView extends StatelessWidget {
             ),
           ),
       ],
+    );
+  }
+}
+
+class _InlineComparisonSection extends StatelessWidget {
+  const _InlineComparisonSection({required this.future});
+
+  final Future<ReportRangeComparison>? future;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text(
+              tr(
+                context,
+                ko: "기간 비교",
+                en: "Period Comparison",
+                es: "Comparacion de periodos",
+              ),
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 10),
+            if (future == null)
+              const SizedBox(
+                height: 64,
+                child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+              )
+            else
+              FutureBuilder<ReportRangeComparison>(
+                future: future,
+                builder: (
+                  BuildContext context,
+                  AsyncSnapshot<ReportRangeComparison> snapshot,
+                ) {
+                  if (snapshot.connectionState != ConnectionState.done) {
+                    return const SizedBox(
+                      height: 64,
+                      child:
+                          Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                    );
+                  }
+                  if (!snapshot.hasData) {
+                    return SizedBox(
+                      height: 64,
+                      child: Center(
+                        child: Text(
+                          tr(
+                            context,
+                            ko: "비교 데이터를 불러오지 못했습니다.",
+                            en: "Failed to load comparison.",
+                            es: "No se pudo cargar la comparacion.",
+                          ),
+                        ),
+                      ),
+                    );
+                  }
+
+                  final ReportRangeComparison compare = snapshot.data!;
+                  final ReportRangeSnapshot current = compare.current;
+                  final ReportRangeSnapshot previous = compare.previous;
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        tr(
+                          context,
+                          ko: "현재: ${current.label}",
+                          en: "Current: ${current.label}",
+                          es: "Actual: ${current.label}",
+                        ),
+                        style: TextStyle(
+                          color: color.onSurfaceVariant,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      Text(
+                        tr(
+                          context,
+                          ko: "비교: ${previous.label}",
+                          en: "Compared: ${previous.label}",
+                          es: "Comparado: ${previous.label}",
+                        ),
+                        style: TextStyle(
+                          color: color.onSurfaceVariant,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      _ComparisonMetricRow(
+                        label: tr(context, ko: "총 수면", en: "Sleep", es: "Sueno"),
+                        current: _formatComparisonMinutes(current.sleepMinutes),
+                        previous: _formatComparisonMinutes(previous.sleepMinutes),
+                        delta: _formatComparisonDelta(
+                          current.sleepMinutes,
+                          previous.sleepMinutes,
+                        ),
+                      ),
+                      _ComparisonMetricRow(
+                        label: tr(context, ko: "분유량", en: "Formula", es: "Formula"),
+                        current: "${current.formulaMl}ml",
+                        previous: "${previous.formulaMl}ml",
+                        delta: _formatComparisonDelta(
+                          current.formulaMl,
+                          previous.formulaMl,
+                        ),
+                      ),
+                      _ComparisonMetricRow(
+                        label: tr(context, ko: "분유 횟수", en: "Feeds", es: "Tomas"),
+                        current: "${current.feedCount}",
+                        previous: "${previous.feedCount}",
+                        delta: _formatComparisonDelta(
+                          current.feedCount,
+                          previous.feedCount,
+                        ),
+                      ),
+                      _ComparisonMetricRow(
+                        label: tr(context, ko: "소변", en: "Pee", es: "Pee"),
+                        current: "${current.peeCount}",
+                        previous: "${previous.peeCount}",
+                        delta: _formatComparisonDelta(
+                          current.peeCount,
+                          previous.peeCount,
+                        ),
+                      ),
+                      _ComparisonMetricRow(
+                        label: tr(context, ko: "대변", en: "Poo", es: "Poo"),
+                        current: "${current.pooCount}",
+                        previous: "${previous.pooCount}",
+                        delta: _formatComparisonDelta(
+                          current.pooCount,
+                          previous.pooCount,
+                        ),
+                      ),
+                      _ComparisonMetricRow(
+                        label: tr(
+                          context,
+                          ko: "투약",
+                          en: "Medication",
+                          es: "Medicación",
+                        ),
+                        current: "${current.medicationCount}",
+                        previous: "${previous.medicationCount}",
+                        delta: _formatComparisonDelta(
+                          current.medicationCount,
+                          previous.medicationCount,
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ComparisonMetricRow extends StatelessWidget {
+  const _ComparisonMetricRow({
+    required this.label,
+    required this.current,
+    required this.previous,
+    required this.delta,
+  });
+
+  final String label;
+  final String current;
+  final String previous;
+  final String delta;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    Color deltaColor = color.onSurfaceVariant;
+    if (delta.startsWith("+")) {
+      deltaColor = const Color(0xFF2E7D32);
+    } else if (delta.startsWith("-")) {
+      deltaColor = const Color(0xFFC62828);
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: <Widget>[
+          Expanded(
+            flex: 3,
+            child: Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
+          ),
+          Expanded(flex: 2, child: Text(current, textAlign: TextAlign.right)),
+          Expanded(
+            flex: 2,
+            child: Text(
+              previous,
+              textAlign: TextAlign.right,
+              style: TextStyle(color: color.onSurfaceVariant),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              delta,
+              textAlign: TextAlign.right,
+              style: TextStyle(fontWeight: FontWeight.w700, color: deltaColor),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -2510,6 +2770,26 @@ String _formatCount(double value) {
     return "${rounded.round()}x";
   }
   return "${rounded.toStringAsFixed(1)}x";
+}
+
+String _formatComparisonDelta(int current, int previous) {
+  final int diff = current - previous;
+  if (diff > 0) {
+    return "+$diff";
+  }
+  if (diff < 0) {
+    return "$diff";
+  }
+  return "0";
+}
+
+String _formatComparisonMinutes(int minutes) {
+  final int hour = minutes ~/ 60;
+  final int min = minutes % 60;
+  if (hour <= 0) {
+    return "${min}m";
+  }
+  return "${hour}h ${min}m";
 }
 
 String _formatTrend(double value) {
