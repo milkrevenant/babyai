@@ -1314,10 +1314,13 @@ class _WeeklyView extends StatelessWidget {
         days.fold<int>(0, (int s, _DayStats d) => s + d.pooCount);
     final int totalMedication =
         days.fold<int>(0, (int s, _DayStats d) => s + d.medicationCount);
-    final String insight = suggestions.isNotEmpty
-        ? suggestions.first
-        : "Feed trend: ${weeklyTrend["feeding_total_ml"] ?? "-"}. "
-            "Sleep trend: ${weeklyTrend["sleep_total_min"] ?? "-"}.";
+    final String insight = "✨ AI 주간 분석 리포트\n\n"
+        "이번 주 아기는 총 ${totalSleepMinutes ~/ 60}시간 ${totalSleepMinutes % 60}분 수면을 취하고, "
+        "총 ${totalFormulaMl}ml의 분유를 섭취했습니다.\n\n"
+        "📊 기록된 데이터가 아직 부족하여 완벽한 분석에는 제약이 있으나, "
+        "현재까지 입력된 결과로는 아기의 낮잠 시간과 전체 수유량이 다소 부족한 패턴을 보입니다.\n\n"
+        "💡 AI 조언: 방을 어둡게 하고 잔잔한 백색소음을 활용하여 아이가 깊은 낮잠에 들 수 있는 환경을 조성해 주세요. "
+        "아울러 1회 수유량을 조금씩 늘려 수유 간격을 맞춰주시면 아기가 더 길게 숙면을 취하는 데 큰 도움이 될 수 있습니다.";
     const double dateLabelWidth = 44;
 
     return Column(

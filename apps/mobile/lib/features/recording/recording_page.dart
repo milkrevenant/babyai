@@ -1328,6 +1328,59 @@ class RecordingPageState extends State<RecordingPage> {
     await _loadLandingSnapshot(preferOffline: false);
   }
 
+  Future<int?> _showFormulaMlDialog() async {
+    final TextEditingController controller = TextEditingController();
+    return showDialog<int>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text(
+            tr(context, ko: "분유량 입력", en: "Formula Amount", es: "Cantidad"),
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+          content: TextField(
+            controller: controller,
+            keyboardType: TextInputType.number,
+            decoration: InputDecoration(
+              hintText: "ml",
+              suffixText: "ml",
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+            ),
+            autofocus: true,
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(null),
+              child: Text(tr(context, ko: "취소", en: "Cancel", es: "Cancelar")),
+            ),
+            FilledButton(
+              onPressed: () {
+                final int? value = int.tryParse(controller.text.trim());
+                if (value != null && value > 0) {
+                  Navigator.of(context).pop(value);
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(tr(context,
+                          ko: "올바른 숫자를 입력해주세요.",
+                          en: "Please enter a valid number.",
+                          es: "Por favor ingrese un número válido.")),
+                    ),
+                  );
+                }
+              },
+              child: Text(tr(context, ko: "저장하기", en: "Save", es: "Guardar")),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Future<void> _stopActiveTimer() async {
     await _stopActiveTimerAt();
   }
@@ -1360,12 +1413,25 @@ class RecordingPageState extends State<RecordingPage> {
       return;
     }
     final _TimerActivity activity = _activeTimerActivity!;
+
+    int? enteredMl;
+    if (activity == _TimerActivity.formula) {
+      enteredMl = await _showFormulaMlDialog();
+      if (enteredMl == null) {
+        return; // user cancelled, do not save timer
+      }
+    }
+
     final RecordEntryInput input = _buildTimerRecordInput(
       activity: activity,
       startAt: startAt,
       endAt: endAt,
       openEventId: _activeTimerEventId,
     );
+
+    if (enteredMl != null) {
+      input.value["ml"] = enteredMl;
+    }
     String? savedEventId;
     final bool saved = await _saveEntryInput(
       input,
@@ -2077,8 +2143,9 @@ class RecordingPageState extends State<RecordingPage> {
                 SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
                   child: Row(
-                    children:
-                        _TimerActivity.values.map((_TimerActivity activity) {
+                    children: _TimerActivity.values
+                        .where((_TimerActivity a) => a != _TimerActivity.diaper)
+                        .map((_TimerActivity activity) {
                       final bool selected = _selectedTimerActivity == activity;
                       final Color accent = _timerActivityAccent(activity);
                       return Padding(
