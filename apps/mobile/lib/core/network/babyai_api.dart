@@ -6,6 +6,49 @@ import "package:dio/dio.dart";
 import "../config/app_env.dart";
 import "../storage/offline_data_store.dart";
 
+enum _LocalEventStatus { open, closed, canceled }
+
+class _LocalEventRecord {
+  _LocalEventRecord({
+    required this.id,
+    required this.type,
+    required this.startTime,
+    required this.status,
+    this.endTime,
+    Map<String, dynamic>? value,
+    Map<String, dynamic>? metadata,
+  })  : value = value ?? <String, dynamic>{},
+        metadata = metadata ?? <String, dynamic>{};
+
+  final String id;
+  String type;
+  DateTime startTime;
+  DateTime? endTime;
+  _LocalEventStatus status;
+  Map<String, dynamic> value;
+  Map<String, dynamic> metadata;
+
+  _LocalEventRecord copyWith({
+    String? id,
+    String? type,
+    DateTime? startTime,
+    DateTime? endTime,
+    _LocalEventStatus? status,
+    Map<String, dynamic>? value,
+    Map<String, dynamic>? metadata,
+  }) {
+    return _LocalEventRecord(
+      id: id ?? this.id,
+      type: type ?? this.type,
+      startTime: startTime ?? this.startTime,
+      endTime: endTime ?? this.endTime,
+      status: status ?? this.status,
+      value: value ?? this.value,
+      metadata: metadata ?? this.metadata,
+    );
+  }
+}
+
 class ApiFailure implements Exception {
   ApiFailure(this.message, {this.statusCode});
 
@@ -39,6 +82,7 @@ class BabyAIApi {
   static const String _cacheDailyReport = "daily_report";
   static const String _cacheWeeklyReport = "weekly_report";
   static const String _cacheBabyProfile = "baby_profile";
+  static const String _cacheSyncEventIds = "sync_event_ids";
   final Dio _dio;
 
   bool get isConfigured =>
@@ -198,6 +242,291 @@ class BabyAIApi {
     return copy;
   }
 
+  Map<String, dynamic> _asStringKeyedMap(Object? value) {
+    if (value is Map<String, dynamic>) {
+      return Map<String, dynamic>.from(value);
+    }
+    if (value is Map) {
+      return <String, dynamic>{
+        for (final MapEntry<dynamic, dynamic> entry in value.entries)
+          entry.key.toString(): entry.value,
+      };
+    }
+    return <String, dynamic>{};
+  }
+
+  DateTime? _parseIsoDateTime(dynamic raw) {
+    if (raw == null) {
+      return null;
+    }
+    final String text = raw.toString().trim();
+    if (text.isEmpty) {
+      return null;
+    }
+    try {
+      return DateTime.parse(text).toLocal();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  int _extractCount(Map<String, dynamic> value) {
+    final List<String> keys = <String>["count", "times", "value", "qty"];
+    for (final String key in keys) {
+      final Object? raw = value[key];
+      if (raw is int) {
+        return raw <= 0 ? 1 : raw;
+      }
+      if (raw is double) {
+        final int parsed = raw.round();
+        return parsed <= 0 ? 1 : parsed;
+      }
+      if (raw is String) {
+        final int? parsed = int.tryParse(raw.trim());
+        if (parsed != null) {
+          return parsed <= 0 ? 1 : parsed;
+        }
+      }
+    }
+    return 1;
+  }
+
+  int _extractMl(Map<String, dynamic> value) {
+    const List<String> keys = <String>[
+      "amount_ml",
+      "amountMl",
+      "ml",
+      "volume_ml",
+      "volumeMl",
+      "formula_ml",
+    ];
+    for (final String key in keys) {
+      final Object? raw = value[key];
+      if (raw is int) {
+        return raw;
+      }
+      if (raw is double) {
+        return raw.round();
+      }
+      if (raw is String) {
+        final int? parsed = int.tryParse(raw.trim());
+        if (parsed != null) {
+          return parsed;
+        }
+      }
+    }
+    return 0;
+  }
+
+  String _eventIdFromPayload(
+    Map<String, dynamic> payload,
+    String fallbackId,
+  ) {
+    final String explicit = (payload["event_id"] ?? "").toString().trim();
+    if (explicit.isNotEmpty) {
+      return explicit;
+    }
+    final String localExplicit =
+        (payload["local_event_id"] ?? "").toString().trim();
+    if (localExplicit.isNotEmpty) {
+      return localExplicit;
+    }
+    return "local-$fallbackId";
+  }
+
+  Future<Map<String, String>> _readSyncEventIdMap() async {
+    if (activeBabyId.isEmpty) {
+      return <String, String>{};
+    }
+    final Map<String, dynamic>? cached =
+        await OfflineDataStore.instance.readCache(
+      namespace: _cacheSyncEventIds,
+      babyId: activeBabyId,
+      key: "map",
+    );
+    if (cached == null) {
+      return <String, String>{};
+    }
+    final Map<String, String> out = <String, String>{};
+    for (final MapEntry<String, dynamic> entry in cached.entries) {
+      final String key = entry.key.trim();
+      final String value = entry.value.toString().trim();
+      if (key.isEmpty || value.isEmpty) {
+        continue;
+      }
+      out[key] = value;
+    }
+    return out;
+  }
+
+  Future<void> _writeSyncEventIdMap(Map<String, String> map) async {
+    if (activeBabyId.isEmpty) {
+      return;
+    }
+    await OfflineDataStore.instance.writeCache(
+      namespace: _cacheSyncEventIds,
+      babyId: activeBabyId,
+      key: "map",
+      data: <String, dynamic>{
+        for (final MapEntry<String, String> e in map.entries) e.key: e.value
+      },
+    );
+  }
+
+  Future<List<_LocalEventRecord>> _localEventRecordsForBaby(
+      String babyId) async {
+    final List<Map<String, dynamic>> queue =
+        await OfflineDataStore.instance.listMutations();
+    final Map<String, _LocalEventRecord> records =
+        <String, _LocalEventRecord>{};
+
+    for (final Map<String, dynamic> item in queue) {
+      final String kind = (item["kind"] ?? "").toString().trim();
+      if (kind.isEmpty) {
+        continue;
+      }
+      final Map<String, dynamic> payload = _asStringKeyedMap(item["payload"]);
+      final String itemId = (item["id"] ?? "").toString().trim();
+      final String payloadBabyId = (payload["baby_id"] ?? "").toString().trim();
+      if (payloadBabyId.isNotEmpty &&
+          payloadBabyId != babyId &&
+          !payloadBabyId.toLowerCase().startsWith("offline_")) {
+        continue;
+      }
+
+      switch (kind) {
+        case "event_create_closed":
+          {
+            final DateTime? start = _parseIsoDateTime(payload["start_time"]);
+            if (start == null) {
+              break;
+            }
+            final String id = _eventIdFromPayload(payload, itemId);
+            final String type =
+                (payload["type"] ?? "").toString().trim().toUpperCase();
+            if (type.isEmpty) {
+              break;
+            }
+            records[id] = _LocalEventRecord(
+              id: id,
+              type: type,
+              startTime: start,
+              endTime: _parseIsoDateTime(payload["end_time"]),
+              status: _LocalEventStatus.closed,
+              value: _asStringKeyedMap(payload["value"]),
+              metadata: _asStringKeyedMap(payload["metadata"]),
+            );
+            break;
+          }
+        case "event_start":
+          {
+            final DateTime? start = _parseIsoDateTime(payload["start_time"]);
+            if (start == null) {
+              break;
+            }
+            final String id = _eventIdFromPayload(payload, itemId);
+            final String type =
+                (payload["type"] ?? "").toString().trim().toUpperCase();
+            if (type.isEmpty) {
+              break;
+            }
+            records[id] = _LocalEventRecord(
+              id: id,
+              type: type,
+              startTime: start,
+              status: _LocalEventStatus.open,
+              value: _asStringKeyedMap(payload["value"]),
+              metadata: _asStringKeyedMap(payload["metadata"]),
+            );
+            break;
+          }
+        case "event_complete":
+          {
+            final String id = (payload["event_id"] ?? "").toString().trim();
+            if (id.isEmpty) {
+              break;
+            }
+            final _LocalEventRecord? existing = records[id];
+            final DateTime? end = _parseIsoDateTime(payload["end_time"]);
+            final DateTime start =
+                existing?.startTime ?? end ?? DateTime.now().toLocal();
+            records[id] = (existing ??
+                    _LocalEventRecord(
+                      id: id,
+                      type: "SLEEP",
+                      startTime: start,
+                      status: _LocalEventStatus.open,
+                    ))
+                .copyWith(
+              endTime: end ?? existing?.endTime,
+              status: _LocalEventStatus.closed,
+              value: payload.containsKey("value")
+                  ? _asStringKeyedMap(payload["value"])
+                  : existing?.value,
+              metadata: payload.containsKey("metadata")
+                  ? _asStringKeyedMap(payload["metadata"])
+                  : existing?.metadata,
+            );
+            break;
+          }
+        case "event_update":
+          {
+            final String id = (payload["event_id"] ?? "").toString().trim();
+            if (id.isEmpty) {
+              break;
+            }
+            final _LocalEventRecord? existing = records[id];
+            if (existing == null) {
+              break;
+            }
+            final String updatedType = (payload["type"] ?? existing.type)
+                .toString()
+                .trim()
+                .toUpperCase();
+            records[id] = existing.copyWith(
+              type: updatedType.isEmpty ? existing.type : updatedType,
+              startTime: _parseIsoDateTime(payload["start_time"]) ??
+                  existing.startTime,
+              endTime: payload.containsKey("end_time")
+                  ? _parseIsoDateTime(payload["end_time"])
+                  : existing.endTime,
+              value: payload.containsKey("value")
+                  ? _asStringKeyedMap(payload["value"])
+                  : existing.value,
+              metadata: payload.containsKey("metadata")
+                  ? _asStringKeyedMap(payload["metadata"])
+                  : existing.metadata,
+            );
+            break;
+          }
+        case "event_cancel":
+          {
+            final String id = (payload["event_id"] ?? "").toString().trim();
+            if (id.isEmpty) {
+              break;
+            }
+            final _LocalEventRecord? existing = records[id];
+            if (existing == null) {
+              break;
+            }
+            records[id] = existing.copyWith(status: _LocalEventStatus.canceled);
+            break;
+          }
+        default:
+          break;
+      }
+    }
+
+    final List<_LocalEventRecord> out = records.values
+        .where((_LocalEventRecord e) => e.status != _LocalEventStatus.canceled)
+        .toList(growable: false)
+      ..sort(
+        (_LocalEventRecord a, _LocalEventRecord b) =>
+            a.startTime.compareTo(b.startTime),
+      );
+    return out;
+  }
+
   Future<void> _enqueueEventMutation({
     required String kind,
     required Map<String, dynamic> payload,
@@ -208,30 +537,77 @@ class BabyAIApi {
     );
   }
 
-  Future<void> _dispatchQueuedMutation(Map<String, dynamic> item) async {
+  Map<String, dynamic> _payloadForActiveBaby(Map<String, dynamic> payload) {
+    final Map<String, dynamic> copy = Map<String, dynamic>.from(payload);
+    if (activeBabyId.isNotEmpty) {
+      copy["baby_id"] = activeBabyId;
+    }
+    return copy;
+  }
+
+  bool _isMappingPendingError(Object error) {
+    return error.toString().toLowerCase().contains("mapping pending");
+  }
+
+  Future<void> _dispatchQueuedMutation(
+    Map<String, dynamic> item,
+    Map<String, String> eventIdMap,
+  ) async {
     final String kind = (item["kind"] ?? "").toString().trim();
     final Map<String, dynamic> payload = item["payload"] is Map
         ? Map<String, dynamic>.from(item["payload"] as Map<dynamic, dynamic>)
         : <String, dynamic>{};
     switch (kind) {
       case "event_create_closed":
-        await _dio.post<dynamic>(
+        final String localEventId =
+            (payload["local_event_id"] ?? payload["event_id"] ?? "")
+                .toString()
+                .trim();
+        final Map<String, dynamic> body = _payloadForActiveBaby(payload)
+          ..remove("event_id")
+          ..remove("local_event_id");
+        final Map<String, dynamic> response =
+            _requireMap(await _dio.post<dynamic>(
           "/api/v1/events/manual",
-          data: payload,
+          data: body,
           options: _authOptions(),
-        );
+        ));
+        final String remoteEventId =
+            (response["event_id"] ?? response["id"] ?? "").toString().trim();
+        if (localEventId.isNotEmpty && remoteEventId.isNotEmpty) {
+          eventIdMap[localEventId] = remoteEventId;
+        }
         return;
       case "event_start":
-        await _dio.post<dynamic>(
+        final String localEventId =
+            (payload["local_event_id"] ?? payload["event_id"] ?? "")
+                .toString()
+                .trim();
+        final Map<String, dynamic> body = _payloadForActiveBaby(payload)
+          ..remove("event_id")
+          ..remove("local_event_id");
+        final Map<String, dynamic> response =
+            _requireMap(await _dio.post<dynamic>(
           "/api/v1/events/start",
-          data: payload,
+          data: body,
           options: _authOptions(),
-        );
+        ));
+        final String remoteEventId =
+            (response["event_id"] ?? response["id"] ?? "").toString().trim();
+        if (localEventId.isNotEmpty && remoteEventId.isNotEmpty) {
+          eventIdMap[localEventId] = remoteEventId;
+        }
         return;
       case "event_complete":
-        final String eventId = (payload["event_id"] ?? "").toString().trim();
-        if (eventId.isEmpty) {
+        final String originEventId =
+            (payload["event_id"] ?? "").toString().trim();
+        if (originEventId.isEmpty) {
           return;
+        }
+        final String eventId = eventIdMap[originEventId] ?? originEventId;
+        if (eventId.toLowerCase().startsWith("local-") ||
+            eventId.toLowerCase().startsWith("offline_")) {
+          throw ApiFailure("event mapping pending");
         }
         final Map<String, dynamic> body = Map<String, dynamic>.from(payload)
           ..remove("event_id");
@@ -242,9 +618,15 @@ class BabyAIApi {
         );
         return;
       case "event_update":
-        final String eventId = (payload["event_id"] ?? "").toString().trim();
-        if (eventId.isEmpty) {
+        final String originEventId =
+            (payload["event_id"] ?? "").toString().trim();
+        if (originEventId.isEmpty) {
           return;
+        }
+        final String eventId = eventIdMap[originEventId] ?? originEventId;
+        if (eventId.toLowerCase().startsWith("local-") ||
+            eventId.toLowerCase().startsWith("offline_")) {
+          throw ApiFailure("event mapping pending");
         }
         final Map<String, dynamic> body = Map<String, dynamic>.from(payload)
           ..remove("event_id");
@@ -255,9 +637,15 @@ class BabyAIApi {
         );
         return;
       case "event_cancel":
-        final String eventId = (payload["event_id"] ?? "").toString().trim();
-        if (eventId.isEmpty) {
+        final String originEventId =
+            (payload["event_id"] ?? "").toString().trim();
+        if (originEventId.isEmpty) {
           return;
+        }
+        final String eventId = eventIdMap[originEventId] ?? originEventId;
+        if (eventId.toLowerCase().startsWith("local-") ||
+            eventId.toLowerCase().startsWith("offline_")) {
+          throw ApiFailure("event mapping pending");
         }
         final Map<String, dynamic> body = Map<String, dynamic>.from(payload)
           ..remove("event_id");
@@ -281,6 +669,8 @@ class BabyAIApi {
     }
     _mutationFlushInProgress = true;
     try {
+      final Map<String, String> eventIdMap = await _readSyncEventIdMap();
+      bool eventIdMapChanged = false;
       final List<Map<String, dynamic>> queue =
           await OfflineDataStore.instance.listMutations();
       for (final Map<String, dynamic> item in queue) {
@@ -289,18 +679,40 @@ class BabyAIApi {
           continue;
         }
         try {
-          await _dispatchQueuedMutation(item);
+          final int beforeCount = eventIdMap.length;
+          await _dispatchQueuedMutation(item, eventIdMap);
+          if (eventIdMap.length != beforeCount) {
+            eventIdMapChanged = true;
+            await _writeSyncEventIdMap(eventIdMap);
+          }
           await OfflineDataStore.instance.removeMutation(id);
         } catch (error) {
           // Keep queued mutations for later retry when auth/network state changes.
-          if (_isConnectivityFailure(error)) {
+          if (_isConnectivityFailure(error) || _isMappingPendingError(error)) {
             break;
           }
           break;
         }
       }
+      if (eventIdMapChanged) {
+        await _writeSyncEventIdMap(eventIdMap);
+      }
     } finally {
       _mutationFlushInProgress = false;
+    }
+  }
+
+  Future<void> syncAllLocalDataToServer() async {
+    if (!_hasServerLinkedProfile) {
+      return;
+    }
+    await flushOfflineMutations();
+    try {
+      await _fetchQuickLandingSnapshotRemote("day");
+      await _fetchQuickLandingSnapshotRemote("week");
+      await _fetchQuickLandingSnapshotRemote("month");
+    } catch (_) {
+      // Ignore cache refresh failures after mutation flush.
     }
   }
 
@@ -474,6 +886,483 @@ class BabyAIApi {
       "open_medication_value": <String, dynamic>{},
       "offline_cached": true,
     };
+  }
+
+  bool _sameLocalDay(DateTime a, DateTime b) {
+    final DateTime la = a.toLocal();
+    final DateTime lb = b.toLocal();
+    return la.year == lb.year && la.month == lb.month && la.day == lb.day;
+  }
+
+  String _ymdLocal(DateTime value) {
+    final DateTime local = value.toLocal();
+    final String y = local.year.toString().padLeft(4, "0");
+    final String m = local.month.toString().padLeft(2, "0");
+    final String d = local.day.toString().padLeft(2, "0");
+    return "$y-$m-$d";
+  }
+
+  bool _isNightSleep(DateTime localStart) {
+    final int h = localStart.hour;
+    return h >= 21 || h < 6;
+  }
+
+  String? _lastMedicationName(List<_LocalEventRecord> events) {
+    for (int i = events.length - 1; i >= 0; i--) {
+      final _LocalEventRecord e = events[i];
+      if (e.type != "MEDICATION") {
+        continue;
+      }
+      final Map<String, dynamic> value = e.value;
+      final String name = (value["name"] ??
+              value["medicine_name"] ??
+              value["medication_name"] ??
+              value["drug"])
+          .toString()
+          .trim();
+      if (name.isNotEmpty) {
+        return name;
+      }
+    }
+    return null;
+  }
+
+  String? _latestMemoText(List<_LocalEventRecord> events) {
+    for (int i = events.length - 1; i >= 0; i--) {
+      final _LocalEventRecord e = events[i];
+      if (e.type != "MEMO") {
+        continue;
+      }
+      final String text =
+          (e.value["note"] ?? e.value["memo"] ?? e.value["text"] ?? "")
+              .toString()
+              .trim();
+      if (text.isNotEmpty) {
+        return text;
+      }
+    }
+    return null;
+  }
+
+  Map<String, dynamic> _localSnapshotFromEvents({
+    required List<_LocalEventRecord> events,
+    required String range,
+    required String babyId,
+    required String babyName,
+  }) {
+    final DateTime now = DateTime.now().toLocal();
+    final String normalizedRange =
+        range.trim().toLowerCase().isEmpty ? "day" : range.trim().toLowerCase();
+    final DateTime todayStart = DateTime(now.year, now.month, now.day);
+    final DateTime rangeStart = switch (normalizedRange) {
+      "week" => _toWeekStartLocal(todayStart),
+      "month" => DateTime(todayStart.year, todayStart.month, 1),
+      _ => todayStart,
+    };
+    final DateTime rangeEnd = switch (normalizedRange) {
+      "week" => rangeStart.add(const Duration(days: 7)),
+      "month" => DateTime(rangeStart.year, rangeStart.month + 1, 1),
+      _ => rangeStart.add(const Duration(days: 1)),
+    };
+    final int rangeDayCount = switch (normalizedRange) {
+      "week" => 7,
+      "month" => _daysInMonth(rangeStart),
+      _ => 1,
+    };
+
+    final List<_LocalEventRecord> closedInRange = events
+        .where(
+          (_LocalEventRecord e) =>
+              e.status == _LocalEventStatus.closed &&
+              !e.startTime.isBefore(rangeStart) &&
+              e.startTime.isBefore(rangeEnd),
+        )
+        .toList(growable: false);
+    final List<_LocalEventRecord> openEvents = events
+        .where((_LocalEventRecord e) => e.status == _LocalEventStatus.open)
+        .toList(growable: false);
+
+    final List<_LocalEventRecord> formulaEvents = closedInRange
+        .where((_LocalEventRecord e) => e.type == "FORMULA")
+        .toList(growable: false);
+    final List<_LocalEventRecord> breastfeedEvents = closedInRange
+        .where((_LocalEventRecord e) => e.type == "BREASTFEED")
+        .toList(growable: false);
+    final List<_LocalEventRecord> sleepEvents = closedInRange
+        .where((_LocalEventRecord e) => e.type == "SLEEP" && e.endTime != null)
+        .toList(growable: false);
+    final List<_LocalEventRecord> peeEvents = closedInRange
+        .where((_LocalEventRecord e) => e.type == "PEE")
+        .toList(growable: false);
+    final List<_LocalEventRecord> pooEvents = closedInRange
+        .where((_LocalEventRecord e) => e.type == "POO")
+        .toList(growable: false);
+    final List<_LocalEventRecord> medicationEvents = closedInRange
+        .where((_LocalEventRecord e) => e.type == "MEDICATION")
+        .toList(growable: false);
+    final List<_LocalEventRecord> memoEvents = closedInRange
+        .where((_LocalEventRecord e) => e.type == "MEMO")
+        .toList(growable: false);
+    final List<_LocalEventRecord> weaningEvents = closedInRange
+        .where(
+          (_LocalEventRecord e) =>
+              e.type == "WEANING" ||
+              (e.value["category"] ?? "").toString().toLowerCase() == "weaning",
+        )
+        .toList(growable: false);
+
+    final int formulaTotalMl = formulaEvents.fold<int>(
+        0, (int s, _LocalEventRecord e) => s + _extractMl(e.value));
+    final int formulaCount = formulaEvents.length;
+    final int breastfeedCount = breastfeedEvents.length;
+    final int feedingsCount = formulaCount + breastfeedCount;
+
+    final int peeCount = peeEvents.fold<int>(
+        0, (int s, _LocalEventRecord e) => s + _extractCount(e.value));
+    final int pooCount = pooEvents.fold<int>(
+        0, (int s, _LocalEventRecord e) => s + _extractCount(e.value));
+    final int medicationCount = medicationEvents.length;
+    final int memoCount = memoEvents.length;
+    final int weaningCount = weaningEvents.length;
+
+    int sleepTotalMin = 0;
+    int napTotalMin = 0;
+    int nightTotalMin = 0;
+    for (final _LocalEventRecord event in sleepEvents) {
+      final DateTime end = event.endTime ?? event.startTime;
+      final int duration = end.difference(event.startTime).inMinutes;
+      if (duration <= 0) {
+        continue;
+      }
+      sleepTotalMin += duration;
+      if (_isNightSleep(event.startTime)) {
+        nightTotalMin += duration;
+      } else {
+        napTotalMin += duration;
+      }
+    }
+
+    _LocalEventRecord? latestClosedOf(String type) {
+      for (int i = closedInRange.length - 1; i >= 0; i--) {
+        final _LocalEventRecord e = closedInRange[i];
+        if (e.type == type) {
+          return e;
+        }
+      }
+      return null;
+    }
+
+    _LocalEventRecord? latestOpenOf(String type) {
+      for (int i = openEvents.length - 1; i >= 0; i--) {
+        final _LocalEventRecord e = openEvents[i];
+        if (e.type == type) {
+          return e;
+        }
+      }
+      return null;
+    }
+
+    final _LocalEventRecord? lastFormula = latestClosedOf("FORMULA");
+    final _LocalEventRecord? lastBreastfeed = latestClosedOf("BREASTFEED");
+    final _LocalEventRecord? lastSleep =
+        sleepEvents.isEmpty ? null : sleepEvents.last;
+    final _LocalEventRecord? lastPee =
+        peeEvents.isEmpty ? null : peeEvents.last;
+    final _LocalEventRecord? lastPoo =
+        pooEvents.isEmpty ? null : pooEvents.last;
+    final _LocalEventRecord? lastMedication =
+        medicationEvents.isEmpty ? null : medicationEvents.last;
+    final _LocalEventRecord? lastDiaper = (() {
+      if (lastPee == null) {
+        return lastPoo;
+      }
+      if (lastPoo == null) {
+        return lastPee;
+      }
+      return lastPee.startTime.isAfter(lastPoo.startTime) ? lastPee : lastPoo;
+    })();
+
+    final DateTime? lastSleepEnd = lastSleep?.endTime;
+    final int? minutesSinceLastSleep =
+        lastSleepEnd == null ? null : now.difference(lastSleepEnd).inMinutes;
+    final int? recentSleepDuration = (lastSleep?.endTime == null)
+        ? null
+        : lastSleep!.endTime!.difference(lastSleep.startTime).inMinutes;
+
+    final _LocalEventRecord? openFormula = latestOpenOf("FORMULA");
+    final _LocalEventRecord? openBreastfeed = latestOpenOf("BREASTFEED");
+    final _LocalEventRecord? openSleep = latestOpenOf("SLEEP");
+    final _LocalEventRecord? openDiaper = (() {
+      final _LocalEventRecord? openPee = latestOpenOf("PEE");
+      final _LocalEventRecord? openPoo = latestOpenOf("POO");
+      if (openPee == null) {
+        return openPoo;
+      }
+      if (openPoo == null) {
+        return openPee;
+      }
+      return openPee.startTime.isAfter(openPoo.startTime) ? openPee : openPoo;
+    })();
+    final _LocalEventRecord? openWeaning = latestOpenOf("WEANING");
+    final _LocalEventRecord? openMedication = latestOpenOf("MEDICATION");
+    final String openDiaperType =
+        openDiaper == null ? "" : (openDiaper.type == "POO" ? "POO" : "PEE");
+
+    final List<String> graphLabels = <String>[];
+    final List<int> graphPoints = <int>[];
+    if (normalizedRange == "day") {
+      for (final _LocalEventRecord event in formulaEvents) {
+        graphLabels.add(
+            "${event.startTime.hour.toString().padLeft(2, "0")}:${event.startTime.minute.toString().padLeft(2, "0")}");
+        graphPoints.add(_extractMl(event.value));
+      }
+    } else {
+      final int dayCount = normalizedRange == "week" ? 7 : rangeDayCount;
+      for (int i = 0; i < dayCount; i++) {
+        final DateTime day = rangeStart.add(Duration(days: i));
+        graphLabels.add("${day.month}/${day.day}");
+        final int total = formulaEvents
+            .where((_LocalEventRecord e) => _sameLocalDay(e.startTime, day))
+            .fold<int>(
+                0, (int s, _LocalEventRecord e) => s + _extractMl(e.value));
+        graphPoints.add(total);
+      }
+    }
+
+    return <String, dynamic>{
+      "baby_id": babyId,
+      "baby_name": babyName,
+      "date": _ymdLocal(now),
+      "range": normalizedRange,
+      "range_day_count": rangeDayCount,
+      "formula_total_ml": formulaTotalMl,
+      "formula_daily_avg_ml": (formulaTotalMl / rangeDayCount).round(),
+      "formula_count": formulaCount,
+      "breastfeed_count": breastfeedCount,
+      "feedings_count": feedingsCount,
+      "avg_formula_ml_per_day": formulaTotalMl / rangeDayCount,
+      "avg_feedings_per_day": feedingsCount / rangeDayCount,
+      "avg_sleep_minutes_per_day": sleepTotalMin / rangeDayCount,
+      "avg_nap_minutes_per_day": napTotalMin / rangeDayCount,
+      "avg_night_sleep_minutes_per_day": nightTotalMin / rangeDayCount,
+      "diaper_pee_count": peeCount,
+      "diaper_poo_count": pooCount,
+      "avg_diaper_pee_per_day": peeCount / rangeDayCount,
+      "avg_diaper_poo_per_day": pooCount / rangeDayCount,
+      "medication_count": medicationCount,
+      "memo_count": memoCount,
+      "weaning_count": weaningCount,
+      "sleep_avg_min": (sleepTotalMin / rangeDayCount).round(),
+      "night_sleep_avg_min": (nightTotalMin / rangeDayCount).round(),
+      "nap_avg_min": (napTotalMin / rangeDayCount).round(),
+      "last_formula_time": lastFormula?.startTime.toUtc().toIso8601String(),
+      "last_breastfeed_time":
+          lastBreastfeed?.startTime.toUtc().toIso8601String(),
+      "recent_sleep_time": lastSleep?.startTime.toUtc().toIso8601String(),
+      "recent_sleep_duration_min": recentSleepDuration ?? 0,
+      "last_sleep_end_time": lastSleepEnd?.toUtc().toIso8601String(),
+      "minutes_since_last_sleep":
+          (minutesSinceLastSleep == null || minutesSinceLastSleep < 0)
+              ? null
+              : minutesSinceLastSleep,
+      "last_diaper_time": lastDiaper?.startTime.toUtc().toIso8601String(),
+      "last_pee_time": lastPee?.startTime.toUtc().toIso8601String(),
+      "last_poo_time": lastPoo?.startTime.toUtc().toIso8601String(),
+      "last_medication_time":
+          lastMedication?.startTime.toUtc().toIso8601String(),
+      "last_medication_name": _lastMedicationName(medicationEvents),
+      "last_weaning_time": (weaningEvents.isEmpty
+          ? null
+          : weaningEvents.last.startTime.toUtc().toIso8601String()),
+      "special_memo": _latestMemoText(memoEvents) ?? "",
+      "graph_labels": graphLabels,
+      "graph_points": graphPoints,
+      "open_formula_event_id": openFormula?.id,
+      "open_formula_start_time":
+          openFormula?.startTime.toUtc().toIso8601String(),
+      "open_formula_value": openFormula?.value ?? <String, dynamic>{},
+      "open_breastfeed_event_id": openBreastfeed?.id,
+      "open_breastfeed_start_time":
+          openBreastfeed?.startTime.toUtc().toIso8601String(),
+      "open_breastfeed_value": openBreastfeed?.value ?? <String, dynamic>{},
+      "open_sleep_event_id": openSleep?.id,
+      "open_sleep_start_time": openSleep?.startTime.toUtc().toIso8601String(),
+      "open_sleep_value": openSleep?.value ?? <String, dynamic>{},
+      "open_diaper_event_id": openDiaper?.id,
+      "open_diaper_start_time": openDiaper?.startTime.toUtc().toIso8601String(),
+      "open_diaper_type": openDiaperType,
+      "open_diaper_value": openDiaper?.value ?? <String, dynamic>{},
+      "open_weaning_event_id": openWeaning?.id,
+      "open_weaning_start_time":
+          openWeaning?.startTime.toUtc().toIso8601String(),
+      "open_weaning_value": openWeaning?.value ?? <String, dynamic>{},
+      "open_medication_event_id": openMedication?.id,
+      "open_medication_start_time":
+          openMedication?.startTime.toUtc().toIso8601String(),
+      "open_medication_value": openMedication?.value ?? <String, dynamic>{},
+      "offline_cached": true,
+    };
+  }
+
+  Future<Map<String, dynamic>> _buildLocalLandingSnapshot({
+    required String normalizedRange,
+  }) async {
+    _requireBabyId();
+    final Map<String, dynamic>? profile =
+        await _readCachedBabyProfile(babyId: activeBabyId);
+    final String babyName =
+        (profile?["baby_name"] ?? profile?["name"] ?? "우리 아기").toString();
+    final List<_LocalEventRecord> events =
+        await _localEventRecordsForBaby(activeBabyId);
+    final Map<String, dynamic> snapshot = _localSnapshotFromEvents(
+      events: events,
+      range: normalizedRange,
+      babyId: activeBabyId,
+      babyName: babyName,
+    );
+    await OfflineDataStore.instance.writeCache(
+      namespace: _cacheQuickLanding,
+      babyId: activeBabyId,
+      key: normalizedRange,
+      data: snapshot,
+    );
+    return snapshot;
+  }
+
+  Future<Map<String, dynamic>> _buildLocalDailyReport(
+      DateTime targetDate) async {
+    _requireBabyId();
+    final DateTime localDate = targetDate.toLocal();
+    final DateTime dayStart =
+        DateTime(localDate.year, localDate.month, localDate.day);
+    final DateTime dayEnd = dayStart.add(const Duration(days: 1));
+    final List<_LocalEventRecord> all =
+        await _localEventRecordsForBaby(activeBabyId);
+    final List<_LocalEventRecord> closed = all
+        .where(
+          (_LocalEventRecord e) =>
+              e.status == _LocalEventStatus.closed &&
+              !e.startTime.isBefore(dayStart) &&
+              e.startTime.isBefore(dayEnd),
+        )
+        .toList(growable: false)
+      ..sort(
+        (_LocalEventRecord a, _LocalEventRecord b) =>
+            a.startTime.compareTo(b.startTime),
+      );
+
+    final int sleepTotal = closed
+        .where((_LocalEventRecord e) => e.type == "SLEEP" && e.endTime != null)
+        .fold<int>(
+            0,
+            (int s, _LocalEventRecord e) =>
+                s +
+                (e.endTime!
+                    .difference(e.startTime)
+                    .inMinutes
+                    .clamp(0, 24 * 60)));
+    final int feedings = closed
+        .where((_LocalEventRecord e) =>
+            e.type == "FORMULA" || e.type == "BREASTFEED")
+        .length;
+    final int formulaTotal = closed
+        .where((_LocalEventRecord e) => e.type == "FORMULA")
+        .fold<int>(0, (int s, _LocalEventRecord e) => s + _extractMl(e.value));
+    final int pee = closed
+        .where((_LocalEventRecord e) => e.type == "PEE")
+        .fold<int>(
+            0, (int s, _LocalEventRecord e) => s + _extractCount(e.value));
+    final int poo = closed
+        .where((_LocalEventRecord e) => e.type == "POO")
+        .fold<int>(
+            0, (int s, _LocalEventRecord e) => s + _extractCount(e.value));
+
+    final List<Map<String, dynamic>> eventRows = closed
+        .map(
+          (_LocalEventRecord e) => <String, dynamic>{
+            "type": e.type,
+            "start_time": e.startTime.toUtc().toIso8601String(),
+            if (e.endTime != null)
+              "end_time": e.endTime!.toUtc().toIso8601String(),
+            "value": e.value,
+          },
+        )
+        .toList(growable: false);
+
+    final Map<String, dynamic> payload = <String, dynamic>{
+      "baby_id": activeBabyId,
+      "date": _ymdLocal(dayStart.toUtc()),
+      "summary": <String>[
+        "Sleep total: $sleepTotal min",
+        "Feeding events: $feedings",
+        "Formula total: $formulaTotal ml",
+        "Diaper pee: $pee",
+        "Diaper poo: $poo",
+      ],
+      "events": eventRows,
+      "labels": <dynamic>[],
+      "offline_cached": true,
+    };
+    await OfflineDataStore.instance.writeCache(
+      namespace: _cacheDailyReport,
+      babyId: activeBabyId,
+      key: targetDate.toIso8601String().split("T").first,
+      data: payload,
+    );
+    return payload;
+  }
+
+  Future<Map<String, dynamic>> _buildLocalWeeklyReport(
+      DateTime weekStart) async {
+    _requireBabyId();
+    final DateTime localWeekStart = weekStart.toLocal();
+    final DateTime weekEnd = localWeekStart.add(const Duration(days: 7));
+    final List<_LocalEventRecord> all =
+        await _localEventRecordsForBaby(activeBabyId);
+    final List<_LocalEventRecord> closed = all
+        .where(
+          (_LocalEventRecord e) =>
+              e.status == _LocalEventStatus.closed &&
+              !e.startTime.isBefore(localWeekStart) &&
+              e.startTime.isBefore(weekEnd),
+        )
+        .toList(growable: false);
+
+    final int formulaTotal = closed
+        .where((_LocalEventRecord e) => e.type == "FORMULA")
+        .fold<int>(0, (int s, _LocalEventRecord e) => s + _extractMl(e.value));
+    final int sleepTotal = closed
+        .where((_LocalEventRecord e) => e.type == "SLEEP" && e.endTime != null)
+        .fold<int>(
+            0,
+            (int s, _LocalEventRecord e) =>
+                s + e.endTime!.difference(e.startTime).inMinutes);
+    final int diaperTotal = closed
+        .where((_LocalEventRecord e) => e.type == "PEE" || e.type == "POO")
+        .fold<int>(
+            0, (int s, _LocalEventRecord e) => s + _extractCount(e.value));
+
+    final Map<String, dynamic> payload = <String, dynamic>{
+      "baby_id": activeBabyId,
+      "week_start": weekStart.toIso8601String().split("T").first,
+      "trend": <String, dynamic>{
+        "feeding_total_ml": formulaTotal,
+        "sleep_total_min": sleepTotal,
+        "diaper_total_count": diaperTotal,
+      },
+      "suggestions": <String>[
+        "로컬 기록 기반 주간 요약입니다.",
+      ],
+      "labels": <dynamic>[],
+      "offline_cached": true,
+    };
+    await OfflineDataStore.instance.writeCache(
+      namespace: _cacheWeeklyReport,
+      babyId: activeBabyId,
+      key: weekStart.toIso8601String().split("T").first,
+      data: payload,
+    );
+    return payload;
   }
 
   Future<void> _seedOfflineSnapshotAndReports({
@@ -1064,6 +1953,9 @@ class BabyAIApi {
       _requireBabyId();
       final String normalizedRange = range.trim().toLowerCase();
       final String cacheKey = normalizedRange.isEmpty ? "day" : normalizedRange;
+      if (!_hasServerLinkedProfile) {
+        return await _buildLocalLandingSnapshot(normalizedRange: cacheKey);
+      }
       final Map<String, dynamic>? cached =
           await OfflineDataStore.instance.readCache(
         namespace: _cacheQuickLanding,
@@ -1356,7 +2248,11 @@ class BabyAIApi {
     Map<String, dynamic>? metadata,
   }) async {
     _requireBabyId();
+    final String localEventId =
+        "local-${DateTime.now().toUtc().microsecondsSinceEpoch}";
     final Map<String, dynamic> offlinePayload = <String, dynamic>{
+      "event_id": localEventId,
+      "local_event_id": localEventId,
       "baby_id": activeBabyId,
       "type": type.trim(),
       "start_time": startTime.toUtc().toIso8601String(),
@@ -1372,14 +2268,19 @@ class BabyAIApi {
       return <String, dynamic>{
         "status": "queued_offline",
         "queued": true,
-        "event_id": "local-${DateTime.now().millisecondsSinceEpoch}",
+        "event_id": localEventId,
       };
     }
     try {
       await flushOfflineMutations();
+      final Map<String, dynamic> remoteBody = Map<String, dynamic>.from(
+        offlinePayload,
+      )
+        ..remove("event_id")
+        ..remove("local_event_id");
       final Response<dynamic> response = await _dio.post<dynamic>(
         "/api/v1/events/manual",
-        data: offlinePayload,
+        data: remoteBody,
         options: _authOptions(),
       );
       return _requireMap(response);
@@ -1392,7 +2293,7 @@ class BabyAIApi {
         return <String, dynamic>{
           "status": "queued_offline",
           "queued": true,
-          "event_id": "local-${DateTime.now().millisecondsSinceEpoch}",
+          "event_id": localEventId,
         };
       }
       throw _toFailure(error);
@@ -1406,7 +2307,11 @@ class BabyAIApi {
     Map<String, dynamic>? metadata,
   }) async {
     _requireBabyId();
+    final String localEventId =
+        "local-${DateTime.now().toUtc().microsecondsSinceEpoch}";
     final Map<String, dynamic> offlinePayload = <String, dynamic>{
+      "event_id": localEventId,
+      "local_event_id": localEventId,
       "baby_id": activeBabyId,
       "type": type.trim(),
       "start_time": startTime.toUtc().toIso8601String(),
@@ -1421,14 +2326,19 @@ class BabyAIApi {
       return <String, dynamic>{
         "status": "queued_offline",
         "queued": true,
-        "event_id": "local-${DateTime.now().millisecondsSinceEpoch}",
+        "event_id": localEventId,
       };
     }
     try {
       await flushOfflineMutations();
+      final Map<String, dynamic> remoteBody = Map<String, dynamic>.from(
+        offlinePayload,
+      )
+        ..remove("event_id")
+        ..remove("local_event_id");
       final Response<dynamic> response = await _dio.post<dynamic>(
         "/api/v1/events/start",
-        data: offlinePayload,
+        data: remoteBody,
         options: _authOptions(),
       );
       return _requireMap(response);
@@ -1441,7 +2351,7 @@ class BabyAIApi {
         return <String, dynamic>{
           "status": "queued_offline",
           "queued": true,
-          "event_id": "local-${DateTime.now().millisecondsSinceEpoch}",
+          "event_id": localEventId,
         };
       }
       throw _toFailure(error);
@@ -1605,8 +2515,26 @@ class BabyAIApi {
     String? type,
   }) async {
     if (!_hasServerLinkedProfile) {
+      final String normalizedType = (type ?? "").trim().toUpperCase();
+      final List<_LocalEventRecord> all =
+          await _localEventRecordsForBaby(activeBabyId);
+      final List<Map<String, dynamic>> items = all
+          .where((_LocalEventRecord e) => e.status == _LocalEventStatus.open)
+          .where(
+            (_LocalEventRecord e) =>
+                normalizedType.isEmpty || e.type == normalizedType,
+          )
+          .map(
+            (_LocalEventRecord e) => <String, dynamic>{
+              "event_id": e.id,
+              "type": e.type,
+              "start_time": e.startTime.toUtc().toIso8601String(),
+              "value": e.value,
+            },
+          )
+          .toList(growable: false);
       return <String, dynamic>{
-        "items": <dynamic>[],
+        "items": items,
         "offline_cached": true,
       };
     }
@@ -1671,6 +2599,9 @@ class BabyAIApi {
       babyId: activeBabyId,
       key: day,
     );
+    if (!_hasServerLinkedProfile) {
+      return await _buildLocalDailyReport(targetDate);
+    }
     if (preferOffline && cached != null) {
       if (_hasServerLinkedProfile) {
         unawaited(_refreshDailyReportCache(targetDate));
@@ -1735,6 +2666,9 @@ class BabyAIApi {
       babyId: activeBabyId,
       key: day,
     );
+    if (!_hasServerLinkedProfile) {
+      return await _buildLocalWeeklyReport(weekStart);
+    }
     if (preferOffline && cached != null) {
       if (_hasServerLinkedProfile) {
         unawaited(_refreshWeeklyReportCache(weekStart));

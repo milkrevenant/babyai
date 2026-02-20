@@ -275,6 +275,7 @@ class _HomeShellState extends State<_HomeShell> {
   String? _chatHistoryError;
   List<_ChatHistoryItem> _chatHistory = <_ChatHistoryItem>[];
   String? _selectedChatSessionId;
+  bool _loginSyncInProgress = false;
   String _homeBabyName = "우리 아기";
   String? _homeBabyPhotoUrl;
   final Set<String> _pinnedChatSessionIds = <String>{};
@@ -1430,69 +1431,80 @@ class _HomeShellState extends State<_HomeShell> {
     if (!BabyAIApi.isGoogleLinked) {
       return;
     }
-    final String localBabyId = BabyAIApi.activeBabyId.trim();
-    if (!localBabyId.toLowerCase().startsWith("offline_")) {
-      return;
+    if (mounted) {
+      setState(() => _loginSyncInProgress = true);
     }
     try {
-      final Map<String, dynamic> profile =
-          await BabyAIApi.instance.getBabyProfile();
-      final String babyName =
-          (profile["baby_name"] ?? "우리 아기").toString().trim();
-      final String birthDateRaw =
-          (profile["birth_date"] ?? "").toString().trim();
-      final String birthDate = birthDateRaw.isEmpty
-          ? DateTime.now().toIso8601String().split("T").first
-          : birthDateRaw;
-      final String babySex = (profile["sex"] ?? "unknown").toString().trim();
-      final String feedingMethod =
-          (profile["feeding_method"] ?? "mixed").toString().trim();
-      final String formulaBrand =
-          (profile["formula_brand"] ?? "").toString().trim();
-      final String formulaProduct =
-          (profile["formula_product"] ?? "").toString().trim();
-      final String formulaType =
-          (profile["formula_type"] ?? "standard").toString().trim();
-      final double? weight = _asNullableDouble(profile["weight_kg"]);
-      final bool formulaContainsStarch =
-          _asNullableBool(profile["formula_contains_starch"]) ?? false;
+      final String localBabyId = BabyAIApi.activeBabyId.trim();
+      if (localBabyId.toLowerCase().startsWith("offline_")) {
+        final Map<String, dynamic> profile =
+            await BabyAIApi.instance.getBabyProfile();
+        final String babyName =
+            (profile["baby_name"] ?? "우리 아기").toString().trim();
+        final String birthDateRaw =
+            (profile["birth_date"] ?? "").toString().trim();
+        final String birthDate = birthDateRaw.isEmpty
+            ? DateTime.now().toIso8601String().split("T").first
+            : birthDateRaw;
+        final String babySex = (profile["sex"] ?? "unknown").toString().trim();
+        final String feedingMethod =
+            (profile["feeding_method"] ?? "mixed").toString().trim();
+        final String formulaBrand =
+            (profile["formula_brand"] ?? "").toString().trim();
+        final String formulaProduct =
+            (profile["formula_product"] ?? "").toString().trim();
+        final String formulaType =
+            (profile["formula_type"] ?? "standard").toString().trim();
+        final double? weight = _asNullableDouble(profile["weight_kg"]);
+        final bool formulaContainsStarch =
+            _asNullableBool(profile["formula_contains_starch"]) ?? false;
 
-      final Map<String, dynamic> remote =
-          await BabyAIApi.instance.onboardingParent(
-        provider: "google",
-        babyName: babyName,
-        babyBirthDate: birthDate,
-        babySex: babySex,
-        babyWeightKg: weight,
-        feedingMethod: feedingMethod,
-        formulaBrand: formulaBrand,
-        formulaProduct: formulaProduct,
-        formulaType: formulaType,
-        formulaContainsStarch: formulaContainsStarch,
-      );
-      final String remoteBabyId = (remote["baby_id"] ?? "").toString().trim();
-      final String remoteHouseholdId =
-          (remote["household_id"] ?? "").toString().trim();
-      if (remoteBabyId.isEmpty || remoteHouseholdId.isEmpty) {
-        return;
+        final Map<String, dynamic> remote =
+            await BabyAIApi.instance.onboardingParent(
+          provider: "google",
+          babyName: babyName,
+          babyBirthDate: birthDate,
+          babySex: babySex,
+          babyWeightKg: weight,
+          feedingMethod: feedingMethod,
+          formulaBrand: formulaBrand,
+          formulaProduct: formulaProduct,
+          formulaType: formulaType,
+          formulaContainsStarch: formulaContainsStarch,
+        );
+        final String remoteBabyId = (remote["baby_id"] ?? "").toString().trim();
+        final String remoteHouseholdId =
+            (remote["household_id"] ?? "").toString().trim();
+        if (remoteBabyId.isNotEmpty && remoteHouseholdId.isNotEmpty) {
+          BabyAIApi.setRuntimeIds(
+            babyId: remoteBabyId,
+            householdId: remoteHouseholdId,
+          );
+          await BabyAIApi.instance.upsertBabyProfile(
+            babyName: babyName,
+            babyBirthDate: birthDate,
+            babySex: babySex,
+            babyWeightKg: weight,
+            feedingMethod: feedingMethod,
+            formulaBrand: formulaBrand,
+            formulaProduct: formulaProduct,
+            formulaType: formulaType,
+            formulaContainsStarch: formulaContainsStarch,
+          );
+        }
       }
-      BabyAIApi.setRuntimeIds(
-        babyId: remoteBabyId,
-        householdId: remoteHouseholdId,
-      );
-      await BabyAIApi.instance.upsertBabyProfile(
-        babyName: babyName,
-        babyBirthDate: birthDate,
-        babySex: babySex,
-        babyWeightKg: weight,
-        feedingMethod: feedingMethod,
-        formulaBrand: formulaBrand,
-        formulaProduct: formulaProduct,
-        formulaType: formulaType,
-        formulaContainsStarch: formulaContainsStarch,
-      );
+      await BabyAIApi.instance.syncAllLocalDataToServer();
+      if (BabyAIApi.activeBabyId.isNotEmpty) {
+        await _loadChatHistory();
+      }
+      await _recordPageKey.currentState?.refreshData();
+      await _reportPageKey.currentState?.refreshData();
     } catch (_) {
       // Keep local mode when online promotion fails.
+    } finally {
+      if (mounted) {
+        setState(() => _loginSyncInProgress = false);
+      }
     }
   }
 
@@ -2114,6 +2126,75 @@ class _HomeShellState extends State<_HomeShell> {
     return Icon(icon, size: 20, color: color);
   }
 
+  Widget _buildLoginSyncOverlay(BuildContext context) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    return Positioned.fill(
+      child: IgnorePointer(
+        ignoring: false,
+        child: ColoredBox(
+          color: Colors.black.withValues(alpha: 0.18),
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 14),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: color.surface.withValues(alpha: 0.96),
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(
+                    color: color.outlineVariant.withValues(alpha: 0.3),
+                  ),
+                  boxShadow: <BoxShadow>[
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.12),
+                      blurRadius: 16,
+                      offset: const Offset(0, 6),
+                    ),
+                  ],
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      Image.asset(
+                        "assets/icons/app_logo.png",
+                        width: 28,
+                        height: 28,
+                        filterQuality: FilterQuality.high,
+                      ),
+                      const SizedBox(width: 10),
+                      Text(
+                        tr(
+                          context,
+                          ko: "동기화 중...",
+                          en: "Syncing...",
+                          es: "Sincronizando...",
+                        ),
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: color.primary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (BabyAIApi.activeBabyId.isEmpty) {
@@ -2282,7 +2363,15 @@ class _HomeShellState extends State<_HomeShell> {
           ),
         ),
       ),
-      body: SafeArea(top: false, child: _buildCurrentPage()),
+      body: SafeArea(
+        top: false,
+        child: Stack(
+          children: <Widget>[
+            _buildCurrentPage(),
+            if (_loginSyncInProgress) _buildLoginSyncOverlay(context),
+          ],
+        ),
+      ),
       bottomNavigationBar: showBottomNav
           ? NavigationBar(
               labelBehavior: NavigationDestinationLabelBehavior.alwaysHide,
