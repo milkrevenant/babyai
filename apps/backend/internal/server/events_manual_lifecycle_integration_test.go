@@ -108,6 +108,50 @@ func TestStartManualEventRejectsDuplicateOpenEvent(t *testing.T) {
 	}
 }
 
+func TestStartManualEventAllowsDifferentTypeOverlap(t *testing.T) {
+	resetDatabase(t)
+	fixture := seedOwnerFixture(t)
+	start := time.Now().UTC().Add(-25 * time.Minute).Truncate(time.Second)
+
+	sleepRec := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodPost,
+		"/api/v1/events/start",
+		signToken(t, fixture.UserID, nil),
+		map[string]any{
+			"baby_id":    fixture.BabyID,
+			"type":       "SLEEP",
+			"start_time": start.Format(time.RFC3339),
+		},
+		nil,
+	)
+	if sleepRec.Code != http.StatusOK {
+		t.Fatalf("sleep start failed: %d body=%s", sleepRec.Code, sleepRec.Body.String())
+	}
+
+	formulaRec := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodPost,
+		"/api/v1/events/start",
+		signToken(t, fixture.UserID, nil),
+		map[string]any{
+			"baby_id":    fixture.BabyID,
+			"type":       "FORMULA",
+			"start_time": start.Add(2 * time.Minute).Format(time.RFC3339),
+		},
+		nil,
+	)
+	if formulaRec.Code != http.StatusOK {
+		t.Fatalf("formula start failed: %d body=%s", formulaRec.Code, formulaRec.Body.String())
+	}
+	body := decodeJSONMap(t, formulaRec)
+	if body["status"] != "STARTED" {
+		t.Fatalf("expected STARTED, got %v", body["status"])
+	}
+}
+
 func TestCompleteManualEventClosesOpenEvent(t *testing.T) {
 	resetDatabase(t)
 	fixture := seedOwnerFixture(t)
@@ -346,6 +390,63 @@ func TestCancelManualEventMarksCanceled(t *testing.T) {
 		eventID,
 	).Scan(&metadataRaw); err != nil {
 		t.Fatalf("query canceled event: %v", err)
+	}
+	metadata := map[string]any{}
+	if err := json.Unmarshal(metadataRaw, &metadata); err != nil {
+		t.Fatalf("unmarshal metadata json: %v", err)
+	}
+	if metadata["event_state"] != "CANCELED" {
+		t.Fatalf("expected event_state CANCELED, got %v", metadata["event_state"])
+	}
+}
+
+func TestCancelManualEventMarksClosedEventCanceled(t *testing.T) {
+	resetDatabase(t)
+	fixture := seedOwnerFixture(t)
+	start := time.Now().UTC().Add(-42 * time.Minute).Truncate(time.Second)
+	end := start.Add(22 * time.Minute)
+
+	eventID := seedEvent(
+		t,
+		"",
+		fixture.BabyID,
+		"SLEEP",
+		start,
+		&end,
+		map[string]any{"sleep_type": "nap"},
+		fixture.UserID,
+	)
+
+	cancelRec := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodPatch,
+		"/api/v1/events/"+eventID+"/cancel",
+		signToken(t, fixture.UserID, nil),
+		map[string]any{"reason": "delete from daily activity"},
+		nil,
+	)
+	if cancelRec.Code != http.StatusOK {
+		t.Fatalf("cancel request failed: %d body=%s", cancelRec.Code, cancelRec.Body.String())
+	}
+	cancelBody := decodeJSONMap(t, cancelRec)
+	if cancelBody["status"] != "CANCELED" {
+		t.Fatalf("expected CANCELED response, got %v", cancelBody["status"])
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var dbEnd *time.Time
+	var metadataRaw []byte
+	if err := testPool.QueryRow(
+		ctx,
+		`SELECT "endTime", "metadataJson" FROM "Event" WHERE id = $1`,
+		eventID,
+	).Scan(&dbEnd, &metadataRaw); err != nil {
+		t.Fatalf("query canceled closed event: %v", err)
+	}
+	if dbEnd == nil || !dbEnd.UTC().Equal(end.UTC()) {
+		t.Fatalf("expected endTime to remain %s, got %v", end.UTC(), dbEnd)
 	}
 	metadata := map[string]any{}
 	if err := json.Unmarshal(metadataRaw, &metadata); err != nil {

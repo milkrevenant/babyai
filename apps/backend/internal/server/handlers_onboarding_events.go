@@ -1314,11 +1314,12 @@ func (a *App) cancelManualEvent(c *gin.Context) {
 	metadata := parseJSONStringMap(metadataRaw)
 	eventState := strings.ToUpper(strings.TrimSpace(toString(metadata["event_state"])))
 	entryMode := strings.ToLower(strings.TrimSpace(toString(metadata["entry_mode"])))
-	if !(existingEnd == nil && (eventState == "OPEN" || entryMode == "manual_start")) {
+	isOpenEvent := existingEnd == nil && (eventState == "OPEN" || entryMode == "manual_start")
+	if eventState == "CANCELED" {
 		c.AbortWithStatusJSON(http.StatusConflict, gin.H{
-			"detail":       "event is not open",
+			"detail":       "event is already canceled",
 			"event_id":     eventID,
-			"event_status": "CLOSED",
+			"event_status": "CANCELED",
 		})
 		return
 	}
@@ -1329,6 +1330,13 @@ func (a *App) cancelManualEvent(c *gin.Context) {
 		metadata["cancel_reason"] = reason
 	}
 	resolvedEnd := time.Now().UTC()
+	if !isOpenEvent {
+		if existingEnd != nil {
+			resolvedEnd = existingEnd.UTC()
+		} else {
+			resolvedEnd = startTime.UTC()
+		}
+	}
 	if resolvedEnd.Before(startTime.UTC()) {
 		resolvedEnd = startTime.UTC()
 	}
@@ -1339,7 +1347,7 @@ func (a *App) cancelManualEvent(c *gin.Context) {
 		 SET "endTime" = $2,
 		     "metadataJson" = $3
 		 WHERE id = $1
-		   AND "endTime" IS NULL`,
+		   AND COALESCE("metadataJson"->>'event_state', '') <> 'CANCELED'`,
 		eventID,
 		resolvedEnd,
 		mustMarshalJSON(metadata),

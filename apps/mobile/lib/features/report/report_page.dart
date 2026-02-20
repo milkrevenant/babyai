@@ -12,6 +12,11 @@ import "../../core/widgets/app_svg_icon.dart";
 
 const Duration _kTabAnimationDuration = Duration(milliseconds: 220);
 const int _minutesPerDay = 24 * 60;
+typedef _OpenEventsSheetHandler = Future<void> Function({
+  required String title,
+  required List<_EventDetail> events,
+});
+typedef _EventActionHandler = Future<void> Function(_EventDetail event);
 
 class _SemanticColors {
   static Color sleep = const Color(0xFF9B7AD8);
@@ -344,6 +349,366 @@ class ReportPageState extends State<ReportPage> {
     await _loadReports();
   }
 
+  Future<void> _openEventDetailsSheetFromDaily({
+    required String title,
+    required List<_EventDetail> events,
+  }) async {
+    await _showEventDetailsSheet(
+      context,
+      title: title,
+      events: events,
+      onEditEvent: _editEventFromDailyActivity,
+      onDeleteEvent: _deleteEventFromDailyActivity,
+    );
+  }
+
+  Future<void> _editEventFromDailyActivity(_EventDetail event) async {
+    final String eventId = (event.eventId ?? "").trim();
+    if (eventId.isEmpty) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            tr(
+              context,
+              ko: "이 기록은 수정할 수 없습니다.",
+              en: "This event cannot be edited.",
+              es: "Este registro no se puede editar.",
+            ),
+          ),
+        ),
+      );
+      return;
+    }
+
+    final _EventTimeEditDraft? edited = await _showEventTimeEditor(event);
+    if (!mounted || edited == null) {
+      return;
+    }
+    if (edited.endLocal.isBefore(edited.startLocal)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            tr(
+              context,
+              ko: "종료 시각은 시작 시각보다 늦어야 합니다.",
+              en: "End time must be after start time.",
+              es: "La hora de fin debe ser posterior al inicio.",
+            ),
+          ),
+        ),
+      );
+      return;
+    }
+
+    final int durationMin = math.max(
+      0,
+      edited.endLocal.difference(edited.startLocal).inMinutes,
+    );
+    Map<String, dynamic>? valuePatch;
+    if (event.type == "SLEEP" || event.type == "BREASTFEED") {
+      valuePatch = <String, dynamic>{"duration_min": durationMin};
+    }
+
+    try {
+      await BabyAIApi.instance.updateManualEvent(
+        eventId: eventId,
+        startTime: edited.startLocal.toUtc(),
+        endTime: edited.endLocal.toUtc(),
+        value: valuePatch,
+        metadata: <String, dynamic>{
+          "edited_from": "report_daily_activity",
+        },
+      );
+      await _loadReports();
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            tr(
+              context,
+              ko: "기록 시간이 수정되었습니다.",
+              en: "Event time updated.",
+              es: "Hora del registro actualizada.",
+            ),
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.toString())),
+      );
+    }
+  }
+
+  Future<void> _deleteEventFromDailyActivity(_EventDetail event) async {
+    final String eventId = (event.eventId ?? "").trim();
+    if (eventId.isEmpty) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            tr(
+              context,
+              ko: "이 기록은 삭제할 수 없습니다.",
+              en: "This event cannot be deleted.",
+              es: "Este registro no se puede eliminar.",
+            ),
+          ),
+        ),
+      );
+      return;
+    }
+
+    try {
+      await BabyAIApi.instance.cancelManualEvent(
+        eventId: eventId,
+        reason: "deleted_from_daily_activity",
+      );
+      await _loadReports();
+      if (!mounted) {
+        return;
+      }
+
+      final ColorScheme color = Theme.of(context).colorScheme;
+      final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 5),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: color.surfaceContainerHighest,
+          content: _UndoDeleteSnackContent(
+            message: tr(
+              context,
+              ko: "기록을 삭제했습니다.",
+              en: "Event deleted.",
+              es: "Registro eliminado.",
+            ),
+            iconColor: color.error,
+            progressColor: color.error.withValues(alpha: 0.82),
+          ),
+          action: SnackBarAction(
+            label: tr(context, ko: "되돌리기", en: "Undo", es: "Deshacer"),
+            textColor: color.primary,
+            onPressed: () {
+              unawaited(_undoDeletedEvent(event));
+            },
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.toString())),
+      );
+    }
+  }
+
+  Future<void> _undoDeletedEvent(_EventDetail event) async {
+    final String eventId = (event.eventId ?? "").trim();
+    if (eventId.isEmpty) {
+      return;
+    }
+    final DateTime start = event.startUtc;
+    DateTime end = event.endUtc ?? event.startUtc;
+    if (end.isBefore(start)) {
+      end = start;
+    }
+    final int durationMin = math.max(0, end.difference(start).inMinutes);
+    Map<String, dynamic>? valuePatch;
+    if (event.type == "SLEEP" || event.type == "BREASTFEED") {
+      valuePatch = <String, dynamic>{"duration_min": durationMin};
+    }
+    try {
+      await BabyAIApi.instance.updateManualEvent(
+        eventId: eventId,
+        startTime: start,
+        endTime: end,
+        value: valuePatch,
+        metadata: <String, dynamic>{"undo_delete": true},
+      );
+      await _loadReports();
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            tr(
+              context,
+              ko: "삭제를 되돌렸습니다.",
+              en: "Delete undone.",
+              es: "Eliminación revertida.",
+            ),
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.toString())),
+      );
+    }
+  }
+
+  Future<_EventTimeEditDraft?> _showEventTimeEditor(_EventDetail event) async {
+    DateTime startLocal = event.startUtc.toLocal();
+    DateTime endLocal = (event.endUtc ?? event.startUtc).toLocal();
+
+    return showModalBottomSheet<_EventTimeEditDraft>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (BuildContext context) {
+        return StatefulBuilder(
+          builder: (BuildContext context, StateSetter setModalState) {
+            Future<void> pickStart() async {
+              final DateTime? picked = await _pickLocalDateTime(
+                context: context,
+                initial: startLocal,
+              );
+              if (picked == null) {
+                return;
+              }
+              setModalState(() {
+                startLocal = picked;
+                if (endLocal.isBefore(startLocal)) {
+                  endLocal = startLocal;
+                }
+              });
+            }
+
+            Future<void> pickEnd() async {
+              final DateTime? picked = await _pickLocalDateTime(
+                context: context,
+                initial: endLocal,
+              );
+              if (picked == null) {
+                return;
+              }
+              setModalState(() {
+                endLocal = picked;
+              });
+            }
+
+            return SafeArea(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(
+                  16,
+                  10,
+                  16,
+                  16 + MediaQuery.of(context).viewInsets.bottom,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      tr(
+                        context,
+                        ko: "기록 시간 수정",
+                        en: "Edit event time",
+                        es: "Editar hora del registro",
+                      ),
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      onTap: pickStart,
+                      title: Text(
+                        tr(context, ko: "시작 시각", en: "Start", es: "Inicio"),
+                      ),
+                      subtitle: Text(_formatEventDateTime(startLocal)),
+                      trailing: const Icon(Icons.edit_rounded),
+                    ),
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      onTap: pickEnd,
+                      title: Text(
+                        tr(context, ko: "종료 시각", en: "End", es: "Fin"),
+                      ),
+                      subtitle: Text(_formatEventDateTime(endLocal)),
+                      trailing: const Icon(Icons.edit_rounded),
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton(
+                        onPressed: () {
+                          Navigator.of(context).pop(
+                            _EventTimeEditDraft(
+                              startLocal: startLocal,
+                              endLocal: endLocal,
+                            ),
+                          );
+                        },
+                        child: Text(
+                          tr(context, ko: "저장", en: "Save", es: "Guardar"),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<DateTime?> _pickLocalDateTime({
+    required BuildContext context,
+    required DateTime initial,
+  }) async {
+    final DateTime now = DateTime.now();
+    final DateTime first = DateTime(now.year - 3, 1, 1);
+    final DateTime last = DateTime(now.year + 3, 12, 31);
+    final DateTime? pickedDate = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: first,
+      lastDate: last,
+      helpText: tr(context, ko: "날짜 선택", en: "Select date", es: "Fecha"),
+    );
+    if (pickedDate == null || !context.mounted) {
+      return null;
+    }
+    final TimeOfDay? pickedTime = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(initial),
+      helpText: tr(context, ko: "시간 선택", en: "Select time", es: "Hora"),
+    );
+    if (pickedTime == null) {
+      return null;
+    }
+    return DateTime(
+      pickedDate.year,
+      pickedDate.month,
+      pickedDate.day,
+      pickedTime.hour,
+      pickedTime.minute,
+    );
+  }
+
   Future<ReportRangeComparison> buildRangeComparison(ReportRange range) async {
     final DateTime currentAnchor;
     final DateTime previousAnchor;
@@ -674,6 +1039,7 @@ class ReportPageState extends State<ReportPage> {
           day: today,
           nowUtc: nowUtc,
           history: knownEvents,
+          onOpenEvents: _openEventDetailsSheetFromDaily,
         );
       case ReportRange.weekly:
         return _WeeklyView(
@@ -681,6 +1047,7 @@ class ReportPageState extends State<ReportPage> {
           days: weekDays,
           weeklyTrend: weeklyTrend,
           suggestions: suggestions,
+          onOpenEvents: _openEventDetailsSheetFromDaily,
         );
       case ReportRange.monthly:
         return _MonthlyView(
@@ -716,11 +1083,13 @@ class _DailyView extends StatelessWidget {
     required this.day,
     required this.nowUtc,
     required this.history,
+    required this.onOpenEvents,
   });
 
   final _DayStats day;
   final DateTime nowUtc;
   final List<_EventDetail> history;
+  final _OpenEventsSheetHandler onOpenEvents;
 
   @override
   Widget build(BuildContext context) {
@@ -802,8 +1171,7 @@ class _DailyView extends StatelessWidget {
                           if (selected.events.isEmpty) {
                             return;
                           }
-                          _showEventDetailsSheet(
-                            context,
+                          onOpenEvents(
                             title: selected.slice.label,
                             events: selected.events,
                           );
@@ -868,8 +1236,7 @@ class _DailyView extends StatelessWidget {
                   notes: day.noteMarks,
                   dense: false,
                   onEventTap: (_EventDetail event) {
-                    _showEventDetailsSheet(
-                      context,
+                    onOpenEvents(
                       title: _eventTypeLabel(context, event.displayType),
                       events: <_EventDetail>[event],
                     );
@@ -905,11 +1272,13 @@ class _WeeklyView extends StatelessWidget {
     required this.days,
     required this.weeklyTrend,
     required this.suggestions,
+    required this.onOpenEvents,
   });
 
   final List<_DayStats> days;
   final Map<dynamic, dynamic> weeklyTrend;
   final List<String> suggestions;
+  final _OpenEventsSheetHandler onOpenEvents;
 
   @override
   Widget build(BuildContext context) {
@@ -972,8 +1341,7 @@ class _WeeklyView extends StatelessWidget {
                             notes: day.noteMarks,
                             dense: true,
                             onEventTap: (_EventDetail event) {
-                              _showEventDetailsSheet(
-                                context,
+                              onOpenEvents(
                                 title: _eventTypeLabel(
                                   context,
                                   event.displayType,
@@ -2151,6 +2519,7 @@ class _EventDetail {
     required this.startUtc,
     required this.endUtc,
     required this.value,
+    this.eventId,
   });
 
   final String type;
@@ -2159,6 +2528,92 @@ class _EventDetail {
   final DateTime startUtc;
   final DateTime? endUtc;
   final Map<String, dynamic> value;
+  final String? eventId;
+}
+
+class _EventTimeEditDraft {
+  const _EventTimeEditDraft({
+    required this.startLocal,
+    required this.endLocal,
+  });
+
+  final DateTime startLocal;
+  final DateTime endLocal;
+}
+
+class _UndoDeleteSnackContent extends StatelessWidget {
+  const _UndoDeleteSnackContent({
+    required this.message,
+    required this.iconColor,
+    required this.progressColor,
+  });
+
+  final String message;
+  final Color iconColor;
+  final Color progressColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Row(
+          children: <Widget>[
+            Icon(Icons.delete_rounded, color: iconColor, size: 18),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                message,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: color.onSurface,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(999),
+          child: SizedBox(
+            height: 4,
+            child: Stack(
+              children: <Widget>[
+                Positioned.fill(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: color.outlineVariant.withValues(alpha: 0.26),
+                    ),
+                  ),
+                ),
+                Positioned.fill(
+                  child: TweenAnimationBuilder<double>(
+                    tween: Tween<double>(begin: 0, end: 1),
+                    duration: const Duration(seconds: 5),
+                    builder: (BuildContext context, double value, Widget? _) {
+                      return Align(
+                        alignment: Alignment.centerRight,
+                        child: FractionallySizedBox(
+                          widthFactor: value.clamp(0, 1),
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(color: progressColor),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 class _DayStats {
@@ -2264,6 +2719,7 @@ class _DayStats {
 
     for (final Map<String, dynamic> event in events) {
       final String type = (event["type"] ?? "").toString().trim().toUpperCase();
+      final String eventId = (event["event_id"] ?? "").toString().trim();
       final DateTime? start = _parseUtc(event["start_time"]);
       if (type.isEmpty || start == null) {
         continue;
@@ -2285,6 +2741,7 @@ class _DayStats {
         startUtc: start,
         endUtc: end,
         value: value,
+        eventId: eventId.isEmpty ? null : eventId,
       );
       parsedEvents.add(detail);
 
@@ -3304,6 +3761,9 @@ String _clockSliceLabel(
 }
 
 String _eventIdentityKey(_EventDetail event) {
+  if ((event.eventId ?? "").trim().isNotEmpty) {
+    return "id:${event.eventId}";
+  }
   return "${event.displayType}|${event.startUtc.toIso8601String()}|"
       "${event.endUtc?.toIso8601String() ?? ""}";
 }
@@ -3429,6 +3889,8 @@ Future<void> _showEventDetailsSheet(
   BuildContext context, {
   required String title,
   required List<_EventDetail> events,
+  _EventActionHandler? onEditEvent,
+  _EventActionHandler? onDeleteEvent,
 }) async {
   final List<_EventDetail> sorted = List<_EventDetail>.from(events)
     ..sort(
@@ -3543,6 +4005,45 @@ Future<void> _showEventDetailsSheet(
                           height: 1.35,
                         ),
                       ),
+                      trailing: (onEditEvent == null && onDeleteEvent == null)
+                          ? null
+                          : Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: <Widget>[
+                                if (onEditEvent != null)
+                                  IconButton(
+                                    tooltip: tr(
+                                      context,
+                                      ko: "수정",
+                                      en: "Edit",
+                                      es: "Editar",
+                                    ),
+                                    icon: const Icon(Icons.edit_rounded),
+                                    onPressed: () {
+                                      Navigator.of(context).pop();
+                                      unawaited(onEditEvent(event));
+                                    },
+                                  ),
+                                if (onDeleteEvent != null)
+                                  IconButton(
+                                    tooltip: tr(
+                                      context,
+                                      ko: "삭제",
+                                      en: "Delete",
+                                      es: "Eliminar",
+                                    ),
+                                    icon: Icon(
+                                      Icons.delete_rounded,
+                                      color:
+                                          Theme.of(context).colorScheme.error,
+                                    ),
+                                    onPressed: () {
+                                      Navigator.of(context).pop();
+                                      unawaited(onDeleteEvent(event));
+                                    },
+                                  ),
+                              ],
+                            ),
                     );
                   },
                 ),
@@ -3710,6 +4211,14 @@ String _formatEventWindow(_EventDetail event) {
 
 String _formatMonthDayClock(DateTime value) {
   return "${value.month}/${value.day} ${_formatClock(value)}";
+}
+
+String _formatEventDateTime(DateTime value) {
+  final DateTime local = value.toLocal();
+  final String y = local.year.toString().padLeft(4, "0");
+  final String m = local.month.toString().padLeft(2, "0");
+  final String d = local.day.toString().padLeft(2, "0");
+  return "$y-$m-$d ${_formatClock(local)}";
 }
 
 String _formatClock(DateTime value) {

@@ -1112,7 +1112,7 @@ func (a *App) getDailyReport(c *gin.Context) {
 	end := localStart.Add(24 * time.Hour).UTC()
 	rows, err := a.db.Query(
 		c.Request.Context(),
-		`SELECT type, "startTime", "endTime", "valueJson"
+		`SELECT id, type, "startTime", "endTime", "valueJson"
 		 FROM "Event"
 		 WHERE "babyId" = $1
 		   AND "startTime" >= $2
@@ -1141,17 +1141,19 @@ func (a *App) getDailyReport(c *gin.Context) {
 	sleepMinutes := 0
 	events := make([]gin.H, 0, 16)
 	for rows.Next() {
+		var eventID string
 		var eventType string
 		var startedAt time.Time
 		var endedAt *time.Time
 		var valueRaw []byte
-		if err := rows.Scan(&eventType, &startedAt, &endedAt, &valueRaw); err != nil {
+		if err := rows.Scan(&eventID, &eventType, &startedAt, &endedAt, &valueRaw); err != nil {
 			writeError(c, http.StatusInternalServerError, "Failed to parse events")
 			return
 		}
 		counts[eventType]++
 		valueMap := parseJSONStringMap(valueRaw)
 		eventItem := gin.H{
+			"event_id":   eventID,
 			"type":       eventType,
 			"start_time": startedAt.UTC().Format(time.RFC3339),
 			"value":      valueMap,
