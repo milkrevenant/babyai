@@ -1,4 +1,5 @@
 import "dart:async";
+import "dart:convert";
 
 import "package:dio/dio.dart";
 
@@ -37,6 +38,7 @@ class BabyAIApi {
   static const String _cacheQuickLanding = "quick_landing_snapshot";
   static const String _cacheDailyReport = "daily_report";
   static const String _cacheWeeklyReport = "weekly_report";
+  static const String _cacheBabyProfile = "baby_profile";
   final Dio _dio;
 
   bool get isConfigured =>
@@ -46,6 +48,33 @@ class BabyAIApi {
   static String get activeBabyId => _runtimeBabyId.trim();
   static String get activeHouseholdId => _runtimeHouseholdId.trim();
   static String get activeAlbumId => _runtimeAlbumId.trim();
+  static String? get currentTokenProvider {
+    final String token = _runtimeBearerToken.trim();
+    if (token.isEmpty) {
+      return null;
+    }
+    try {
+      final List<String> parts = token.split(".");
+      if (parts.length < 2) {
+        return null;
+      }
+      final String payloadPart = base64Url.normalize(parts[1]);
+      final Object? payload =
+          jsonDecode(utf8.decode(base64Url.decode(payloadPart)));
+      if (payload is! Map<String, dynamic>) {
+        return null;
+      }
+      final String provider = (payload["provider"] ?? "").toString().trim();
+      if (provider.isEmpty) {
+        return null;
+      }
+      return provider.toLowerCase();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static bool get isGoogleLinked => currentTokenProvider == "google";
 
   static void setBearerToken(String token) {
     _runtimeBearerToken = token.trim();
@@ -66,6 +95,12 @@ class BabyAIApi {
       _runtimeAlbumId = albumId.trim();
     }
   }
+
+  bool get _isOnlineSyncEnabled => isGoogleLinked;
+  bool get _hasServerLinkedProfile =>
+      _isOnlineSyncEnabled &&
+      activeBabyId.isNotEmpty &&
+      !activeBabyId.toLowerCase().startsWith("offline_");
 
   void _requireToken() {
     if (_runtimeBearerToken.isEmpty) {
@@ -238,6 +273,9 @@ class BabyAIApi {
   }
 
   Future<void> flushOfflineMutations() async {
+    if (!_hasServerLinkedProfile) {
+      return;
+    }
     if (_mutationFlushInProgress) {
       return;
     }
@@ -254,10 +292,11 @@ class BabyAIApi {
           await _dispatchQueuedMutation(item);
           await OfflineDataStore.instance.removeMutation(id);
         } catch (error) {
+          // Keep queued mutations for later retry when auth/network state changes.
           if (_isConnectivityFailure(error)) {
             break;
           }
-          await OfflineDataStore.instance.removeMutation(id);
+          break;
         }
       }
     } finally {
@@ -281,6 +320,316 @@ class BabyAIApi {
     final int hours = absMinutes ~/ 60;
     final int minutes = absMinutes % 60;
     return "$sign${hours.toString().padLeft(2, "0")}:${minutes.toString().padLeft(2, "0")}";
+  }
+
+  String _offlineId(String prefix) {
+    final int micros = DateTime.now().toUtc().microsecondsSinceEpoch;
+    return "offline_${prefix}_$micros";
+  }
+
+  int _daysInMonth(DateTime dateLocal) {
+    return DateTime(dateLocal.year, dateLocal.month + 1, 0).day;
+  }
+
+  DateTime _toWeekStartLocal(DateTime dateLocal) {
+    return dateLocal
+        .subtract(Duration(days: dateLocal.weekday - DateTime.monday));
+  }
+
+  Future<void> _writeCachedBabyProfile({
+    required String babyId,
+    required Map<String, dynamic> profile,
+  }) async {
+    await OfflineDataStore.instance.writeCache(
+      namespace: _cacheBabyProfile,
+      babyId: babyId,
+      key: "profile",
+      data: profile,
+    );
+  }
+
+  Future<Map<String, dynamic>?> _readCachedBabyProfile({
+    required String babyId,
+  }) async {
+    if (babyId.trim().isEmpty) {
+      return null;
+    }
+    return OfflineDataStore.instance.readCache(
+      namespace: _cacheBabyProfile,
+      babyId: babyId,
+      key: "profile",
+    );
+  }
+
+  Map<String, dynamic> _buildOfflineProfile({
+    required String babyId,
+    required String babyName,
+    required String babyBirthDate,
+    required String babySex,
+    double? babyWeightKg,
+    required String feedingMethod,
+    required String formulaBrand,
+    required String formulaProduct,
+    required String formulaType,
+    required bool formulaContainsStarch,
+  }) {
+    final DateTime nowLocal = DateTime.now().toLocal();
+    final DateTime birthLocal =
+        DateTime.tryParse(babyBirthDate)?.toLocal() ?? nowLocal;
+    final int ageDays = nowLocal
+        .difference(DateTime(birthLocal.year, birthLocal.month, birthLocal.day))
+        .inDays;
+    final String formulaDisplay = <String>[
+      formulaBrand.trim(),
+      formulaProduct.trim(),
+    ].where((String it) => it.isNotEmpty).join(" ");
+
+    return <String, dynamic>{
+      "baby_id": babyId,
+      "baby_name": babyName.trim().isEmpty ? "우리 아기" : babyName.trim(),
+      "birth_date": babyBirthDate.trim(),
+      "age_days": ageDays < 0 ? 0 : ageDays,
+      "sex": babySex.trim().isEmpty ? "unknown" : babySex.trim(),
+      "weight_kg": babyWeightKg,
+      "feeding_method":
+          feedingMethod.trim().isEmpty ? "mixed" : feedingMethod.trim(),
+      "formula_brand": formulaBrand.trim(),
+      "formula_product": formulaProduct.trim(),
+      "formula_type":
+          formulaType.trim().isEmpty ? "standard" : formulaType.trim(),
+      "formula_contains_starch": formulaContainsStarch,
+      "formula_display_name": formulaDisplay.isEmpty ? "기본 분유" : formulaDisplay,
+      "recommended_formula_daily_ml": null,
+      "recommended_formula_per_feed_ml": null,
+      "recommended_feed_interval_min": 180,
+      "recommended_next_feeding_time": null,
+      "recommended_next_feeding_in_min": null,
+      "recommendation_reference_text": "",
+      "recommendation_note": "",
+      "formula_catalog": <dynamic>[],
+      "offline_cached": true,
+    };
+  }
+
+  Map<String, dynamic> _buildOfflineLandingSnapshot({
+    required String babyId,
+    required String babyName,
+    required String range,
+    required int rangeDayCount,
+  }) {
+    final DateTime nowLocal = DateTime.now().toLocal();
+    final String date = nowLocal.toIso8601String().split("T").first;
+    return <String, dynamic>{
+      "baby_id": babyId,
+      "baby_name": babyName,
+      "baby_profile_photo_url": null,
+      "date": date,
+      "range": range,
+      "range_day_count": rangeDayCount,
+      "formula_total_ml": 0,
+      "formula_daily_avg_ml": 0,
+      "feedings_count": 0,
+      "feedings_daily_avg_count": 0,
+      "formula_count": 0,
+      "breastfeed_count": 0,
+      "breastfeed_daily_avg_count": 0,
+      "sleep_avg_min": 0,
+      "night_sleep_avg_min": 0,
+      "nap_avg_min": 0,
+      "pee_count": 0,
+      "poo_count": 0,
+      "medication_count": 0,
+      "memo_count": 0,
+      "weaning_count": 0,
+      "last_formula_time": null,
+      "last_breastfeed_time": null,
+      "last_sleep_end_time": null,
+      "recent_sleep_duration_min": 0,
+      "recent_sleep_gap_min": 0,
+      "last_pee_time": null,
+      "last_poo_time": null,
+      "last_medication_time": null,
+      "last_medication_name": null,
+      "last_weaning_time": null,
+      "special_memo": "",
+      "graph_labels": <dynamic>[],
+      "graph_points": <dynamic>[],
+      "open_formula_event_id": null,
+      "open_formula_start_time": null,
+      "open_formula_value": <String, dynamic>{},
+      "open_breastfeed_event_id": null,
+      "open_breastfeed_start_time": null,
+      "open_breastfeed_value": <String, dynamic>{},
+      "open_sleep_event_id": null,
+      "open_sleep_start_time": null,
+      "open_sleep_value": <String, dynamic>{},
+      "open_diaper_event_id": null,
+      "open_diaper_start_time": null,
+      "open_diaper_value": <String, dynamic>{},
+      "open_weaning_event_id": null,
+      "open_weaning_start_time": null,
+      "open_weaning_value": <String, dynamic>{},
+      "open_medication_event_id": null,
+      "open_medication_start_time": null,
+      "open_medication_value": <String, dynamic>{},
+      "offline_cached": true,
+    };
+  }
+
+  Future<void> _seedOfflineSnapshotAndReports({
+    required String babyId,
+    required String babyName,
+  }) async {
+    final DateTime todayLocal = DateTime.now().toLocal();
+    final DateTime weekStartLocal = _toWeekStartLocal(todayLocal);
+    final DateTime monthStartLocal =
+        DateTime(todayLocal.year, todayLocal.month, 1);
+    final int monthDays = _daysInMonth(todayLocal);
+
+    await OfflineDataStore.instance.writeCache(
+      namespace: _cacheQuickLanding,
+      babyId: babyId,
+      key: "day",
+      data: _buildOfflineLandingSnapshot(
+        babyId: babyId,
+        babyName: babyName,
+        range: "day",
+        rangeDayCount: 1,
+      ),
+    );
+    await OfflineDataStore.instance.writeCache(
+      namespace: _cacheQuickLanding,
+      babyId: babyId,
+      key: "week",
+      data: _buildOfflineLandingSnapshot(
+        babyId: babyId,
+        babyName: babyName,
+        range: "week",
+        rangeDayCount: 7,
+      ),
+    );
+    await OfflineDataStore.instance.writeCache(
+      namespace: _cacheQuickLanding,
+      babyId: babyId,
+      key: "month",
+      data: _buildOfflineLandingSnapshot(
+        babyId: babyId,
+        babyName: babyName,
+        range: "month",
+        rangeDayCount: monthDays,
+      ),
+    );
+
+    final String todayKey = DateTime.utc(
+      todayLocal.year,
+      todayLocal.month,
+      todayLocal.day,
+    ).toIso8601String().split("T").first;
+    final String weekKey = DateTime.utc(
+      weekStartLocal.year,
+      weekStartLocal.month,
+      weekStartLocal.day,
+    ).toIso8601String().split("T").first;
+
+    await OfflineDataStore.instance.writeCache(
+      namespace: _cacheDailyReport,
+      babyId: babyId,
+      key: todayKey,
+      data: <String, dynamic>{
+        "baby_id": babyId,
+        "date": todayKey,
+        "summary": <dynamic>[],
+        "events": <dynamic>[],
+        "labels": <dynamic>[],
+        "offline_cached": true,
+      },
+    );
+    await OfflineDataStore.instance.writeCache(
+      namespace: _cacheWeeklyReport,
+      babyId: babyId,
+      key: weekKey,
+      data: <String, dynamic>{
+        "baby_id": babyId,
+        "week_start": weekKey,
+        "trend": <String, dynamic>{},
+        "suggestions": <dynamic>[],
+        "labels": <dynamic>[],
+        "offline_cached": true,
+      },
+    );
+    await OfflineDataStore.instance.writeCache(
+      namespace: _cacheDailyReport,
+      babyId: babyId,
+      key: DateTime.utc(
+        monthStartLocal.year,
+        monthStartLocal.month,
+        monthStartLocal.day,
+      ).toIso8601String().split("T").first,
+      data: <String, dynamic>{
+        "baby_id": babyId,
+        "date": DateTime.utc(
+          monthStartLocal.year,
+          monthStartLocal.month,
+          monthStartLocal.day,
+        ).toIso8601String().split("T").first,
+        "summary": <dynamic>[],
+        "events": <dynamic>[],
+        "labels": <dynamic>[],
+        "offline_cached": true,
+      },
+    );
+  }
+
+  Future<Map<String, dynamic>> createOfflineOnboarding({
+    required String babyName,
+    required String babyBirthDate,
+    String? babySex,
+    double? babyWeightKg,
+    String? feedingMethod,
+    String? formulaBrand,
+    String? formulaProduct,
+    String? formulaType,
+    bool? formulaContainsStarch,
+  }) async {
+    final String babyId =
+        activeBabyId.isNotEmpty ? activeBabyId : _offlineId("baby");
+    final String householdId = activeHouseholdId.isNotEmpty
+        ? activeHouseholdId
+        : _offlineId("household");
+    final String albumId =
+        activeAlbumId.isNotEmpty ? activeAlbumId : _offlineId("album");
+    final String resolvedBabyName =
+        babyName.trim().isEmpty ? "우리 아기" : babyName.trim();
+    final String resolvedBirthDate = babyBirthDate.trim().isEmpty
+        ? DateTime.now().toIso8601String().split("T").first
+        : babyBirthDate.trim();
+    final Map<String, dynamic> profile = _buildOfflineProfile(
+      babyId: babyId,
+      babyName: resolvedBabyName,
+      babyBirthDate: resolvedBirthDate,
+      babySex: (babySex ?? "unknown").trim(),
+      babyWeightKg: babyWeightKg,
+      feedingMethod: (feedingMethod ?? "mixed").trim(),
+      formulaBrand: (formulaBrand ?? "").trim(),
+      formulaProduct: (formulaProduct ?? "").trim(),
+      formulaType: (formulaType ?? "standard").trim(),
+      formulaContainsStarch: formulaContainsStarch ?? false,
+    );
+
+    setRuntimeIds(babyId: babyId, householdId: householdId, albumId: albumId);
+    await _writeCachedBabyProfile(babyId: babyId, profile: profile);
+    await _seedOfflineSnapshotAndReports(
+      babyId: babyId,
+      babyName: resolvedBabyName,
+    );
+
+    return <String, dynamic>{
+      "status": "offline_local",
+      "baby_id": babyId,
+      "household_id": householdId,
+      "album_id": albumId,
+      "offline_cached": true,
+    };
   }
 
   Future<Map<String, dynamic>> onboardingParent({
@@ -356,15 +705,32 @@ class BabyAIApi {
   }
 
   Future<Map<String, dynamic>> getBabyProfile() async {
+    _requireBabyId();
+    final Map<String, dynamic>? cached = await _readCachedBabyProfile(
+      babyId: activeBabyId,
+    );
+    if (!_hasServerLinkedProfile) {
+      if (cached != null) {
+        return _withOfflineCacheFlag(cached);
+      }
+      throw ApiFailure("Local profile not found.");
+    }
     try {
-      _requireBabyId();
       final Response<dynamic> response = await _dio.get<dynamic>(
         "/api/v1/babies/profile",
         queryParameters: <String, dynamic>{"baby_id": activeBabyId},
         options: _authOptions(),
       );
-      return _requireMap(response);
+      final Map<String, dynamic> payload = _requireMap(response);
+      await _writeCachedBabyProfile(
+        babyId: activeBabyId,
+        profile: payload,
+      );
+      return payload;
     } catch (error) {
+      if (cached != null) {
+        return _withOfflineCacheFlag(cached);
+      }
       throw _toFailure(error);
     }
   }
@@ -380,8 +746,43 @@ class BabyAIApi {
     String? formulaType,
     bool? formulaContainsStarch,
   }) async {
+    Future<Map<String, dynamic>> writeOfflineProfile() async {
+      final Map<String, dynamic> merged = <String, dynamic>{
+        ...(await _readCachedBabyProfile(babyId: activeBabyId) ??
+            <String, dynamic>{}),
+        "baby_id": activeBabyId,
+        if (babyName != null && babyName.trim().isNotEmpty)
+          "baby_name": babyName.trim(),
+        if (babyBirthDate != null && babyBirthDate.trim().isNotEmpty)
+          "birth_date": babyBirthDate.trim(),
+        if (babySex != null && babySex.trim().isNotEmpty) "sex": babySex.trim(),
+        if (babyWeightKg != null) "weight_kg": babyWeightKg,
+        if (feedingMethod != null && feedingMethod.trim().isNotEmpty)
+          "feeding_method": feedingMethod.trim(),
+        if (formulaBrand != null) "formula_brand": formulaBrand.trim(),
+        if (formulaProduct != null) "formula_product": formulaProduct.trim(),
+        if (formulaType != null && formulaType.trim().isNotEmpty)
+          "formula_type": formulaType.trim(),
+        if (formulaContainsStarch != null)
+          "formula_contains_starch": formulaContainsStarch,
+        "offline_cached": true,
+      };
+      if (merged["baby_name"] == null ||
+          (merged["baby_name"] ?? "").toString().trim().isEmpty) {
+        merged["baby_name"] = "우리 아기";
+      }
+      await _writeCachedBabyProfile(
+        babyId: activeBabyId,
+        profile: merged,
+      );
+      return _withOfflineCacheFlag(merged);
+    }
+
     try {
       _requireBabyId();
+      if (!_hasServerLinkedProfile) {
+        return writeOfflineProfile();
+      }
       final Response<dynamic> response = await _dio.patch<dynamic>(
         "/api/v1/babies/profile",
         data: <String, dynamic>{
@@ -406,9 +807,14 @@ class BabyAIApi {
         },
         options: _authOptions(),
       );
-      return _requireMap(response);
+      final Map<String, dynamic> payload = _requireMap(response);
+      await _writeCachedBabyProfile(
+        babyId: activeBabyId,
+        profile: payload,
+      );
+      return payload;
     } catch (error) {
-      throw _toFailure(error);
+      return writeOfflineProfile();
     }
   }
 
@@ -640,6 +1046,9 @@ class BabyAIApi {
   }
 
   Future<void> _refreshQuickLandingSnapshotCache(String normalizedRange) async {
+    if (!_hasServerLinkedProfile) {
+      return;
+    }
     try {
       await _fetchQuickLandingSnapshotRemote(normalizedRange);
     } catch (_) {
@@ -662,7 +1071,12 @@ class BabyAIApi {
         key: cacheKey,
       );
       if (preferOffline && cached != null) {
-        unawaited(_refreshQuickLandingSnapshotCache(cacheKey));
+        if (_hasServerLinkedProfile) {
+          unawaited(_refreshQuickLandingSnapshotCache(cacheKey));
+        }
+        return _withOfflineCacheFlag(cached);
+      }
+      if (!_hasServerLinkedProfile && cached != null) {
         return _withOfflineCacheFlag(cached);
       }
       await flushOfflineMutations();
@@ -941,20 +1355,31 @@ class BabyAIApi {
     Map<String, dynamic> value = const <String, dynamic>{},
     Map<String, dynamic>? metadata,
   }) async {
-    try {
-      _requireBabyId();
-      await flushOfflineMutations();
-      final Map<String, dynamic> body = <String, dynamic>{
-        "baby_id": activeBabyId,
-        "type": type.trim(),
-        "start_time": startTime.toUtc().toIso8601String(),
-        if (endTime != null) "end_time": endTime.toUtc().toIso8601String(),
-        "value": value,
-        if (metadata != null) "metadata": metadata,
+    _requireBabyId();
+    final Map<String, dynamic> offlinePayload = <String, dynamic>{
+      "baby_id": activeBabyId,
+      "type": type.trim(),
+      "start_time": startTime.toUtc().toIso8601String(),
+      if (endTime != null) "end_time": endTime.toUtc().toIso8601String(),
+      "value": value,
+      if (metadata != null) "metadata": metadata,
+    };
+    if (!_hasServerLinkedProfile) {
+      await _enqueueEventMutation(
+        kind: "event_create_closed",
+        payload: offlinePayload,
+      );
+      return <String, dynamic>{
+        "status": "queued_offline",
+        "queued": true,
+        "event_id": "local-${DateTime.now().millisecondsSinceEpoch}",
       };
+    }
+    try {
+      await flushOfflineMutations();
       final Response<dynamic> response = await _dio.post<dynamic>(
         "/api/v1/events/manual",
-        data: body,
+        data: offlinePayload,
         options: _authOptions(),
       );
       return _requireMap(response);
@@ -962,14 +1387,7 @@ class BabyAIApi {
       if (_isConnectivityFailure(error)) {
         await _enqueueEventMutation(
           kind: "event_create_closed",
-          payload: <String, dynamic>{
-            "baby_id": activeBabyId,
-            "type": type.trim(),
-            "start_time": startTime.toUtc().toIso8601String(),
-            if (endTime != null) "end_time": endTime.toUtc().toIso8601String(),
-            "value": value,
-            if (metadata != null) "metadata": metadata,
-          },
+          payload: offlinePayload,
         );
         return <String, dynamic>{
           "status": "queued_offline",
@@ -987,19 +1405,30 @@ class BabyAIApi {
     Map<String, dynamic> value = const <String, dynamic>{},
     Map<String, dynamic>? metadata,
   }) async {
-    try {
-      _requireBabyId();
-      await flushOfflineMutations();
-      final Map<String, dynamic> body = <String, dynamic>{
-        "baby_id": activeBabyId,
-        "type": type.trim(),
-        "start_time": startTime.toUtc().toIso8601String(),
-        "value": value,
-        if (metadata != null) "metadata": metadata,
+    _requireBabyId();
+    final Map<String, dynamic> offlinePayload = <String, dynamic>{
+      "baby_id": activeBabyId,
+      "type": type.trim(),
+      "start_time": startTime.toUtc().toIso8601String(),
+      "value": value,
+      if (metadata != null) "metadata": metadata,
+    };
+    if (!_hasServerLinkedProfile) {
+      await _enqueueEventMutation(
+        kind: "event_start",
+        payload: offlinePayload,
+      );
+      return <String, dynamic>{
+        "status": "queued_offline",
+        "queued": true,
+        "event_id": "local-${DateTime.now().millisecondsSinceEpoch}",
       };
+    }
+    try {
+      await flushOfflineMutations();
       final Response<dynamic> response = await _dio.post<dynamic>(
         "/api/v1/events/start",
-        data: body,
+        data: offlinePayload,
         options: _authOptions(),
       );
       return _requireMap(response);
@@ -1007,13 +1436,7 @@ class BabyAIApi {
       if (_isConnectivityFailure(error)) {
         await _enqueueEventMutation(
           kind: "event_start",
-          payload: <String, dynamic>{
-            "baby_id": activeBabyId,
-            "type": type.trim(),
-            "start_time": startTime.toUtc().toIso8601String(),
-            "value": value,
-            if (metadata != null) "metadata": metadata,
-          },
+          payload: offlinePayload,
         );
         return <String, dynamic>{
           "status": "queued_offline",
@@ -1031,20 +1454,32 @@ class BabyAIApi {
     Map<String, dynamic>? value,
     Map<String, dynamic>? metadata,
   }) async {
-    try {
-      final String normalizedId = eventId.trim();
-      if (normalizedId.isEmpty) {
-        throw ApiFailure("event_id is required");
-      }
-      await flushOfflineMutations();
-      final Map<String, dynamic> body = <String, dynamic>{
-        if (endTime != null) "end_time": endTime.toUtc().toIso8601String(),
-        if (value != null) "value": value,
-        if (metadata != null) "metadata": metadata,
+    final String normalizedId = eventId.trim();
+    if (normalizedId.isEmpty) {
+      throw ApiFailure("event_id is required");
+    }
+    final Map<String, dynamic> offlinePayload = <String, dynamic>{
+      "event_id": normalizedId,
+      if (endTime != null) "end_time": endTime.toUtc().toIso8601String(),
+      if (value != null) "value": value,
+      if (metadata != null) "metadata": metadata,
+    };
+    if (!_hasServerLinkedProfile) {
+      await _enqueueEventMutation(
+        kind: "event_complete",
+        payload: offlinePayload,
+      );
+      return <String, dynamic>{
+        "status": "queued_offline",
+        "queued": true,
+        "event_id": normalizedId,
       };
+    }
+    try {
+      await flushOfflineMutations();
       final Response<dynamic> response = await _dio.patch<dynamic>(
         "/api/v1/events/${Uri.encodeComponent(normalizedId)}/complete",
-        data: body,
+        data: Map<String, dynamic>.from(offlinePayload)..remove("event_id"),
         options: _authOptions(),
       );
       return _requireMap(response);
@@ -1052,17 +1487,12 @@ class BabyAIApi {
       if (_isConnectivityFailure(error)) {
         await _enqueueEventMutation(
           kind: "event_complete",
-          payload: <String, dynamic>{
-            "event_id": eventId.trim(),
-            if (endTime != null) "end_time": endTime.toUtc().toIso8601String(),
-            if (value != null) "value": value,
-            if (metadata != null) "metadata": metadata,
-          },
+          payload: offlinePayload,
         );
         return <String, dynamic>{
           "status": "queued_offline",
           "queued": true,
-          "event_id": eventId.trim(),
+          "event_id": normalizedId,
         };
       }
       throw _toFailure(error);
@@ -1077,23 +1507,34 @@ class BabyAIApi {
     Map<String, dynamic>? value,
     Map<String, dynamic>? metadata,
   }) async {
-    try {
-      final String normalizedId = eventId.trim();
-      if (normalizedId.isEmpty) {
-        throw ApiFailure("event_id is required");
-      }
-      await flushOfflineMutations();
-      final Map<String, dynamic> body = <String, dynamic>{
-        if (type != null && type.trim().isNotEmpty) "type": type.trim(),
-        if (startTime != null)
-          "start_time": startTime.toUtc().toIso8601String(),
-        if (endTime != null) "end_time": endTime.toUtc().toIso8601String(),
-        if (value != null) "value": value,
-        if (metadata != null) "metadata": metadata,
+    final String normalizedId = eventId.trim();
+    if (normalizedId.isEmpty) {
+      throw ApiFailure("event_id is required");
+    }
+    final Map<String, dynamic> offlinePayload = <String, dynamic>{
+      "event_id": normalizedId,
+      if (type != null && type.trim().isNotEmpty) "type": type.trim(),
+      if (startTime != null) "start_time": startTime.toUtc().toIso8601String(),
+      if (endTime != null) "end_time": endTime.toUtc().toIso8601String(),
+      if (value != null) "value": value,
+      if (metadata != null) "metadata": metadata,
+    };
+    if (!_hasServerLinkedProfile) {
+      await _enqueueEventMutation(
+        kind: "event_update",
+        payload: offlinePayload,
+      );
+      return <String, dynamic>{
+        "status": "queued_offline",
+        "queued": true,
+        "event_id": normalizedId,
       };
+    }
+    try {
+      await flushOfflineMutations();
       final Response<dynamic> response = await _dio.patch<dynamic>(
         "/api/v1/events/${Uri.encodeComponent(normalizedId)}",
-        data: body,
+        data: Map<String, dynamic>.from(offlinePayload)..remove("event_id"),
         options: _authOptions(),
       );
       return _requireMap(response);
@@ -1101,20 +1542,12 @@ class BabyAIApi {
       if (_isConnectivityFailure(error)) {
         await _enqueueEventMutation(
           kind: "event_update",
-          payload: <String, dynamic>{
-            "event_id": eventId.trim(),
-            if (type != null && type.trim().isNotEmpty) "type": type.trim(),
-            if (startTime != null)
-              "start_time": startTime.toUtc().toIso8601String(),
-            if (endTime != null) "end_time": endTime.toUtc().toIso8601String(),
-            if (value != null) "value": value,
-            if (metadata != null) "metadata": metadata,
-          },
+          payload: offlinePayload,
         );
         return <String, dynamic>{
           "status": "queued_offline",
           "queued": true,
-          "event_id": eventId.trim(),
+          "event_id": normalizedId,
         };
       }
       throw _toFailure(error);
@@ -1125,18 +1558,30 @@ class BabyAIApi {
     required String eventId,
     String? reason,
   }) async {
-    try {
-      final String normalizedId = eventId.trim();
-      if (normalizedId.isEmpty) {
-        throw ApiFailure("event_id is required");
-      }
-      await flushOfflineMutations();
-      final Map<String, dynamic> body = <String, dynamic>{
-        if (reason != null && reason.trim().isNotEmpty) "reason": reason.trim(),
+    final String normalizedId = eventId.trim();
+    if (normalizedId.isEmpty) {
+      throw ApiFailure("event_id is required");
+    }
+    final Map<String, dynamic> offlinePayload = <String, dynamic>{
+      "event_id": normalizedId,
+      if (reason != null && reason.trim().isNotEmpty) "reason": reason.trim(),
+    };
+    if (!_hasServerLinkedProfile) {
+      await _enqueueEventMutation(
+        kind: "event_cancel",
+        payload: offlinePayload,
+      );
+      return <String, dynamic>{
+        "status": "queued_offline",
+        "queued": true,
+        "event_id": normalizedId,
       };
+    }
+    try {
+      await flushOfflineMutations();
       final Response<dynamic> response = await _dio.patch<dynamic>(
         "/api/v1/events/${Uri.encodeComponent(normalizedId)}/cancel",
-        data: body,
+        data: Map<String, dynamic>.from(offlinePayload)..remove("event_id"),
         options: _authOptions(),
       );
       return _requireMap(response);
@@ -1144,16 +1589,12 @@ class BabyAIApi {
       if (_isConnectivityFailure(error)) {
         await _enqueueEventMutation(
           kind: "event_cancel",
-          payload: <String, dynamic>{
-            "event_id": eventId.trim(),
-            if (reason != null && reason.trim().isNotEmpty)
-              "reason": reason.trim(),
-          },
+          payload: offlinePayload,
         );
         return <String, dynamic>{
           "status": "queued_offline",
           "queued": true,
-          "event_id": eventId.trim(),
+          "event_id": normalizedId,
         };
       }
       throw _toFailure(error);
@@ -1163,6 +1604,12 @@ class BabyAIApi {
   Future<Map<String, dynamic>> listOpenEvents({
     String? type,
   }) async {
+    if (!_hasServerLinkedProfile) {
+      return <String, dynamic>{
+        "items": <dynamic>[],
+        "offline_cached": true,
+      };
+    }
     try {
       await flushOfflineMutations();
       _requireBabyId();
@@ -1202,6 +1649,9 @@ class BabyAIApi {
   }
 
   Future<void> _refreshDailyReportCache(DateTime targetDate) async {
+    if (!_hasServerLinkedProfile) {
+      return;
+    }
     try {
       await _fetchDailyReportRemote(targetDate);
     } catch (_) {
@@ -1222,7 +1672,12 @@ class BabyAIApi {
       key: day,
     );
     if (preferOffline && cached != null) {
-      unawaited(_refreshDailyReportCache(targetDate));
+      if (_hasServerLinkedProfile) {
+        unawaited(_refreshDailyReportCache(targetDate));
+      }
+      return _withOfflineCacheFlag(cached);
+    }
+    if (!_hasServerLinkedProfile && cached != null) {
       return _withOfflineCacheFlag(cached);
     }
     try {
@@ -1258,6 +1713,9 @@ class BabyAIApi {
   }
 
   Future<void> _refreshWeeklyReportCache(DateTime weekStart) async {
+    if (!_hasServerLinkedProfile) {
+      return;
+    }
     try {
       await _fetchWeeklyReportRemote(weekStart);
     } catch (_) {
@@ -1278,7 +1736,12 @@ class BabyAIApi {
       key: day,
     );
     if (preferOffline && cached != null) {
-      unawaited(_refreshWeeklyReportCache(weekStart));
+      if (_hasServerLinkedProfile) {
+        unawaited(_refreshWeeklyReportCache(weekStart));
+      }
+      return _withOfflineCacheFlag(cached);
+    }
+    if (!_hasServerLinkedProfile && cached != null) {
       return _withOfflineCacheFlag(cached);
     }
     try {

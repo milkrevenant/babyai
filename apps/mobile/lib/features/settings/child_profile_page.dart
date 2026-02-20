@@ -354,13 +354,6 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
     return values;
   }
 
-  String _tokenRequiredMessage() {
-    return tr(context,
-        ko: "로그인 토큰이 필요합니다. Google JWT를 입력하거나 로컬 백엔드 /dev/local-token 설정을 확인해 주세요.",
-        en: "Login token is required. Enter Google JWT or check local backend /dev/local-token setup.",
-        es: "Se requiere token JWT o revisar /dev/local-token en backend local.");
-  }
-
   bool _validateForCurrentStep() {
     if (_step == 0) {
       return _formKey.currentState?.validate() ?? false;
@@ -395,26 +388,12 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
       if (typedToken.isNotEmpty) {
         BabyAIApi.setBearerToken(typedToken);
       }
-      if (widget.initialOnboarding &&
-          BabyAIApi.currentBearerToken.trim().isEmpty) {
-        try {
-          await BabyAIApi.instance.issueLocalDevToken();
-        } catch (_) {
-          // Keep explicit token flow as fallback when local endpoint is unavailable.
-        }
-      }
-      if (widget.initialOnboarding &&
-          BabyAIApi.currentBearerToken.trim().isEmpty) {
-        throw ApiFailure(_tokenRequiredMessage());
-      }
-
       final double? weight =
           double.tryParse(_weightController.text.trim().replaceAll(",", "."));
 
       if (widget.initialOnboarding || BabyAIApi.activeBabyId.isEmpty) {
         final Map<String, dynamic> created =
-            await BabyAIApi.instance.onboardingParent(
-          provider: "google",
+            await BabyAIApi.instance.createOfflineOnboarding(
           babyName: _nameController.text.trim(),
           babyBirthDate: _birthController.text.trim(),
           babySex: _sex,
@@ -424,7 +403,6 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
           formulaProduct: _formulaProductController.text.trim(),
           formulaType: _formulaType,
           formulaContainsStarch: _formulaContainsStarch,
-          requiredConsents: _consents(),
         );
 
         final String babyId = (created["baby_id"] ?? "").toString();
@@ -434,7 +412,6 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
         }
 
         BabyAIApi.setRuntimeIds(babyId: babyId, householdId: householdId);
-
         await BabyAIApi.instance.upsertBabyProfile(
           babyName: _nameController.text.trim(),
           babyBirthDate: _birthController.text.trim(),
@@ -447,13 +424,82 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
           formulaContainsStarch: _formulaContainsStarch,
         );
 
+        bool syncedOnline = false;
+        if (BabyAIApi.isGoogleLinked) {
+          try {
+            final Map<String, dynamic> remote =
+                await BabyAIApi.instance.onboardingParent(
+              provider: "google",
+              babyName: _nameController.text.trim(),
+              babyBirthDate: _birthController.text.trim(),
+              babySex: _sex,
+              babyWeightKg: weight,
+              feedingMethod: _feedingMethod,
+              formulaBrand: _formulaBrandController.text.trim(),
+              formulaProduct: _formulaProductController.text.trim(),
+              formulaType: _formulaType,
+              formulaContainsStarch: _formulaContainsStarch,
+              requiredConsents: _consents(),
+            );
+            final String remoteBabyId = (remote["baby_id"] ?? "").toString();
+            final String remoteHouseholdId =
+                (remote["household_id"] ?? "").toString();
+            if (remoteBabyId.isNotEmpty && remoteHouseholdId.isNotEmpty) {
+              BabyAIApi.setRuntimeIds(
+                babyId: remoteBabyId,
+                householdId: remoteHouseholdId,
+              );
+              await BabyAIApi.instance.upsertBabyProfile(
+                babyName: _nameController.text.trim(),
+                babyBirthDate: _birthController.text.trim(),
+                babySex: _sex,
+                babyWeightKg: weight,
+                feedingMethod: _feedingMethod,
+                formulaBrand: _formulaBrandController.text.trim(),
+                formulaProduct: _formulaProductController.text.trim(),
+                formulaType: _formulaType,
+                formulaContainsStarch: _formulaContainsStarch,
+              );
+              syncedOnline = true;
+            }
+          } catch (_) {
+            syncedOnline = false;
+          }
+        }
+
         if (settingsController != null) {
           await settingsController.setChildCareProfile(_careProfile,
               applyDefaultTiles: true);
         }
 
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                syncedOnline
+                    ? tr(
+                        context,
+                        ko: "로컬 저장 후 온라인 동기화를 완료했습니다.",
+                        en: "Saved locally and synced online.",
+                        es: "Guardado local y sincronizado en linea.",
+                      )
+                    : tr(
+                        context,
+                        ko: "로컬 저장으로 시작합니다. Google 로그인 시 온라인 동기화가 켜집니다.",
+                        en: "Starting with local storage. Online sync starts after Google login.",
+                        es: "Inicio con guardado local. La sincronizacion en linea se activa tras Google login.",
+                      ),
+              ),
+            ),
+          );
+        }
+
         await widget.onCompleted(
-            ChildProfileSaveResult(babyId: babyId, householdId: householdId));
+          ChildProfileSaveResult(
+            babyId: BabyAIApi.activeBabyId,
+            householdId: BabyAIApi.activeHouseholdId,
+          ),
+        );
       } else {
         await BabyAIApi.instance.upsertBabyProfile(
           babyName: _nameController.text.trim(),
@@ -604,8 +650,8 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
                   maxLines: 3,
                   decoration: InputDecoration(
                     labelText: tr(context,
-                        ko: "Google JWT 토큰 (선택, 로컬 자동 발급 지원)",
-                        en: "Google JWT token (optional, local auto token supported)",
+                        ko: "Google JWT 토큰 (선택, 로그인 시 온라인 동기화)",
+                        en: "Google JWT token (optional, enables online sync)",
                         es: "JWT Google (opcional, token local automatico)"),
                     border: const OutlineInputBorder(),
                   ),

@@ -1362,6 +1362,16 @@ class _HomeShellState extends State<_HomeShell> {
       });
       return;
     }
+    final String? provider = BabyAIApi.currentTokenProvider;
+    if (provider != "google") {
+      setState(() {
+        _isGoogleLoggedIn = false;
+        _isBusinessAccount = false;
+        _accountName = "Local user";
+        _accountEmail = "Offline mode";
+      });
+      return;
+    }
     final Map<String, dynamic> payload = _decodeJwtPayload(token);
     final String email =
         (payload["email"] ?? payload["upn"] ?? payload["sub"] ?? "").toString();
@@ -1458,8 +1468,9 @@ class _HomeShellState extends State<_HomeShell> {
                 final String name = nameController.text.trim();
                 final String email = emailController.text.trim();
                 final Map<String, dynamic> payload = _decodeJwtPayload(token);
+                final bool isGoogle = BabyAIApi.isGoogleLinked;
                 setState(() {
-                  _isGoogleLoggedIn = token.isNotEmpty;
+                  _isGoogleLoggedIn = isGoogle;
                   _isBusinessAccount = _resolveBusinessAccount(payload);
                   _accountName = name.isNotEmpty
                       ? name

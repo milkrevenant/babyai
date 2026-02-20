@@ -1,4 +1,3 @@
-import "dart:convert";
 import "dart:io";
 
 import "package:flutter/foundation.dart";
@@ -1175,30 +1174,7 @@ class _SubscriptionPlansPageState extends State<_SubscriptionPlansPage> {
   }
 
   String? _tokenProvider() {
-    final String token = BabyAIApi.currentBearerToken.trim();
-    if (token.isEmpty) {
-      return null;
-    }
-    try {
-      final List<String> parts = token.split(".");
-      if (parts.length < 2) {
-        return null;
-      }
-      final String payloadPart = base64Url.normalize(parts[1]);
-      final Object? payload = jsonDecode(
-        utf8.decode(base64Url.decode(payloadPart)),
-      );
-      if (payload is! Map<String, dynamic>) {
-        return null;
-      }
-      final String provider = (payload["provider"] ?? "").toString().trim();
-      if (provider.isEmpty) {
-        return null;
-      }
-      return provider.toLowerCase();
-    } catch (_) {
-      return null;
-    }
+    return BabyAIApi.currentTokenProvider;
   }
 
   bool _isGoogleSignedIn() {
