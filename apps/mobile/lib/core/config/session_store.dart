@@ -32,6 +32,32 @@ class AppSessionStore {
     }
   }
 
+  static String _normalizedBaseUrl(String raw) {
+    final String trimmed = raw.trim();
+    if (trimmed.isEmpty) {
+      return "";
+    }
+    final Uri? parsed = Uri.tryParse(trimmed);
+    if (parsed == null || parsed.host.trim().isEmpty) {
+      return trimmed.toLowerCase();
+    }
+    final String scheme = parsed.scheme.toLowerCase();
+    String host = parsed.host.toLowerCase();
+    if (host == "localhost") {
+      host = "127.0.0.1";
+    }
+    final int port = parsed.hasPort
+        ? parsed.port
+        : (scheme == "https" ? 443 : (scheme == "http" ? 80 : 0));
+    return "$scheme://$host:$port";
+  }
+
+  static bool _sameApiBase(String a, String b) {
+    final String left = _normalizedBaseUrl(a);
+    final String right = _normalizedBaseUrl(b);
+    return left.isNotEmpty && right.isNotEmpty && left == right;
+  }
+
   static File _sessionFile() {
     final String home = Platform.environment["USERPROFILE"] ??
         Platform.environment["HOME"] ??
@@ -56,6 +82,10 @@ class AppSessionStore {
       }
 
       final String storedToken = (parsed["token"] ?? "").toString().trim();
+      final String storedBaseUrl =
+          (parsed["api_base_url"] ?? "").toString().trim();
+      final String currentBaseUrl = AppEnv.apiBaseUrl.trim();
+      final bool sameApiBase = _sameApiBase(storedBaseUrl, currentBaseUrl);
       final String defineToken = AppEnv.apiBearerToken.trim();
       final bool hasDefineBabyId = AppEnv.babyId.trim().isNotEmpty;
       final bool hasDefineHouseholdId = AppEnv.householdId.trim().isNotEmpty;
@@ -64,12 +94,15 @@ class AppSessionStore {
 
       // Avoid restoring stale IDs when a different token is injected by
       // --dart-define (common in local/dev account switching).
-      bool restoreIdsFromSession = true;
+      bool restoreIdsFromSession = sameApiBase;
       if (hasDefineToken && storedToken != defineToken) {
         final String storedSub = _jwtSubject(storedToken);
         final String defineSub = _jwtSubject(defineToken);
         restoreIdsFromSession =
-            storedSub.isNotEmpty && defineSub.isNotEmpty && storedSub == defineSub;
+            sameApiBase &&
+            storedSub.isNotEmpty &&
+            defineSub.isNotEmpty &&
+            storedSub == defineSub;
       }
 
       BabyAIApi.setRuntimeIds(
@@ -86,7 +119,7 @@ class AppSessionStore {
             : (restoreIdsFromSession ? (parsed["album_id"] ?? "").toString() : ""),
       );
 
-      if (!hasDefineToken && storedToken.isNotEmpty) {
+      if (!hasDefineToken && sameApiBase && storedToken.isNotEmpty) {
         BabyAIApi.setBearerToken(storedToken);
       }
 
@@ -138,6 +171,7 @@ class AppSessionStore {
         "household_id": BabyAIApi.activeHouseholdId,
         "album_id": BabyAIApi.activeAlbumId,
         "token": BabyAIApi.currentBearerToken.trim(),
+        "api_base_url": AppEnv.apiBaseUrl,
         if (_pendingSleepStart != null)
           "pending_sleep_start": _pendingSleepStart!.toIso8601String(),
         if (_pendingFormulaStart != null)

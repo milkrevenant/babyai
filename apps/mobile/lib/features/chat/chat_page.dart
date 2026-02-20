@@ -281,6 +281,17 @@ class ChatPageState extends State<ChatPage> {
 
   void _setDateMode(ChatDateMode mode) {
     if (mode == _dateMode) {
+      if (mode != ChatDateMode.day) {
+        return;
+      }
+      final DateTime today = _normalizeAnchorDate(ChatDateMode.day, DateTime.now());
+      if (_isSameLocalDate(_anchorDateLocal, today)) {
+        return;
+      }
+      _applyDateScope(
+        ChatDateScope(mode: ChatDateMode.day, anchorDateLocal: today),
+        notifyParent: true,
+      );
       return;
     }
     final DateTime nextAnchor =

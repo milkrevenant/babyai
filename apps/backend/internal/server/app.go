@@ -143,7 +143,9 @@ func (a *App) health(c *gin.Context) {
 }
 
 func (a *App) issueLocalDevToken(c *gin.Context) {
-	if !strings.EqualFold(strings.TrimSpace(a.cfg.AppEnv), "local") {
+	allow := strings.EqualFold(strings.TrimSpace(a.cfg.AppEnv), "local") ||
+		a.cfg.AllowDevTokenEndpoint
+	if !allow {
 		writeError(c, http.StatusNotFound, "Not found")
 		return
 	}

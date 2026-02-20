@@ -262,6 +262,48 @@ class BabyAIApi {
         message.contains("baby profile not found");
   }
 
+  bool _isInvalidBearerFailure(ApiFailure failure) {
+    if (failure.statusCode != 401) {
+      return false;
+    }
+    final String message = failure.message.toLowerCase();
+    return message.contains("invalid bearer token") ||
+        message.contains("bearer token required") ||
+        message.contains("token subject missing") ||
+        message.contains("invalid token");
+  }
+
+  Future<bool> _recoverLocalDevIdentityForAuthFailure() async {
+    if (kReleaseMode) {
+      return false;
+    }
+    try {
+      final Map<String, dynamic> issued = await issueLocalDevToken(
+        sub: AppEnv.localDevDefaultSub,
+        name: "Local Dev User",
+        provider: "google",
+      );
+      final String token = (issued["token"] ?? "").toString().trim();
+      if (token.isEmpty) {
+        return false;
+      }
+      final String recoveredBabyId =
+          (issued["baby_id"] ?? "").toString().trim();
+      final String recoveredHouseholdId =
+          (issued["household_id"] ?? "").toString().trim();
+      if (recoveredBabyId.isNotEmpty || recoveredHouseholdId.isNotEmpty) {
+        setRuntimeIds(
+          babyId: recoveredBabyId.isNotEmpty ? recoveredBabyId : null,
+          householdId:
+              recoveredHouseholdId.isNotEmpty ? recoveredHouseholdId : null,
+        );
+      }
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<bool> _recoverLocalDevIdentityForMissingBaby() async {
     if (kReleaseMode) {
       return false;
@@ -2173,7 +2215,26 @@ class BabyAIApi {
       );
       return _requireMap(response);
     } catch (error) {
-      throw _toFailure(error);
+      final ApiFailure failure = _toFailure(error);
+      if (_isInvalidBearerFailure(failure) &&
+          await _recoverLocalDevIdentityForAuthFailure()) {
+        final Response<dynamic> retry = await _dio.post<dynamic>(
+          "/api/v1/ai/query",
+          data: <String, dynamic>{
+            "baby_id": activeBabyId,
+            "question": question,
+            "tone": "neutral",
+            "use_personal_data": true,
+          },
+          options: _authOptions(
+            connectTimeout: const Duration(seconds: 15),
+            sendTimeout: const Duration(seconds: 30),
+            receiveTimeout: const Duration(seconds: 90),
+          ),
+        );
+        return _requireMap(retry);
+      }
+      throw failure;
     }
   }
 
@@ -2195,6 +2256,17 @@ class BabyAIApi {
       return _requireMap(response);
     } catch (error) {
       final ApiFailure failure = _toFailure(error);
+      if (_isInvalidBearerFailure(failure) &&
+          await _recoverLocalDevIdentityForAuthFailure()) {
+        final Response<dynamic> retry = await _dio.post<dynamic>(
+          "/api/v1/chat/sessions",
+          data: <String, dynamic>{
+            if (activeBabyId.isNotEmpty) "child_id": activeBabyId,
+          },
+          options: _authOptions(),
+        );
+        return _requireMap(retry);
+      }
       if (_isBabyNotFoundFailure(failure) &&
           await _recoverLocalDevIdentityForMissingBaby()) {
         final Response<dynamic> retry = await _dio.post<dynamic>(
@@ -2238,6 +2310,22 @@ class BabyAIApi {
       return _requireMap(response);
     } catch (error) {
       final ApiFailure failure = _toFailure(error);
+      if (_isInvalidBearerFailure(failure) &&
+          await _recoverLocalDevIdentityForAuthFailure()) {
+        try {
+          final Response<dynamic> retry = await _dio.get<dynamic>(
+            "/api/v1/chat/sessions",
+            queryParameters: <String, dynamic>{
+              "limit": limit.clamp(1, 100),
+              if (activeBabyId.isNotEmpty) "child_id": activeBabyId,
+            },
+            options: _authOptions(),
+          );
+          return _requireMap(retry);
+        } catch (_) {
+          // Fall through to offline empty payload.
+        }
+      }
       if (_isBabyNotFoundFailure(failure) &&
           await _recoverLocalDevIdentityForMissingBaby()) {
         try {
@@ -2294,6 +2382,23 @@ class BabyAIApi {
       return _requireMap(response);
     } catch (error) {
       final ApiFailure failure = _toFailure(error);
+      if (_isInvalidBearerFailure(failure) &&
+          await _recoverLocalDevIdentityForAuthFailure()) {
+        final String sid = sessionId.trim();
+        final Response<dynamic> retry = await _dio.post<dynamic>(
+          "/api/v1/chat/sessions/$sid/messages",
+          data: <String, dynamic>{
+            "role": role.trim(),
+            "content": content,
+            if (intent != null && intent.trim().isNotEmpty)
+              "intent": intent.trim(),
+            if (contextJson != null) "context_json": contextJson,
+            if (activeBabyId.isNotEmpty) "child_id": activeBabyId,
+          },
+          options: _authOptions(),
+        );
+        return _requireMap(retry);
+      }
       if (_isBabyNotFoundFailure(failure) &&
           await _recoverLocalDevIdentityForMissingBaby()) {
         final String sid = sessionId.trim();
@@ -2328,7 +2433,17 @@ class BabyAIApi {
       );
       return _requireMap(response);
     } catch (error) {
-      throw _toFailure(error);
+      final ApiFailure failure = _toFailure(error);
+      if (_isInvalidBearerFailure(failure) &&
+          await _recoverLocalDevIdentityForAuthFailure()) {
+        final String sid = sessionId.trim();
+        final Response<dynamic> retry = await _dio.get<dynamic>(
+          "/api/v1/chat/sessions/$sid/messages",
+          options: _authOptions(),
+        );
+        return _requireMap(retry);
+      }
+      throw failure;
     }
   }
 
@@ -2381,6 +2496,37 @@ class BabyAIApi {
       return _requireMap(response);
     } catch (error) {
       final ApiFailure failure = _toFailure(error);
+      if (_isInvalidBearerFailure(failure) &&
+          await _recoverLocalDevIdentityForAuthFailure()) {
+        final String sid = sessionId.trim();
+        final String question = query.trim();
+        final DateTime anchor = (anchorDate ?? DateTime.now()).toLocal();
+        final String normalizedMode = dateMode.trim().toLowerCase().isEmpty
+            ? "day"
+            : dateMode.trim().toLowerCase();
+        final String anchorDateText =
+            "${anchor.year.toString().padLeft(4, "0")}-"
+            "${anchor.month.toString().padLeft(2, "0")}-"
+            "${anchor.day.toString().padLeft(2, "0")}";
+        final Response<dynamic> retry = await _dio.post<dynamic>(
+          "/api/v1/chat/query",
+          data: <String, dynamic>{
+            "session_id": sid,
+            "query": question,
+            "tone": tone,
+            "use_personal_data": usePersonalData,
+            "date_mode": normalizedMode,
+            "anchor_date": anchorDateText,
+            if (activeBabyId.isNotEmpty) "child_id": activeBabyId,
+          },
+          options: _authOptions(
+            connectTimeout: const Duration(seconds: 15),
+            sendTimeout: const Duration(seconds: 30),
+            receiveTimeout: const Duration(seconds: 90),
+          ),
+        );
+        return _requireMap(retry);
+      }
       if (_isBabyNotFoundFailure(failure) &&
           await _recoverLocalDevIdentityForMissingBaby()) {
         final String sid = sessionId.trim();

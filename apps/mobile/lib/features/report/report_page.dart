@@ -151,8 +151,12 @@ class ReportPageState extends State<ReportPage> {
   @override
   void initState() {
     super.initState();
-    final DateTime initialAnchorUtc = _utcDate(
-      (widget.initialFocusDateLocal ?? DateTime.now()).toUtc(),
+    final DateTime initialAnchorLocal =
+        (widget.initialFocusDateLocal ?? DateTime.now()).toLocal();
+    final DateTime initialAnchorUtc = DateTime.utc(
+      initialAnchorLocal.year,
+      initialAnchorLocal.month,
+      initialAnchorLocal.day,
     );
     _todayUtc = initialAnchorUtc;
     _weekStartUtc = _toWeekStart(initialAnchorUtc);
@@ -289,7 +293,8 @@ class ReportPageState extends State<ReportPage> {
   }
 
   Future<void> setFocusDate(DateTime pickedDate) async {
-    final DateTime nextUtc = _utcDate(pickedDate.toUtc());
+    final DateTime local = pickedDate.toLocal();
+    final DateTime nextUtc = DateTime.utc(local.year, local.month, local.day);
     if (_isSameUtcDate(_todayUtc, nextUtc)) {
       await _loadReports();
       return;
@@ -303,7 +308,8 @@ class ReportPageState extends State<ReportPage> {
   }
 
   Future<void> setFocusWeekStart(DateTime pickedDate) async {
-    final DateTime pickedUtc = _utcDate(pickedDate.toUtc());
+    final DateTime local = pickedDate.toLocal();
+    final DateTime pickedUtc = DateTime.utc(local.year, local.month, local.day);
     final DateTime weekStartUtc = _toWeekStart(pickedUtc);
     if (_isSameUtcDate(_weekStartUtc, weekStartUtc)) {
       await _loadReports();
@@ -318,7 +324,8 @@ class ReportPageState extends State<ReportPage> {
   }
 
   Future<void> setFocusMonthStart(DateTime pickedDate) async {
-    final DateTime pickedUtc = _utcDate(pickedDate.toUtc());
+    final DateTime local = pickedDate.toLocal();
+    final DateTime pickedUtc = DateTime.utc(local.year, local.month, local.day);
     final DateTime monthStartUtc =
         DateTime.utc(pickedUtc.year, pickedUtc.month, 1);
     if (_isSameUtcDate(_monthStartUtc, monthStartUtc)) {
@@ -623,9 +630,6 @@ class ReportPageState extends State<ReportPage> {
           if (_inlineComparisonRange != null) ...<Widget>[
             const SizedBox(height: 10),
             _InlineComparisonSection(
-              key: ValueKey<String>(
-                "inline_compare_${_inlineComparisonRange?.name}_${_selectedRangeDateLabel()}_${_inlineComparisonLoading ? "loading" : "ready"}",
-              ),
               loading: _inlineComparisonLoading,
               comparison: _inlineComparisonData,
               errorText: _inlineComparisonError,
@@ -1271,7 +1275,6 @@ class _MonthlyView extends StatelessWidget {
 
 class _InlineComparisonSection extends StatelessWidget {
   const _InlineComparisonSection({
-    super.key,
     required this.loading,
     required this.comparison,
     this.errorText,

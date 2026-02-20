@@ -22,6 +22,7 @@ type Config struct {
 	JWTAudience                string
 	JWTIssuer                  string
 	LocalDevDefaultSub         string
+	AllowDevTokenEndpoint      bool
 	AuthAutoCreateUser         bool
 	LocalForceSubscriptionPlan string
 	OnboardingSeedDummyData    bool
@@ -49,6 +50,7 @@ func Load() Config {
 		JWTAudience:                getEnv("JWT_AUDIENCE", ""),
 		JWTIssuer:                  getEnv("JWT_ISSUER", ""),
 		LocalDevDefaultSub:         getEnv("LOCAL_DEV_DEFAULT_SUB", "00000000-0000-0000-0000-000000000001"),
+		AllowDevTokenEndpoint:      getEnvBool("ALLOW_DEV_TOKEN_ENDPOINT", false),
 		AuthAutoCreateUser:         getEnvBool("AUTH_AUTOCREATE_USER", false),
 		LocalForceSubscriptionPlan: getEnv("LOCAL_FORCE_SUBSCRIPTION_PLAN", ""),
 		OnboardingSeedDummyData:    getEnvBool("ONBOARDING_SEED_DUMMY_DATA", false),

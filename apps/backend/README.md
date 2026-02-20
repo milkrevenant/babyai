@@ -51,6 +51,7 @@ Set in `.env`:
 Optional:
 - `JWT_AUDIENCE`
 - `JWT_ISSUER`
+- `ALLOW_DEV_TOKEN_ENDPOINT` (default `false`, allows `/dev/local-token` outside `APP_ENV=local`)
 - `LOCAL_DEV_DEFAULT_SUB` (default `00000000-0000-0000-0000-000000000001`, local only)
 - `AUTH_AUTOCREATE_USER` (default `false`)
 - `LOCAL_FORCE_SUBSCRIPTION_PLAN` (local only: `AI_ONLY` | `AI_PHOTO` | `PHOTO_SHARE`)
@@ -75,6 +76,7 @@ JWT_SECRET=replace-with-long-random-secret
 JWT_ALGORITHM=HS256
 JWT_AUDIENCE=
 JWT_ISSUER=
+ALLOW_DEV_TOKEN_ENDPOINT=false
 LOCAL_DEV_DEFAULT_SUB=00000000-0000-0000-0000-000000000001
 AUTH_AUTOCREATE_USER=false
 LOCAL_FORCE_SUBSCRIPTION_PLAN=
@@ -157,7 +159,7 @@ cd /Users/stillclie_mac/Documents/code/babyai/apps/backend
 # optional args: ./scripts/gen_dev_jwt.sh <sub-uuid> "Dev User" google
 ```
 
-Local-only quick endpoint (enabled only when `APP_ENV=local`):
+Dev quick endpoint (enabled when `APP_ENV=local` or `ALLOW_DEV_TOKEN_ENDPOINT=true`):
 ```bash
 curl -X POST http://127.0.0.1:8000/dev/local-token
 ```
