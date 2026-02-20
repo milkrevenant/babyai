@@ -732,6 +732,7 @@ paths:
                   status: { type: string, example: pending_payment }
                   plan: { $ref: '#/components/schemas/SubscriptionPlan' }
                   household_id: { type: string }
+                  care_meta_enriched_baby: { type: integer, format: int32, example: 1 }
 
   /api/v1/assistants/siri/{intentName}:
     post:

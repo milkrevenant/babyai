@@ -76,6 +76,40 @@ class _SemanticColors {
 
 enum ReportRange { daily, weekly, monthly }
 
+class ReportRangeSnapshot {
+  const ReportRangeSnapshot({
+    required this.label,
+    required this.days,
+    required this.formulaMl,
+    required this.feedCount,
+    required this.sleepMinutes,
+    required this.peeCount,
+    required this.pooCount,
+    required this.medicationCount,
+  });
+
+  final String label;
+  final int days;
+  final int formulaMl;
+  final int feedCount;
+  final int sleepMinutes;
+  final int peeCount;
+  final int pooCount;
+  final int medicationCount;
+}
+
+class ReportRangeComparison {
+  const ReportRangeComparison({
+    required this.range,
+    required this.current,
+    required this.previous,
+  });
+
+  final ReportRange range;
+  final ReportRangeSnapshot current;
+  final ReportRangeSnapshot previous;
+}
+
 class ReportPage extends StatefulWidget {
   const ReportPage({
     super.key,
@@ -191,6 +225,122 @@ class ReportPageState extends State<ReportPage> {
 
   Future<void> refreshData() async {
     await _loadReports();
+  }
+
+  Future<ReportRangeComparison> buildRangeComparison(ReportRange range) async {
+    final DateTime currentAnchor;
+    final DateTime previousAnchor;
+    switch (range) {
+      case ReportRange.daily:
+        currentAnchor = _todayUtc;
+        previousAnchor = _todayUtc.subtract(const Duration(days: 1));
+        break;
+      case ReportRange.weekly:
+        currentAnchor = _weekStartUtc;
+        previousAnchor = _weekStartUtc.subtract(const Duration(days: 7));
+        break;
+      case ReportRange.monthly:
+        currentAnchor = _monthStartUtc;
+        previousAnchor = DateTime.utc(
+          _monthStartUtc.year,
+          _monthStartUtc.month - 1,
+          1,
+        );
+        break;
+    }
+    final ReportRangeSnapshot current =
+        await _buildRangeSnapshot(range, currentAnchor);
+    final ReportRangeSnapshot previous =
+        await _buildRangeSnapshot(range, previousAnchor);
+    return ReportRangeComparison(
+      range: range,
+      current: current,
+      previous: previous,
+    );
+  }
+
+  Future<ReportRangeSnapshot> _buildRangeSnapshot(
+    ReportRange range,
+    DateTime anchorUtc,
+  ) async {
+    List<DateTime> days;
+    switch (range) {
+      case ReportRange.daily:
+        days = <DateTime>[_utcDate(anchorUtc)];
+        break;
+      case ReportRange.weekly:
+        final DateTime start = _toWeekStart(_utcDate(anchorUtc));
+        days = List<DateTime>.generate(
+          7,
+          (int i) => start.add(Duration(days: i)),
+          growable: false,
+        );
+        break;
+      case ReportRange.monthly:
+        final DateTime start = DateTime.utc(anchorUtc.year, anchorUtc.month, 1);
+        final int dayCount = DateUtils.getDaysInMonth(start.year, start.month);
+        days = List<DateTime>.generate(
+          dayCount,
+          (int i) => start.add(Duration(days: i)),
+          growable: false,
+        );
+        break;
+    }
+
+    final List<_DayStats> stats = await Future.wait(
+      days.map((DateTime dayUtc) async {
+        final Map<String, dynamic> report = await _loadDailySafe(dayUtc);
+        return _DayStats.fromReport(dayUtc, report);
+      }),
+    );
+
+    final int formulaMl =
+        stats.fold<int>(0, (int sum, _DayStats item) => sum + item.formulaMl);
+    final int feedCount =
+        stats.fold<int>(0, (int sum, _DayStats item) => sum + item.feedCount);
+    final int sleepMinutes = stats.fold<int>(
+        0, (int sum, _DayStats item) => sum + item.sleepMinutes);
+    final int peeCount =
+        stats.fold<int>(0, (int sum, _DayStats item) => sum + item.peeCount);
+    final int pooCount =
+        stats.fold<int>(0, (int sum, _DayStats item) => sum + item.pooCount);
+    final int medicationCount = stats.fold<int>(
+      0,
+      (int sum, _DayStats item) => sum + item.medicationCount,
+    );
+
+    return ReportRangeSnapshot(
+      label: _rangeLabel(range, days.first, days.last),
+      days: days.length,
+      formulaMl: formulaMl,
+      feedCount: feedCount,
+      sleepMinutes: sleepMinutes,
+      peeCount: peeCount,
+      pooCount: pooCount,
+      medicationCount: medicationCount,
+    );
+  }
+
+  String _rangeLabel(ReportRange range, DateTime startUtc, DateTime endUtc) {
+    String ymd(DateTime day) {
+      final DateTime local = day.toLocal();
+      final String y = local.year.toString().padLeft(4, "0");
+      final String m = local.month.toString().padLeft(2, "0");
+      final String d = local.day.toString().padLeft(2, "0");
+      return "$y-$m-$d";
+    }
+
+    switch (range) {
+      case ReportRange.daily:
+        return ymd(startUtc);
+      case ReportRange.weekly:
+        return "${ymd(startUtc)} ~ ${ymd(endUtc)}";
+      case ReportRange.monthly:
+        final DateTime local = startUtc.toLocal();
+        final String y = local.year.toString().padLeft(4, "0");
+        final String m = local.month.toString().padLeft(2, "0");
+        return "$y-$m";
+    }
   }
 
   Future<void> _loadReports() async {

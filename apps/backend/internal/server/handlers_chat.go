@@ -63,6 +63,7 @@ type childProfileSnapshot struct {
 	HeightCm              *float64
 	HeightSource          string
 	GrowthMeasuredAt      *time.Time
+	SubscriptionCareMeta  map[string]any
 }
 
 type creditSnapshot struct {
@@ -1739,6 +1740,7 @@ func buildBaseProfileMeta(childID string, profile childProfileSnapshot, birthDat
 		"profile_height_cm":               profile.HeightCm,
 		"profile_height_source":           profile.HeightSource,
 		"profile_growth_measured_at_utc":  formatNullableTimeRFC3339(profile.GrowthMeasuredAt),
+		"profile_subscription_care_meta":  cloneMap(profile.SubscriptionCareMeta),
 		"profile_onboarding_snapshot": map[string]any{
 			"name":                    profile.Name,
 			"birth_date":              birthDateText,
@@ -1828,7 +1830,56 @@ func profileCareContextLine(profile childProfileSnapshot) string {
 	if len(parts) == 0 {
 		return ""
 	}
+	if subscriptionLine := profileSubscriptionCareContextLine(profile.SubscriptionCareMeta); subscriptionLine != "" {
+		parts = append(parts, subscriptionLine)
+	}
 	return "- 온보딩 프로필=" + strings.Join(parts, ", ")
+}
+
+func profileSubscriptionCareContextLine(meta map[string]any) string {
+	if len(meta) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, 3)
+	if formulaMeta, ok := meta["formula_preanalysis"].(map[string]any); ok {
+		displayName := strings.TrimSpace(toString(formulaMeta["display_name"]))
+		normalizedType := strings.TrimSpace(toString(formulaMeta["normalized_formula_type"]))
+		containsStarch := ""
+		if starchValue, exists := formulaMeta["contains_starch"]; exists {
+			if boolValue, ok := starchValue.(bool); ok {
+				if boolValue {
+					containsStarch = "전분함유=예"
+				} else {
+					containsStarch = "전분함유=아니오"
+				}
+			}
+		}
+		formulaParts := make([]string, 0, 3)
+		if displayName != "" {
+			formulaParts = append(formulaParts, "분유제품="+displayName)
+		}
+		if normalizedType != "" {
+			formulaParts = append(formulaParts, "분석유형="+normalizedType)
+		}
+		if containsStarch != "" {
+			formulaParts = append(formulaParts, containsStarch)
+		}
+		if len(formulaParts) > 0 {
+			parts = append(parts, "구독분석("+strings.Join(formulaParts, "/")+")")
+		}
+	}
+	if breastfeedMeta, ok := meta["breastfeed_preanalysis"].(map[string]any); ok {
+		sessionCount, sessionOK := toInt(breastfeedMeta["session_count_14d"])
+		intervalMinutes, intervalOK := toInt(breastfeedMeta["average_interval_min_14d"])
+		if sessionOK && sessionCount > 0 {
+			if intervalOK && intervalMinutes > 0 {
+				parts = append(parts, fmt.Sprintf("모유기록14일=%d회, 평균간격=%d분", sessionCount, intervalMinutes))
+			} else {
+				parts = append(parts, fmt.Sprintf("모유기록14일=%d회", sessionCount))
+			}
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 func resolveRequestedChatScope(rawMode, rawAnchorDate string, nowUTC time.Time) chatScopeOverride {
@@ -2717,6 +2768,7 @@ func (a *App) loadChildProfileSnapshot(ctx context.Context, userID, childID stri
 		WeightSource:          "profile_settings",
 		HeightCm:              nil,
 		HeightSource:          "not_available",
+		SubscriptionCareMeta:  map[string]any{},
 	}
 	if snapshot.AgeMonths < 0 {
 		snapshot.AgeMonths = 0
@@ -2729,6 +2781,15 @@ func (a *App) loadChildProfileSnapshot(ctx context.Context, userID, childID stri
 	}
 	if snapshot.WeightKg == nil {
 		snapshot.WeightSource = "not_available"
+	}
+
+	personaSettings, err := loadPersonaSettingsWithQuerier(ctx, a.db, userID)
+	if err != nil {
+		return childProfileSnapshot{}, err
+	}
+	babySettings := readBabySettings(personaSettings, childID)
+	if subscriptionMeta, ok := babySettings["subscription_care_metadata"].(map[string]any); ok {
+		snapshot.SubscriptionCareMeta = cloneMap(subscriptionMeta)
 	}
 
 	var growthStartAt time.Time

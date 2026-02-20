@@ -1,4 +1,3 @@
-import "package:flutter/foundation.dart";
 import "package:flutter/material.dart";
 
 import "../../core/i18n/app_i18n.dart";
@@ -37,7 +36,6 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
   final TextEditingController _formulaBrandController = TextEditingController();
   final TextEditingController _formulaProductController =
       TextEditingController();
-  final TextEditingController _tokenController = TextEditingController();
 
   bool _loading = false;
   String? _error;
@@ -78,7 +76,6 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
     _weightController.dispose();
     _formulaBrandController.dispose();
     _formulaProductController.dispose();
-    _tokenController.dispose();
     super.dispose();
   }
 
@@ -385,13 +382,16 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
     });
 
     try {
-      final String typedToken =
-          kReleaseMode ? "" : _tokenController.text.trim();
-      if (!kReleaseMode && typedToken.isNotEmpty) {
-        BabyAIApi.setBearerToken(typedToken);
-      }
       final double? weight =
           double.tryParse(_weightController.text.trim().replaceAll(",", "."));
+      final bool includeFormulaInputs = _feedingMethod != "breastmilk";
+      final String formulaBrand =
+          includeFormulaInputs ? _formulaBrandController.text.trim() : "";
+      final String formulaProduct =
+          includeFormulaInputs ? _formulaProductController.text.trim() : "";
+      final String formulaType = includeFormulaInputs ? _formulaType : "";
+      final bool formulaContainsStarch =
+          includeFormulaInputs ? _formulaContainsStarch : false;
 
       if (widget.initialOnboarding || BabyAIApi.activeBabyId.isEmpty) {
         final Map<String, dynamic> created =
@@ -401,10 +401,10 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
           babySex: _sex,
           babyWeightKg: weight,
           feedingMethod: _feedingMethod,
-          formulaBrand: _formulaBrandController.text.trim(),
-          formulaProduct: _formulaProductController.text.trim(),
-          formulaType: _formulaType,
-          formulaContainsStarch: _formulaContainsStarch,
+          formulaBrand: formulaBrand,
+          formulaProduct: formulaProduct,
+          formulaType: formulaType,
+          formulaContainsStarch: formulaContainsStarch,
         );
 
         final String babyId = (created["baby_id"] ?? "").toString();
@@ -420,10 +420,10 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
           babySex: _sex,
           babyWeightKg: weight,
           feedingMethod: _feedingMethod,
-          formulaBrand: _formulaBrandController.text.trim(),
-          formulaProduct: _formulaProductController.text.trim(),
-          formulaType: _formulaType,
-          formulaContainsStarch: _formulaContainsStarch,
+          formulaBrand: formulaBrand,
+          formulaProduct: formulaProduct,
+          formulaType: formulaType,
+          formulaContainsStarch: formulaContainsStarch,
         );
 
         bool syncedOnline = false;
@@ -437,10 +437,10 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
               babySex: _sex,
               babyWeightKg: weight,
               feedingMethod: _feedingMethod,
-              formulaBrand: _formulaBrandController.text.trim(),
-              formulaProduct: _formulaProductController.text.trim(),
-              formulaType: _formulaType,
-              formulaContainsStarch: _formulaContainsStarch,
+              formulaBrand: formulaBrand,
+              formulaProduct: formulaProduct,
+              formulaType: formulaType,
+              formulaContainsStarch: formulaContainsStarch,
               requiredConsents: _consents(),
             );
             final String remoteBabyId = (remote["baby_id"] ?? "").toString();
@@ -457,10 +457,10 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
                 babySex: _sex,
                 babyWeightKg: weight,
                 feedingMethod: _feedingMethod,
-                formulaBrand: _formulaBrandController.text.trim(),
-                formulaProduct: _formulaProductController.text.trim(),
-                formulaType: _formulaType,
-                formulaContainsStarch: _formulaContainsStarch,
+                formulaBrand: formulaBrand,
+                formulaProduct: formulaProduct,
+                formulaType: formulaType,
+                formulaContainsStarch: formulaContainsStarch,
               );
               syncedOnline = true;
             }
@@ -509,10 +509,10 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
           babySex: _sex,
           babyWeightKg: weight,
           feedingMethod: _feedingMethod,
-          formulaBrand: _formulaBrandController.text.trim(),
-          formulaProduct: _formulaProductController.text.trim(),
-          formulaType: _formulaType,
-          formulaContainsStarch: _formulaContainsStarch,
+          formulaBrand: formulaBrand,
+          formulaProduct: formulaProduct,
+          formulaType: formulaType,
+          formulaContainsStarch: formulaContainsStarch,
         );
         if (settingsController != null) {
           await settingsController.setChildCareProfile(_careProfile,
@@ -624,7 +624,7 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
   @override
   Widget build(BuildContext context) {
     final bool initial = widget.initialOnboarding;
-    final bool showDevJwtInput = initial && !kReleaseMode;
+    final bool showFormulaInputs = _feedingMethod != "breastmilk";
     return Scaffold(
       appBar: AppBar(
         automaticallyImplyLeading: !initial,
@@ -646,21 +646,6 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
               const SizedBox(height: 12),
             ],
             if (!initial || _step == 0) ...<Widget>[
-              if (showDevJwtInput) ...<Widget>[
-                TextFormField(
-                  controller: _tokenController,
-                  minLines: 1,
-                  maxLines: 3,
-                  decoration: InputDecoration(
-                    labelText: tr(context,
-                        ko: "Google JWT 토큰 (선택, 로그인 시 온라인 동기화)",
-                        en: "Google JWT token (optional, enables online sync)",
-                        es: "JWT Google (opcional, token local automatico)"),
-                    border: const OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 10),
-              ],
               TextFormField(
                 controller: _nameController,
                 decoration: InputDecoration(
@@ -766,48 +751,53 @@ class _ChildProfilePageState extends State<ChildProfilePage> {
                 onChanged: (String? value) =>
                     setState(() => _feedingMethod = value ?? "mixed"),
               ),
-              const SizedBox(height: 10),
-              _profileDropdown<String>(
-                initialValue: _formulaType,
-                label: tr(context, ko: "분유 타입", en: "Formula type", es: "Tipo"),
-                items: <String>[
-                  "standard",
-                  "hydrolyzed",
-                  "thickened",
-                  "soy",
-                  "goat",
-                  "specialty"
-                ]
-                    .map((String value) => DropdownMenuItem<String>(
-                        value: value, child: Text(_formulaTypeLabel(value))))
-                    .toList(),
-                onChanged: (String? value) =>
-                    setState(() => _formulaType = value ?? "standard"),
-              ),
-              const SizedBox(height: 10),
-              TextFormField(
-                  controller: _formulaBrandController,
-                  decoration: InputDecoration(
-                      labelText: tr(context,
-                          ko: "분유 브랜드", en: "Formula brand", es: "Marca"),
-                      border: const OutlineInputBorder())),
-              const SizedBox(height: 10),
-              TextFormField(
-                  controller: _formulaProductController,
-                  decoration: InputDecoration(
-                      labelText: tr(context,
-                          ko: "분유 제품명", en: "Formula product", es: "Producto"),
-                      border: const OutlineInputBorder())),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                value: _formulaContainsStarch,
-                title: Text(tr(context,
-                    ko: "전분(농후제) 함유",
-                    en: "Contains starch",
-                    es: "Contiene almidon")),
-                onChanged: (bool value) =>
-                    setState(() => _formulaContainsStarch = value),
-              ),
+              if (showFormulaInputs) ...<Widget>[
+                const SizedBox(height: 10),
+                _profileDropdown<String>(
+                  initialValue: _formulaType,
+                  label:
+                      tr(context, ko: "분유 타입", en: "Formula type", es: "Tipo"),
+                  items: <String>[
+                    "standard",
+                    "hydrolyzed",
+                    "thickened",
+                    "soy",
+                    "goat",
+                    "specialty"
+                  ]
+                      .map((String value) => DropdownMenuItem<String>(
+                          value: value, child: Text(_formulaTypeLabel(value))))
+                      .toList(),
+                  onChanged: (String? value) =>
+                      setState(() => _formulaType = value ?? "standard"),
+                ),
+                const SizedBox(height: 10),
+                TextFormField(
+                    controller: _formulaBrandController,
+                    decoration: InputDecoration(
+                        labelText: tr(context,
+                            ko: "분유 브랜드", en: "Formula brand", es: "Marca"),
+                        border: const OutlineInputBorder())),
+                const SizedBox(height: 10),
+                TextFormField(
+                    controller: _formulaProductController,
+                    decoration: InputDecoration(
+                        labelText: tr(context,
+                            ko: "분유 제품명",
+                            en: "Formula product",
+                            es: "Producto"),
+                        border: const OutlineInputBorder())),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: _formulaContainsStarch,
+                  title: Text(tr(context,
+                      ko: "전분(농후제) 함유",
+                      en: "Contains starch",
+                      es: "Contiene almidon")),
+                  onChanged: (bool value) =>
+                      setState(() => _formulaContainsStarch = value),
+                ),
+              ],
             ],
             if (!initial || _step == 2) ...<Widget>[
               _consentTile(_ConsentType.terms),

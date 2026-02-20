@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,6 +16,11 @@ import (
 )
 
 type subscriptionFeature string
+
+const (
+	subscriptionFormulaGuideURL       = "https://www.cdc.gov/infant-toddler-nutrition/formula-feeding/how-much-and-how-often.html"
+	subscriptionBreastfeedingGuideURL = "https://www.cdc.gov/breastfeeding/php/guidelines-recommendations/index.html"
+)
 
 const (
 	subscriptionFeatureAI         subscriptionFeature = "ai"
@@ -422,6 +428,8 @@ func (a *App) checkoutSubscription(c *gin.Context) {
 	}
 	defer tx.Rollback(c.Request.Context())
 
+	enrichedChildren := 0
+
 	var subscriptionID string
 	err = tx.QueryRow(
 		c.Request.Context(),
@@ -456,6 +464,17 @@ func (a *App) checkoutSubscription(c *gin.Context) {
 		}
 	}
 
+	if count, enrichErr := a.refreshSubscriptionCareMetadata(
+		c.Request.Context(),
+		tx,
+		user.ID,
+		payload.HouseholdID,
+	); enrichErr != nil {
+		log.Printf("failed to refresh subscription care metadata user_id=%s household_id=%s err=%v", user.ID, payload.HouseholdID, enrichErr)
+	} else {
+		enrichedChildren = count
+	}
+
 	if err := recordAuditLog(
 		c.Request.Context(),
 		tx,
@@ -464,7 +483,10 @@ func (a *App) checkoutSubscription(c *gin.Context) {
 		"SUBSCRIPTION_CHECKOUT_STARTED",
 		"Subscription",
 		&subscriptionID,
-		gin.H{"plan": payload.Plan},
+		gin.H{
+			"plan":                    payload.Plan,
+			"care_meta_enriched_baby": enrichedChildren,
+		},
 	); err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to write audit log")
 		return
@@ -476,10 +498,290 @@ func (a *App) checkoutSubscription(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"status":       "pending_payment",
-		"plan":         payload.Plan,
-		"household_id": payload.HouseholdID,
+		"status":                  "pending_payment",
+		"plan":                    payload.Plan,
+		"household_id":            payload.HouseholdID,
+		"care_meta_enriched_baby": enrichedChildren,
 	})
+}
+
+func (a *App) refreshSubscriptionCareMetadata(
+	ctx context.Context,
+	q dbQuerier,
+	userID, householdID string,
+) (int, error) {
+	persona, err := loadPersonaSettingsWithQuerier(ctx, q, userID)
+	if err != nil {
+		return 0, err
+	}
+	rows, err := q.Query(
+		ctx,
+		`SELECT id FROM "Baby" WHERE "householdId" = $1`,
+		householdID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	nowUTC := time.Now().UTC()
+	updatedCount := 0
+	for rows.Next() {
+		var babyID string
+		if err := rows.Scan(&babyID); err != nil {
+			return 0, err
+		}
+		babySettings := readBabySettings(persona, babyID)
+		if babySettings == nil {
+			babySettings = map[string]any{}
+		}
+		metadata, err := a.buildSubscriptionCareMetadata(ctx, q, babyID, babySettings, nowUTC)
+		if err != nil {
+			return 0, err
+		}
+		babySettings["subscription_care_metadata"] = metadata
+		writeBabySettings(persona, babyID, babySettings)
+		updatedCount++
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	if updatedCount == 0 {
+		return 0, nil
+	}
+	if err := upsertPersonaSettingsWithQuerier(ctx, q, userID, persona); err != nil {
+		return 0, err
+	}
+	return updatedCount, nil
+}
+
+func (a *App) buildSubscriptionCareMetadata(
+	ctx context.Context,
+	q dbQuerier,
+	babyID string,
+	babySettings map[string]any,
+	nowUTC time.Time,
+) (map[string]any, error) {
+	feedingMethod := normalizeFeedingMethod(toString(babySettings["feeding_method"]))
+	if feedingMethod == "" {
+		feedingMethod = "mixed"
+	}
+	metadata := map[string]any{
+		"version":          "v1",
+		"trigger":          "subscription_checkout",
+		"generated_at_utc": nowUTC.Format(time.RFC3339),
+		"feeding_method":   feedingMethod,
+		"official_guides": []string{
+			subscriptionFormulaGuideURL,
+			subscriptionBreastfeedingGuideURL,
+		},
+	}
+
+	if formulaMeta := buildFormulaPreanalysisMetadata(babySettings, feedingMethod); len(formulaMeta) > 0 {
+		metadata["formula_preanalysis"] = formulaMeta
+	}
+	if feedingMethod == "breastmilk" || feedingMethod == "mixed" {
+		breastfeedMeta, err := a.buildBreastfeedPreanalysisMetadata(ctx, q, babyID, nowUTC.AddDate(0, 0, -14))
+		if err != nil {
+			return nil, err
+		}
+		metadata["breastfeed_preanalysis"] = breastfeedMeta
+	}
+
+	return metadata, nil
+}
+
+func buildFormulaPreanalysisMetadata(babySettings map[string]any, feedingMethod string) map[string]any {
+	brand := strings.TrimSpace(toString(babySettings["formula_brand"]))
+	product := strings.TrimSpace(toString(babySettings["formula_product"]))
+	rawTypeInput := strings.TrimSpace(toString(babySettings["formula_type"]))
+	rawType := normalizeFormulaType(rawTypeInput)
+	containsStarch := mapBoolPointer(babySettings["formula_contains_starch"])
+	if brand == "" && product == "" && rawTypeInput == "" && containsStarch == nil {
+		return map[string]any{}
+	}
+	inferenceSource := "profile_input"
+	inferenceReason := ""
+	if rawType == "" {
+		if inferredType, reason := inferFormulaTypeFromProductName(brand, product); inferredType != "" {
+			rawType = inferredType
+			inferenceSource = "product_name_keyword"
+			inferenceReason = reason
+		}
+	}
+	if rawType == "" {
+		rawType = "standard"
+		inferenceSource = "default_standard"
+	}
+
+	displayNameParts := make([]string, 0, 2)
+	if brand != "" {
+		displayNameParts = append(displayNameParts, brand)
+	}
+	if product != "" {
+		displayNameParts = append(displayNameParts, product)
+	}
+	displayName := strings.TrimSpace(strings.Join(displayNameParts, " "))
+	if displayName == "" && feedingMethod == "breastmilk" {
+		return map[string]any{}
+	}
+
+	if containsStarch == nil && rawType == "thickened" {
+		defaultTrue := true
+		containsStarch = &defaultTrue
+	}
+	catalogMatch := map[string]any{}
+	for _, item := range formulaCatalog() {
+		if normalizeFormulaType(toString(item["code"])) != rawType {
+			continue
+		}
+		catalogMatch = map[string]any{}
+		for key, value := range item {
+			catalogMatch[key] = value
+		}
+		break
+	}
+	result := map[string]any{
+		"display_name":            displayName,
+		"brand":                   brand,
+		"product":                 product,
+		"normalized_formula_type": rawType,
+		"inference_source":        inferenceSource,
+		"catalog_source":          "curated_internal",
+		"official_guide":          subscriptionFormulaGuideURL,
+	}
+	if inferenceReason != "" {
+		result["inference_reason"] = inferenceReason
+	}
+	if containsStarch != nil {
+		result["contains_starch"] = *containsStarch
+	}
+	if len(catalogMatch) > 0 {
+		result["catalog_match"] = catalogMatch
+	}
+	return result
+}
+
+func inferFormulaTypeFromProductName(brand, product string) (string, string) {
+	normalized := strings.ToLower(strings.TrimSpace(strings.Join([]string{brand, product}, " ")))
+	if normalized == "" {
+		return "", ""
+	}
+	if containsAnyKeyword(normalized, []string{"thickened", "ar", "역류", "걸쭉", "전분"}) {
+		return "thickened", "matched thickened/ar keyword"
+	}
+	if containsAnyKeyword(normalized, []string{"hydrolyzed", "hypoallergenic", "ha", "부분가수분해", "가수분해"}) {
+		return "hydrolyzed", "matched hydrolyzed keyword"
+	}
+	if containsAnyKeyword(normalized, []string{"soy", "대두"}) {
+		return "soy", "matched soy keyword"
+	}
+	if containsAnyKeyword(normalized, []string{"goat", "산양"}) {
+		return "goat", "matched goat keyword"
+	}
+	if containsAnyKeyword(normalized, []string{"sensitive", "센서티브", "special"}) {
+		return "specialty", "matched sensitive/special keyword"
+	}
+	return "", ""
+}
+
+func (a *App) buildBreastfeedPreanalysisMetadata(
+	ctx context.Context,
+	q dbQuerier,
+	babyID string,
+	sinceUTC time.Time,
+) (map[string]any, error) {
+	query := `SELECT "startTime", "endTime"
+	          FROM "Event"
+	          WHERE "babyId" = $1
+	            AND type = 'BREASTFEED'
+	            AND "startTime" >= $2
+	            AND NOT (
+	              "endTime" IS NULL
+	              AND (
+	                COALESCE("metadataJson"->>'event_state', '') = 'OPEN'
+	                OR COALESCE("metadataJson"->>'entry_mode', '') = 'manual_start'
+	              )
+	            )
+	            AND COALESCE("metadataJson"->>'event_state', 'CLOSED') <> 'CANCELED'
+	          ORDER BY "startTime" ASC`
+	rows, err := q.Query(ctx, query, babyID, sinceUTC)
+	if err != nil && isUndefinedSchemaReferenceError(err) {
+		rows, err = q.Query(
+			ctx,
+			`SELECT "startTime", "endTime"
+			 FROM "Event"
+			 WHERE "babyId" = $1
+			   AND type = 'BREASTFEED'
+			   AND "startTime" >= $2
+			 ORDER BY "startTime" ASC`,
+			babyID,
+			sinceUTC,
+		)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	startTimes := make([]time.Time, 0, 32)
+	totalDurationMin := 0
+	durationCount := 0
+	for rows.Next() {
+		var startTime time.Time
+		var endTime *time.Time
+		if err := rows.Scan(&startTime, &endTime); err != nil {
+			return nil, err
+		}
+		startUTC := startTime.UTC()
+		startTimes = append(startTimes, startUTC)
+		if endTime != nil {
+			endUTC := endTime.UTC()
+			if endUTC.After(startUTC) {
+				totalDurationMin += int(endUTC.Sub(startUTC).Minutes() + 0.5)
+				durationCount++
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	var lastRecordedAt *time.Time
+	sessionCount := len(startTimes)
+	if sessionCount > 0 {
+		last := startTimes[sessionCount-1]
+		lastRecordedAt = &last
+	}
+	intervalTotalMin := 0
+	intervalCount := 0
+	for idx := 1; idx < len(startTimes); idx++ {
+		diffMin := int(startTimes[idx].Sub(startTimes[idx-1]).Minutes() + 0.5)
+		if diffMin <= 0 {
+			continue
+		}
+		intervalTotalMin += diffMin
+		intervalCount++
+	}
+
+	result := map[string]any{
+		"window_days":          14,
+		"session_count_14d":    sessionCount,
+		"last_recorded_at_utc": formatNullableTimeRFC3339(lastRecordedAt),
+		"source":               "event_history_14d",
+		"official_guide":       subscriptionBreastfeedingGuideURL,
+	}
+	if intervalCount > 0 {
+		result["average_interval_min_14d"] = int(float64(intervalTotalMin)/float64(intervalCount) + 0.5)
+	} else {
+		result["average_interval_min_14d"] = nil
+	}
+	if durationCount > 0 {
+		result["average_duration_min_14d"] = int(float64(totalDurationMin)/float64(durationCount) + 0.5)
+	} else {
+		result["average_duration_min_14d"] = nil
+	}
+	return result, nil
 }
 
 func (a *App) assistantDialog(ctx context.Context, babyID, tone, intent string) (string, string, error) {

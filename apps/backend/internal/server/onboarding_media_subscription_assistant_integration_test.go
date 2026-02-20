@@ -280,6 +280,91 @@ func TestCheckoutSubscriptionCreatesTrialingSubscription(t *testing.T) {
 	}
 }
 
+func TestCheckoutSubscriptionBuildsFormulaPreanalysisMetadata(t *testing.T) {
+	resetDatabase(t)
+	fixture := seedOwnerFixture(t)
+
+	updateProfile := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodPatch,
+		"/api/v1/babies/profile",
+		signToken(t, fixture.UserID, nil),
+		map[string]any{
+			"baby_id":         fixture.BabyID,
+			"feeding_method":  "formula",
+			"formula_brand":   "Maeil",
+			"formula_product": "Absolute Sensitive",
+		},
+		nil,
+	)
+	if updateProfile.Code != http.StatusOK {
+		t.Fatalf("expected profile update 200, got %d body=%s", updateProfile.Code, updateProfile.Body.String())
+	}
+
+	checkout := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodPost,
+		"/api/v1/subscription/checkout",
+		signToken(t, fixture.UserID, nil),
+		map[string]any{
+			"household_id": fixture.HouseholdID,
+			"plan":         "AI_ONLY",
+		},
+		nil,
+	)
+	if checkout.Code != http.StatusOK {
+		t.Fatalf("expected checkout 200, got %d body=%s", checkout.Code, checkout.Body.String())
+	}
+	checkoutBody := decodeJSONMap(t, checkout)
+	if enrichedAny, ok := checkoutBody["care_meta_enriched_baby"].(float64); !ok || int(enrichedAny) != 1 {
+		t.Fatalf("expected care_meta_enriched_baby=1, got %v", checkoutBody["care_meta_enriched_baby"])
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var personaRaw []byte
+	if err := testPool.QueryRow(
+		ctx,
+		`SELECT "personaJson" FROM "PersonaProfile" WHERE "userId" = $1 LIMIT 1`,
+		fixture.UserID,
+	).Scan(&personaRaw); err != nil {
+		t.Fatalf("query persona profile: %v", err)
+	}
+	persona := parseJSONStringMap(personaRaw)
+	appSettings, ok := persona["app_settings"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected app_settings in persona profile")
+	}
+	babyProfiles, ok := appSettings["baby_profiles"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected app_settings.baby_profiles map")
+	}
+	profileAny, ok := babyProfiles[fixture.BabyID]
+	if !ok {
+		t.Fatalf("expected baby profile for %s", fixture.BabyID)
+	}
+	profileMap, ok := profileAny.(map[string]any)
+	if !ok {
+		t.Fatalf("expected baby profile object, got %T", profileAny)
+	}
+	careMeta, ok := profileMap["subscription_care_metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected subscription_care_metadata map, got %T", profileMap["subscription_care_metadata"])
+	}
+	formulaMeta, ok := careMeta["formula_preanalysis"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected formula_preanalysis map, got %T", careMeta["formula_preanalysis"])
+	}
+	if formulaMeta["normalized_formula_type"] != "specialty" {
+		t.Fatalf("expected normalized_formula_type=specialty, got %v", formulaMeta["normalized_formula_type"])
+	}
+	if formulaMeta["official_guide"] != subscriptionFormulaGuideURL {
+		t.Fatalf("expected formula official_guide=%q, got %v", subscriptionFormulaGuideURL, formulaMeta["official_guide"])
+	}
+}
+
 func TestCheckoutSubscriptionRejectsCaregiverBillingRole(t *testing.T) {
 	resetDatabase(t)
 	fixture := seedOwnerFixture(t)

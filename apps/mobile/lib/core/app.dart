@@ -1,5 +1,6 @@
 import "dart:async";
 import "dart:convert";
+import "dart:ui" show ImageFilter;
 
 import "package:flutter/foundation.dart";
 import "package:flutter/material.dart";
@@ -270,6 +271,8 @@ class _HomeShellState extends State<_HomeShell> {
       GlobalKey<ReportPageState>();
   StreamSubscription<AssistantActionPayload>? _assistantSubscription;
   AssistantActionPayload? _pendingAssistantAction;
+  final TextEditingController _chatSearchController = TextEditingController();
+  final FocusNode _chatSearchFocusNode = FocusNode();
 
   int _index = 0;
   bool _isGoogleLoggedIn = false;
@@ -281,6 +284,8 @@ class _HomeShellState extends State<_HomeShell> {
   bool _chatHistoryLoading = false;
   String? _chatHistoryError;
   List<_ChatHistoryItem> _chatHistory = <_ChatHistoryItem>[];
+  String _chatSearchQuery = "";
+  bool _chatSearchFocused = false;
   String? _selectedChatSessionId;
   bool _loginSyncInProgress = false;
   String _homeBabyName = "우리 아기";
@@ -305,6 +310,12 @@ class _HomeShellState extends State<_HomeShell> {
   @override
   void initState() {
     super.initState();
+    _chatSearchFocusNode.addListener(() {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _chatSearchFocused = _chatSearchFocusNode.hasFocus);
+    });
     _sharedScopeAnchorDateLocal =
         _normalizeScopeAnchorForRange(_reportRange, DateTime.now());
     _bootstrapAccountFromToken();
@@ -316,6 +327,8 @@ class _HomeShellState extends State<_HomeShell> {
   @override
   void dispose() {
     _assistantSubscription?.cancel();
+    _chatSearchFocusNode.dispose();
+    _chatSearchController.dispose();
     super.dispose();
   }
 
@@ -326,7 +339,29 @@ class _HomeShellState extends State<_HomeShell> {
     );
   }
 
+  Future<void> _ensureDebugBearerTokenIfMissing() async {
+    if (kReleaseMode) {
+      return;
+    }
+    if (BabyAIApi.currentBearerToken.trim().isNotEmpty) {
+      return;
+    }
+    try {
+      await BabyAIApi.instance.issueLocalDevToken(
+        name: "Local Dev User",
+        provider: "google",
+      );
+      await AppSessionStore.persistRuntimeState();
+      if (mounted) {
+        _bootstrapAccountFromToken();
+      }
+    } catch (_) {
+      // Keep running in local-offline mode when local token endpoint is unavailable.
+    }
+  }
+
   Future<void> _resolveInitialChildGate() async {
+    await _ensureDebugBearerTokenIfMissing();
     final String babyId = BabyAIApi.activeBabyId.trim();
     if (babyId.isEmpty) {
       if (!mounted) {
@@ -841,6 +876,14 @@ class _HomeShellState extends State<_HomeShell> {
     }
   }
 
+  void _handleNavigationTabSelection(_BottomMenuTab target) {
+    if (target.pageIndex == _chatPage && target.locked) {
+      unawaited(_openChatFromNavigationIntent());
+      return;
+    }
+    _setIndex(target.pageIndex);
+  }
+
   Future<void> _loadChatHistory() async {
     if (!_chatFeatureEnabled) {
       if (mounted) {
@@ -1256,40 +1299,40 @@ class _HomeShellState extends State<_HomeShell> {
 
   List<_BottomMenuTab> _buildBottomTabs() {
     final List<_BottomMenuTab> tabs = <_BottomMenuTab>[
-      const _BottomMenuTab(
+      _BottomMenuTab(
         pageIndex: _homePage,
         iconData: Icons.home_outlined,
         selectedIconData: Icons.home_rounded,
-        label: "home",
+        label: tr(context, ko: "홈", en: "Home", es: "Inicio"),
       ),
     ];
     if (widget.themeController.isBottomMenuEnabled(AppBottomMenu.statistics)) {
-      tabs.add(const _BottomMenuTab(
+      tabs.add(_BottomMenuTab(
         pageIndex: _statisticsPage,
         iconAsset: AppSvgAsset.stats,
-        label: "statistics",
+        label: tr(context, ko: "통계", en: "Stats", es: "Estadisticas"),
       ));
     }
     if (widget.themeController.isBottomMenuEnabled(AppBottomMenu.chat)) {
       tabs.add(_BottomMenuTab(
         pageIndex: _chatPage,
         iconAsset: AppSvgAsset.aiChatSparkles,
-        label: "chat",
+        label: tr(context, ko: "채팅", en: "Chat", es: "Chat"),
         locked: !_chatFeatureEnabled,
       ));
     }
     if (widget.themeController.isBottomMenuEnabled(AppBottomMenu.market)) {
-      tabs.add(const _BottomMenuTab(
+      tabs.add(_BottomMenuTab(
         pageIndex: _marketPage,
         iconAsset: AppSvgAsset.playCar,
-        label: "market",
+        label: tr(context, ko: "장터", en: "Market", es: "Mercado"),
       ));
     }
     if (widget.themeController.isBottomMenuEnabled(AppBottomMenu.community)) {
-      tabs.add(const _BottomMenuTab(
+      tabs.add(_BottomMenuTab(
         pageIndex: _communityPage,
         iconAsset: AppSvgAsset.profile,
-        label: "community",
+        label: tr(context, ko: "커뮤니티", en: "Community", es: "Comunidad"),
       ));
     }
     return tabs;
@@ -1934,6 +1977,295 @@ class _HomeShellState extends State<_HomeShell> {
     _applySharedScope(next, _sharedScopeAnchorDateLocal);
   }
 
+  Future<void> _openReportComparePicker() async {
+    if (_index != _statisticsPage) {
+      return;
+    }
+    final ReportRange? picked = await showModalBottomSheet<ReportRange>(
+      context: context,
+      showDragHandle: true,
+      builder: (BuildContext context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                ListTile(
+                  leading: const Icon(Icons.today_outlined),
+                  title: Text(
+                    tr(
+                      context,
+                      ko: "일자별 비교",
+                      en: "Daily comparison",
+                      es: "Comparacion diaria",
+                    ),
+                  ),
+                  onTap: () => Navigator.of(context).pop(ReportRange.daily),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.view_week_outlined),
+                  title: Text(
+                    tr(
+                      context,
+                      ko: "주별 비교",
+                      en: "Weekly comparison",
+                      es: "Comparacion semanal",
+                    ),
+                  ),
+                  onTap: () => Navigator.of(context).pop(ReportRange.weekly),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.calendar_month_outlined),
+                  title: Text(
+                    tr(
+                      context,
+                      ko: "월별 비교",
+                      en: "Monthly comparison",
+                      es: "Comparacion mensual",
+                    ),
+                  ),
+                  onTap: () => Navigator.of(context).pop(ReportRange.monthly),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    if (picked == null || !mounted) {
+      return;
+    }
+    await _openReportCompareResult(picked);
+  }
+
+  Future<void> _openReportCompareResult(ReportRange range) async {
+    final ReportPageState? reportState = _reportPageKey.currentState;
+    if (reportState == null) {
+      return;
+    }
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (BuildContext context) {
+        final ColorScheme color = Theme.of(context).colorScheme;
+        return SafeArea(
+          child: FutureBuilder<ReportRangeComparison>(
+            future: reportState.buildRangeComparison(range),
+            builder: (
+              BuildContext context,
+              AsyncSnapshot<ReportRangeComparison> snapshot,
+            ) {
+              if (snapshot.connectionState != ConnectionState.done) {
+                return const SizedBox(
+                  height: 220,
+                  child: Center(child: CircularProgressIndicator()),
+                );
+              }
+              if (!snapshot.hasData) {
+                return SizedBox(
+                  height: 220,
+                  child: Center(
+                    child: Text(
+                      tr(
+                        context,
+                        ko: "비교 데이터를 불러오지 못했습니다.",
+                        en: "Failed to load comparison.",
+                        es: "No se pudo cargar la comparacion.",
+                      ),
+                    ),
+                  ),
+                );
+              }
+              final ReportRangeComparison compare = snapshot.data!;
+              final ReportRangeSnapshot current = compare.current;
+              final ReportRangeSnapshot previous = compare.previous;
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(16, 10, 16, 18),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      tr(
+                        context,
+                        ko: "기간 비교",
+                        en: "Period Comparison",
+                        es: "Comparacion de periodos",
+                      ),
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      tr(
+                        context,
+                        ko: "현재: ${current.label}",
+                        en: "Current: ${current.label}",
+                        es: "Actual: ${current.label}",
+                      ),
+                      style: TextStyle(
+                        color: color.onSurfaceVariant,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    Text(
+                      tr(
+                        context,
+                        ko: "비교: ${previous.label}",
+                        en: "Compared: ${previous.label}",
+                        es: "Comparado: ${previous.label}",
+                      ),
+                      style: TextStyle(
+                        color: color.onSurfaceVariant,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    _comparisonMetricRow(
+                      context,
+                      label: tr(context, ko: "총 수면", en: "Sleep", es: "Sueno"),
+                      current: _formatMinutes(current.sleepMinutes),
+                      previous: _formatMinutes(previous.sleepMinutes),
+                      delta: _formatDelta(
+                          current.sleepMinutes, previous.sleepMinutes),
+                    ),
+                    _comparisonMetricRow(
+                      context,
+                      label:
+                          tr(context, ko: "분유량", en: "Formula", es: "Formula"),
+                      current: "${current.formulaMl}ml",
+                      previous: "${previous.formulaMl}ml",
+                      delta:
+                          _formatDelta(current.formulaMl, previous.formulaMl),
+                    ),
+                    _comparisonMetricRow(
+                      context,
+                      label: tr(
+                        context,
+                        ko: "수유 횟수",
+                        en: "Feeds",
+                        es: "Tomas",
+                      ),
+                      current: "${current.feedCount}",
+                      previous: "${previous.feedCount}",
+                      delta:
+                          _formatDelta(current.feedCount, previous.feedCount),
+                    ),
+                    _comparisonMetricRow(
+                      context,
+                      label: tr(context, ko: "소변", en: "Pee", es: "Pee"),
+                      current: "${current.peeCount}",
+                      previous: "${previous.peeCount}",
+                      delta: _formatDelta(current.peeCount, previous.peeCount),
+                    ),
+                    _comparisonMetricRow(
+                      context,
+                      label: tr(context, ko: "대변", en: "Poo", es: "Poo"),
+                      current: "${current.pooCount}",
+                      previous: "${previous.pooCount}",
+                      delta: _formatDelta(current.pooCount, previous.pooCount),
+                    ),
+                    _comparisonMetricRow(
+                      context,
+                      label: tr(
+                        context,
+                        ko: "투약",
+                        en: "Medication",
+                        es: "Medicación",
+                      ),
+                      current: "${current.medicationCount}",
+                      previous: "${previous.medicationCount}",
+                      delta: _formatDelta(
+                        current.medicationCount,
+                        previous.medicationCount,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _comparisonMetricRow(
+    BuildContext context, {
+    required String label,
+    required String current,
+    required String previous,
+    required String delta,
+  }) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    Color deltaColor = color.onSurfaceVariant;
+    if (delta.startsWith("+")) {
+      deltaColor = const Color(0xFF2E7D32);
+    } else if (delta.startsWith("-")) {
+      deltaColor = const Color(0xFFC62828);
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: <Widget>[
+          Expanded(
+            flex: 3,
+            child: Text(
+              label,
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ),
+          Expanded(
+            flex: 2,
+            child: Text(
+              current,
+              textAlign: TextAlign.right,
+            ),
+          ),
+          Expanded(
+            flex: 2,
+            child: Text(
+              previous,
+              textAlign: TextAlign.right,
+              style: TextStyle(color: color.onSurfaceVariant),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              delta,
+              textAlign: TextAlign.right,
+              style: TextStyle(fontWeight: FontWeight.w700, color: deltaColor),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatDelta(int current, int previous) {
+    final int diff = current - previous;
+    if (diff > 0) {
+      return "+$diff";
+    }
+    if (diff < 0) {
+      return "$diff";
+    }
+    return "0";
+  }
+
+  String _formatMinutes(int minutes) {
+    final int hour = minutes ~/ 60;
+    final int min = minutes % 60;
+    if (hour <= 0) {
+      return "${min}m";
+    }
+    return "${hour}h ${min}m";
+  }
+
   void _onHomeBabyNameChanged(String name) {
     final String normalized = name.trim();
     if (normalized.isEmpty || normalized == _homeBabyName) {
@@ -2078,7 +2410,7 @@ class _HomeShellState extends State<_HomeShell> {
                 .colorScheme
                 .surfaceContainerHighest
                 .withValues(
-                  alpha: 0.45,
+                  alpha: 0.26,
                 ),
             borderRadius: BorderRadius.circular(999),
           ),
@@ -2189,6 +2521,12 @@ class _HomeShellState extends State<_HomeShell> {
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
               onTap: () => _setReportRange(ReportRange.monthly),
             ),
+            _HeaderChoice(
+              selected: false,
+              label: tr(context, ko: "비교", en: "Compare", es: "Comparar"),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              onTap: () => unawaited(_openReportComparePicker()),
+            ),
           ],
         );
       case _chatPage:
@@ -2208,6 +2546,7 @@ class _HomeShellState extends State<_HomeShell> {
   PreferredSizeWidget _buildTopBar(BuildContext context) {
     final ColorScheme color = Theme.of(context).colorScheme;
     final String ymd = _topBarDateLabel();
+    final double blurSigma = _glassBlurSigma();
     return AppBar(
       automaticallyImplyLeading: false,
       toolbarHeight: 52,
@@ -2219,23 +2558,39 @@ class _HomeShellState extends State<_HomeShell> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(bottom: Radius.circular(24)),
       ),
-      flexibleSpace: DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: <Color>[
-              color.surface.withValues(alpha: 1.0),
-              color.surface.withValues(alpha: 0.0),
-            ],
-            stops: const <double>[0, 1],
+      flexibleSpace: ClipRRect(
+        borderRadius: const BorderRadius.vertical(bottom: Radius.circular(24)),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: blurSigma, sigmaY: blurSigma),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: <Color>[
+                  color.surface.withValues(alpha: 1.0),
+                  color.surface.withValues(alpha: 0.12),
+                  color.surface.withValues(alpha: 0.0),
+                ],
+                stops: const <double>[0.0, 0.18, 1.0],
+              ),
+              border: Border(
+                bottom: BorderSide(
+                  color: color.outlineVariant.withValues(alpha: 0.05),
+                ),
+              ),
+            ),
           ),
         ),
       ),
       titleSpacing: 12,
       title: Row(
         children: <Widget>[
-          _RoundTopButton(icon: Icons.menu, onTap: _openChatHistoryDrawer),
+          _RoundTopButton(
+            icon: Icons.menu,
+            onTap: _openChatHistoryDrawer,
+            tooltip: tr(context, ko: "메뉴 열기", en: "Open menu", es: "Abrir menu"),
+          ),
           const SizedBox(width: 8),
           Expanded(child: _buildHeaderControls(context)),
           if (_index == _chatPage) ...<Widget>[
@@ -2243,6 +2598,12 @@ class _HomeShellState extends State<_HomeShell> {
             _RoundTopButton(
               icon: Icons.edit_square,
               onTap: () => unawaited(_createNewChatFromDrawer()),
+              tooltip: tr(
+                context,
+                ko: "새 채팅",
+                en: "New chat",
+                es: "Nuevo chat",
+              ),
             ),
             const SizedBox(width: 4),
             _buildChatSessionPopupButton(
@@ -2263,7 +2624,7 @@ class _HomeShellState extends State<_HomeShell> {
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: color.surfaceContainerHighest.withValues(alpha: 0.45),
+                  color: color.surfaceContainerHighest.withValues(alpha: 0.14),
                   borderRadius: BorderRadius.circular(999),
                 ),
                 child: Row(
@@ -2320,6 +2681,141 @@ class _HomeShellState extends State<_HomeShell> {
     return Icon(icon, size: 20, color: color);
   }
 
+  double _glassBlurSigma() {
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.iOS:
+        return 24;
+      case TargetPlatform.android:
+        return 18;
+      default:
+        return 14;
+    }
+  }
+
+  double _bottomGlassWidth(int tabCount, double viewportWidth) {
+    final int count = tabCount <= 0 ? 1 : tabCount;
+    final double desired = (count * 78.0) + 120.0;
+    double maxWidth = viewportWidth - 12;
+    if (maxWidth < 220) {
+      maxWidth = viewportWidth;
+    }
+    double width = desired;
+    if (width < 300) {
+      width = 300;
+    }
+    if (width > maxWidth) {
+      width = maxWidth;
+    }
+    return width;
+  }
+
+  bool _useSidebarNavigation(BuildContext context) {
+    final Size size = MediaQuery.sizeOf(context);
+    final bool isTabletLike =
+        defaultTargetPlatform == TargetPlatform.iOS && size.shortestSide >= 700;
+    final bool isWideDesktop = size.width >= 980;
+    return isTabletLike || isWideDesktop;
+  }
+
+  Widget _buildSidebarNavigation(
+    BuildContext context, {
+    required List<_BottomMenuTab> tabs,
+    required int selectedIndex,
+  }) {
+    final ColorScheme color = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(10, 12, 8, 12),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(26),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(
+            sigmaX: _glassBlurSigma() + 4,
+            sigmaY: _glassBlurSigma() + 4,
+          ),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: <Color>[
+                  color.surface.withValues(alpha: 0.3),
+                  color.surface.withValues(alpha: 0.18),
+                  color.surface.withValues(alpha: 0.1),
+                ],
+              ),
+              border: Border.all(
+                color: color.outlineVariant.withValues(alpha: 0.08),
+              ),
+            ),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minWidth: 82, maxWidth: 96),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: List<Widget>.generate(
+                    tabs.length,
+                    (int index) {
+                      final _BottomMenuTab tab = tabs[index];
+                      final bool selected = selectedIndex == index;
+                      return Padding(
+                        padding: EdgeInsets.only(
+                          bottom: index == tabs.length - 1 ? 0 : 8,
+                        ),
+                        child: Material(
+                          color: selected
+                              ? color.primary.withValues(alpha: 0.16)
+                              : Colors.transparent,
+                          borderRadius: BorderRadius.circular(16),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(16),
+                            onTap: () => _handleNavigationTabSelection(tab),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 8,
+                              ),
+                              child: Column(
+                                children: <Widget>[
+                                  _buildBottomTabIcon(
+                                    tab,
+                                    color: selected
+                                        ? color.primary
+                                        : color.onSurfaceVariant,
+                                    selected: selected,
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    tab.label,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: selected
+                                          ? FontWeight.w700
+                                          : FontWeight.w500,
+                                      color: selected
+                                          ? color.primary
+                                          : color.onSurfaceVariant,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildLoginSyncOverlay(BuildContext context) {
     final ColorScheme color = Theme.of(context).colorScheme;
     return Positioned.fill(
@@ -2333,10 +2829,10 @@ class _HomeShellState extends State<_HomeShell> {
               padding: const EdgeInsets.only(top: 14),
               child: DecoratedBox(
                 decoration: BoxDecoration(
-                  color: color.surface.withValues(alpha: 0.96),
+                  color: color.surfaceContainerHighest.withValues(alpha: 0.95),
                   borderRadius: BorderRadius.circular(18),
                   border: Border.all(
-                    color: color.outlineVariant.withValues(alpha: 0.3),
+                    color: color.primary.withValues(alpha: 0.24),
                   ),
                   boxShadow: <BoxShadow>[
                     BoxShadow(
@@ -2409,17 +2905,33 @@ class _HomeShellState extends State<_HomeShell> {
     }
 
     final ColorScheme color = Theme.of(context).colorScheme;
+    final String normalizedChatSearch = _chatSearchQuery.trim().toLowerCase();
+    final List<_ChatHistoryItem> filteredChatHistory = normalizedChatSearch.isEmpty
+        ? _chatHistory
+        : _chatHistory
+            .where((_ChatHistoryItem item) {
+              final String haystack =
+                  "${item.title} ${item.preview}".toLowerCase();
+              return haystack.contains(normalizedChatSearch);
+            })
+            .toList(growable: false);
     final List<_BottomMenuTab> bottomTabs = _buildBottomTabs();
     final int selectedBottomIndex = bottomTabs.indexWhere(
       (_BottomMenuTab tab) => tab.pageIndex == _index,
     );
-    final bool showBottomNav = bottomTabs.isNotEmpty;
+    final bool useSidebarNavigation = _useSidebarNavigation(context);
+    final bool showBottomNav = bottomTabs.isNotEmpty && !useSidebarNavigation;
     final int selectedBottomIndexResolved =
         selectedBottomIndex >= 0 ? selectedBottomIndex : 0;
+    final double bottomGlassWidth = _bottomGlassWidth(
+      bottomTabs.length,
+      MediaQuery.sizeOf(context).width,
+    );
 
     return Scaffold(
       key: _scaffoldKey,
       appBar: _buildTopBar(context),
+      extendBody: true,
       drawer: Drawer(
         backgroundColor: color.surface,
         child: SafeArea(
@@ -2451,6 +2963,83 @@ class _HomeShellState extends State<_HomeShell> {
                   ],
                 ),
               ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 10, 8),
+                child: Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: TextField(
+                        controller: _chatSearchController,
+                        focusNode: _chatSearchFocusNode,
+                        onChanged: (String value) =>
+                            setState(() => _chatSearchQuery = value),
+                        textInputAction: TextInputAction.search,
+                        decoration: InputDecoration(
+                          isDense: true,
+                          hintText: tr(
+                            context,
+                            ko: "채팅 제목, 메시지 검색",
+                            en: "Search titles and messages",
+                            es: "Buscar titulos y mensajes",
+                          ),
+                          prefixIcon: const Icon(Icons.search_rounded, size: 20),
+                          suffixIcon: normalizedChatSearch.isEmpty
+                              ? null
+                              : IconButton(
+                                  tooltip: tr(
+                                    context,
+                                    ko: "검색 지우기",
+                                    en: "Clear search",
+                                    es: "Limpiar busqueda",
+                                  ),
+                                  icon: const Icon(Icons.close_rounded, size: 18),
+                                  onPressed: () {
+                                    _chatSearchController.clear();
+                                    setState(() => _chatSearchQuery = "");
+                                  },
+                                ),
+                          filled: true,
+                          fillColor:
+                              color.surfaceContainerHighest.withValues(alpha: 0.45),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(16),
+                            borderSide: BorderSide(
+                              color: color.outline.withValues(alpha: 0.18),
+                            ),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(16),
+                            borderSide: BorderSide(
+                              color: color.outline.withValues(alpha: 0.18),
+                            ),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(16),
+                            borderSide: BorderSide(
+                              color: color.primary.withValues(alpha: 0.5),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    if (_chatSearchFocused || normalizedChatSearch.isNotEmpty)
+                      TextButton(
+                        onPressed: () {
+                          _chatSearchController.clear();
+                          _chatSearchFocusNode.unfocus();
+                          setState(() => _chatSearchQuery = "");
+                        },
+                        child: Text(
+                          tr(context, ko: "취소", en: "Cancel", es: "Cancelar"),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
               if (_chatHistoryError != null)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -2479,10 +3068,17 @@ class _HomeShellState extends State<_HomeShell> {
                       )
                     : _chatHistoryLoading && _chatHistory.isEmpty
                         ? const Center(child: CircularProgressIndicator())
-                        : _chatHistory.isEmpty
+                        : filteredChatHistory.isEmpty
                             ? Center(
                                 child: Text(
-                                  "No previous chats yet.",
+                                  normalizedChatSearch.isEmpty
+                                      ? "No previous chats yet."
+                                      : tr(
+                                          context,
+                                          ko: "검색 결과가 없습니다.",
+                                          en: "No matching chats.",
+                                          es: "No hay chats coincidentes.",
+                                        ),
                                   style: TextStyle(
                                     color: color.onSurfaceVariant,
                                     fontWeight: FontWeight.w500,
@@ -2491,12 +3087,12 @@ class _HomeShellState extends State<_HomeShell> {
                               )
                             : ListView.separated(
                                 padding: const EdgeInsets.fromLTRB(8, 4, 8, 12),
-                                itemCount: _chatHistory.length,
+                                itemCount: filteredChatHistory.length,
                                 separatorBuilder: (_, __) =>
                                     const SizedBox(height: 2),
                                 itemBuilder: (BuildContext context, int index) {
                                   final _ChatHistoryItem item =
-                                      _chatHistory[index];
+                                      filteredChatHistory[index];
                                   final bool selected =
                                       item.sessionId == _selectedChatSessionId;
                                   return ListTile(
@@ -2582,41 +3178,100 @@ class _HomeShellState extends State<_HomeShell> {
       body: SafeArea(
         top: false,
         child: Stack(
+          fit: StackFit.expand,
           children: <Widget>[
-            _buildCurrentPage(),
+            if (useSidebarNavigation && bottomTabs.isNotEmpty)
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  _buildSidebarNavigation(
+                    context,
+                    tabs: bottomTabs,
+                    selectedIndex: selectedBottomIndexResolved,
+                  ),
+                  Expanded(child: _buildCurrentPage()),
+                ],
+              )
+            else
+              _buildCurrentPage(),
             if (_loginSyncInProgress) _buildLoginSyncOverlay(context),
           ],
         ),
       ),
       bottomNavigationBar: showBottomNav
-          ? NavigationBar(
-              labelBehavior: NavigationDestinationLabelBehavior.alwaysHide,
-              selectedIndex: selectedBottomIndexResolved,
-              onDestinationSelected: (int i) {
-                final _BottomMenuTab target = bottomTabs[i];
-                if (target.pageIndex == _chatPage && target.locked) {
-                  unawaited(_openChatFromNavigationIntent());
-                  return;
-                }
-                _setIndex(target.pageIndex);
-              },
-              destinations: bottomTabs
-                  .map(
-                    (_BottomMenuTab tab) => NavigationDestination(
-                      icon: _buildBottomTabIcon(
-                        tab,
-                        color: color.onSurfaceVariant,
-                        selected: false,
+          ? SafeArea(
+              top: false,
+              minimum: const EdgeInsets.fromLTRB(6, 0, 6, 8),
+              child: Align(
+                alignment: Alignment.bottomCenter,
+                heightFactor: 1,
+                child: SizedBox(
+                  width: bottomGlassWidth,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(24),
+                    child: BackdropFilter(
+                      filter: ImageFilter.blur(
+                        sigmaX: _glassBlurSigma() + 4,
+                        sigmaY: _glassBlurSigma() + 4,
                       ),
-                      selectedIcon: _buildBottomTabIcon(
-                        tab,
-                        color: color.primary,
-                        selected: true,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: <Color>[
+                              color.surface.withValues(alpha: 0.28),
+                              color.surface.withValues(alpha: 0.16),
+                              color.surface.withValues(alpha: 0.08),
+                            ],
+                            stops: const <double>[0.0, 0.68, 1.0],
+                          ),
+                          border: Border.all(
+                            color: color.outlineVariant.withValues(alpha: 0.06),
+                          ),
+                        ),
+                        child: NavigationBarTheme(
+                          data: NavigationBarTheme.of(context).copyWith(
+                            backgroundColor: Colors.transparent,
+                            surfaceTintColor: Colors.transparent,
+                            shadowColor: Colors.transparent,
+                            elevation: 0,
+                          ),
+                          child: NavigationBar(
+                            backgroundColor: Colors.transparent,
+                            surfaceTintColor: Colors.transparent,
+                            shadowColor: Colors.transparent,
+                            elevation: 0,
+                            labelBehavior:
+                                NavigationDestinationLabelBehavior.alwaysHide,
+                            selectedIndex: selectedBottomIndexResolved,
+                            onDestinationSelected: (int i) {
+                              _handleNavigationTabSelection(bottomTabs[i]);
+                            },
+                            destinations: bottomTabs
+                                .map(
+                                  (_BottomMenuTab tab) => NavigationDestination(
+                                    icon: _buildBottomTabIcon(
+                                      tab,
+                                      color: color.onSurfaceVariant,
+                                      selected: false,
+                                    ),
+                                    selectedIcon: _buildBottomTabIcon(
+                                      tab,
+                                      color: color.primary,
+                                      selected: true,
+                                    ),
+                                    label: tab.label,
+                                  ),
+                                )
+                                .toList(),
+                          ),
+                        ),
                       ),
-                      label: tab.label,
                     ),
-                  )
-                  .toList(),
+                  ),
+                ),
+              ),
             )
           : null,
     );
@@ -2672,23 +3327,36 @@ class _AssistantRecordAction {
 }
 
 class _RoundTopButton extends StatelessWidget {
-  const _RoundTopButton({required this.icon, required this.onTap});
+  const _RoundTopButton({
+    required this.icon,
+    required this.onTap,
+    this.tooltip,
+  });
 
   final IconData icon;
   final VoidCallback onTap;
+  final String? tooltip;
 
   @override
   Widget build(BuildContext context) {
     final ColorScheme color = Theme.of(context).colorScheme;
-    return Material(
-      color: color.surfaceContainerHighest.withValues(alpha: 0.6),
+    final Widget button = Material(
+      color: color.surfaceContainerHighest.withValues(alpha: 0.3),
       shape: const CircleBorder(),
       child: InkWell(
         customBorder: const CircleBorder(),
         onTap: onTap,
-        child: SizedBox(width: 32, height: 32, child: Icon(icon, size: 17)),
+        child: SizedBox(
+          width: 44,
+          height: 44,
+          child: Icon(icon, size: 20),
+        ),
       ),
     );
+    if (tooltip == null || tooltip!.trim().isEmpty) {
+      return button;
+    }
+    return Tooltip(message: tooltip, child: button);
   }
 }
 
@@ -2711,7 +3379,7 @@ class _HeaderChoice extends StatelessWidget {
     return Material(
       color: selected
           ? color.primaryContainer.withValues(alpha: 0.92)
-          : color.surfaceContainerHighest.withValues(alpha: 0.45),
+          : color.surfaceContainerHighest.withValues(alpha: 0.3),
       borderRadius: BorderRadius.circular(999),
       child: InkWell(
         borderRadius: BorderRadius.circular(999),
@@ -2747,7 +3415,7 @@ class _HeaderHint extends StatelessWidget {
       height: 40,
       padding: const EdgeInsets.symmetric(horizontal: 12),
       decoration: BoxDecoration(
-        color: color.surfaceContainerHighest.withValues(alpha: 0.45),
+        color: color.surfaceContainerHighest.withValues(alpha: 0.28),
         borderRadius: BorderRadius.circular(999),
       ),
       child: Row(

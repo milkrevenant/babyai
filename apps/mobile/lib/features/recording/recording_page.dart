@@ -1907,6 +1907,7 @@ class RecordingPageState extends State<RecordingPage> {
     final List<HomeTileType> tiles = _dashboardTiles(controller);
     final int tileColumns = controller.homeTileColumns.clamp(1, 3);
     final int maxMetaLines = tileColumns == 3 ? 3 : 4;
+    const double sectionSpacing = 14;
     final bool showSpecialMemo = controller.showSpecialMemo;
     final String specialMemoText = _asString(snapshot["special_memo"]) ??
         tr(
@@ -1943,7 +1944,7 @@ class RecordingPageState extends State<RecordingPage> {
     return RefreshIndicator(
       onRefresh: _loadLandingSnapshot,
       child: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
         children: <Widget>[
           if (_snapshotLoading || _entrySaving) ...<Widget>[
             const SizedBox(height: 12),
@@ -1956,7 +1957,7 @@ class RecordingPageState extends State<RecordingPage> {
               style: TextStyle(color: color.error, fontWeight: FontWeight.w600),
             ),
           ],
-          const SizedBox(height: 14),
+          const SizedBox(height: sectionSpacing),
           Container(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
             decoration: BoxDecoration(
@@ -2184,11 +2185,11 @@ class RecordingPageState extends State<RecordingPage> {
               ],
             ),
           ),
+          const SizedBox(height: sectionSpacing),
           if (showSpecialMemo) ...<Widget>[
-            const SizedBox(height: 12),
             _specialMemoPanel(context, specialMemoText),
+            const SizedBox(height: sectionSpacing),
           ],
-          const SizedBox(height: 16),
           GridView.builder(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
