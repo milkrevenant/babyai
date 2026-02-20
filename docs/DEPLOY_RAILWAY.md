@@ -9,11 +9,12 @@ This project deploys the Go backend from `apps/backend` using Docker and runs Pr
 
 ## What is already prepared in this repo
 - `railway.json` (repo root)
-- `apps/backend/Dockerfile`
+- `Dockerfile` (repo root, Railway build entrypoint)
+- `apps/backend/Dockerfile` (legacy/local reference)
 - Backend reads `PORT` automatically (Railway runtime env)
 
 `railway.json` uses:
-- Dockerfile build: `apps/backend/Dockerfile`
+- Dockerfile build: `Dockerfile`
 - Pre-deploy DB sync: `npm run prisma:push`
 - Health check: `/health`
 
