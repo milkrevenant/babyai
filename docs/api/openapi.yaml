@@ -570,6 +570,10 @@ paths:
           name: tz_offset
           required: false
           schema: { type: string, example: '+09:00' }
+        - in: query
+          name: anchor_date
+          required: false
+          schema: { type: string, format: date }
       responses:
         '200':
           description: Landing dashboard snapshot
@@ -629,6 +633,32 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/WeeklyReportResponse'
+
+  /api/v1/reports/monthly:
+    get:
+      tags: [reports]
+      summary: Monthly report
+      operationId: getMonthlyReport
+      parameters:
+        - in: query
+          name: baby_id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: month_start
+          required: true
+          schema: { type: string, format: date }
+        - in: query
+          name: tz_offset
+          required: false
+          schema: { type: string, example: '+09:00' }
+      responses:
+        '200':
+          description: Monthly report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MonthlyReportResponse'
 
   /api/v1/photos/upload-url:
     post:
@@ -1051,7 +1081,11 @@ components:
     LandingSnapshotResponse:
       type: object
       properties:
+        baby_id: { type: string }
+        baby_name: { type: string }
+        baby_profile_photo_url: { type: string, format: uri, nullable: true }
         date: { type: string, format: date }
+        anchor_date: { type: string, format: date }
         range: { type: string, enum: [day, week, month] }
         range_label: { type: string }
         range_start_date: { type: string, format: date }
@@ -1235,6 +1269,21 @@ components:
       properties:
         baby_id: { type: string }
         week_start: { type: string, format: date }
+        trend:
+          type: object
+          additionalProperties: { type: string }
+        suggestions:
+          type: array
+          items: { type: string }
+        labels:
+          type: array
+          items: { type: string }
+
+    MonthlyReportResponse:
+      type: object
+      properties:
+        baby_id: { type: string }
+        month_start: { type: string, format: date }
         trend:
           type: object
           additionalProperties: { type: string }

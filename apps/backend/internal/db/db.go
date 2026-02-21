@@ -15,6 +15,7 @@ var supportedPGQueryKeys = map[string]struct{}{
 	"connect_timeout":         {},
 	"default_query_exec_mode": {},
 	"gssencmode":              {},
+	"host":                    {},
 	"keepalives":              {},
 	"keepalives_count":        {},
 	"keepalives_idle":         {},

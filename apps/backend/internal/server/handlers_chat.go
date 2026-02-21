@@ -988,11 +988,10 @@ func (a *App) loadChatSessionForUser(ctx context.Context, userID, sessionID stri
 
 	err := scanWithMemory()
 	if err != nil && isMissingChatMemoryColumnErr(err) {
-		if ensureErr := a.ensureChatSessionMemoryColumns(ctx); ensureErr == nil {
-			err = scanWithMemory()
-		} else {
-			return chatSessionRecord{}, ensureErr
-		}
+		return chatSessionRecord{}, fmt.Errorf(
+			"chat session memory columns are missing; apply DB migration before runtime (run prisma migrate deploy): %w",
+			err,
+		)
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return chatSessionRecord{}, &chatHTTPError{Status: http.StatusNotFound, Detail: "Chat session not found"}
@@ -1236,25 +1235,10 @@ func (a *App) execChatMemoryUpdateWithRetry(ctx context.Context, query string, a
 	if !isMissingChatMemoryColumnErr(err) {
 		return err
 	}
-	if ensureErr := a.ensureChatSessionMemoryColumns(ctx); ensureErr != nil {
-		return ensureErr
-	}
-	_, retryErr := a.db.Exec(ctx, query, args...)
-	return retryErr
-}
-
-func (a *App) ensureChatSessionMemoryColumns(ctx context.Context) error {
-	statements := []string{
-		`ALTER TABLE "ChatSession" ADD COLUMN IF NOT EXISTS "memorySummary" TEXT`,
-		`ALTER TABLE "ChatSession" ADD COLUMN IF NOT EXISTS "memorySummarizedCount" INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE "ChatSession" ADD COLUMN IF NOT EXISTS "memorySummaryUpdatedAt" TIMESTAMP(3)`,
-	}
-	for _, stmt := range statements {
-		if _, err := a.db.Exec(ctx, stmt); err != nil {
-			return err
-		}
-	}
-	return nil
+	return fmt.Errorf(
+		"chat session memory columns are missing; apply DB migration before runtime (run prisma migrate deploy): %w",
+		err,
+	)
 }
 
 func isMissingChatMemoryColumnErr(err error) bool {
@@ -1697,18 +1681,98 @@ func (a *App) buildChatContext(
 	selection := resolveChatContextSelection(question, intent, nowUTC, scopeOverride)
 	switch selection.Mode {
 	case chatContextModeRequestedDateSummary:
-		return a.buildRequestedDateSummaryContext(ctx, childID, nowUTC, selection, profileSnapshot, birthDateText)
+		result, err := a.buildRequestedDateSummaryContext(ctx, childID, nowUTC, selection, profileSnapshot, birthDateText)
+		if err != nil {
+			return chatContextResult{}, err
+		}
+		if contextHasMissingData(result) {
+			fallbackSelection := selection
+			fallbackSelection.Mode = chatContextModeRequestedDateRaw
+			fallback, fallbackErr := a.buildRawEventContext(ctx, childID, question, intent, nowUTC, fallbackSelection, profileSnapshot, birthDateText)
+			if fallbackErr == nil {
+				fallback.Meta["time_range"] = chatContextModeRequestedDateSummary
+				fallback.Meta["context_source"] = "daily_summary_fallback_event_window"
+				fallback.Meta["requested_date_utc"] = selection.RawStart.UTC().Format("2006-01-02")
+				return fallback, nil
+			}
+		}
+		return result, nil
 	case chatContextModeWeeklySummary:
-		return a.buildWeeklySummaryContext(ctx, childID, nowUTC, selection, profileSnapshot, birthDateText)
+		result, err := a.buildWeeklySummaryContext(ctx, childID, nowUTC, selection, profileSnapshot, birthDateText)
+		if err != nil {
+			return chatContextResult{}, err
+		}
+		if contextHasMissingData(result) {
+			fallbackSelection := selection
+			fallbackSelection.RawStart = selection.WeekAnchor.UTC()
+			fallbackSelection.RawEnd = selection.WeekAnchor.UTC().Add(7 * 24 * time.Hour)
+			fallbackSelection.Mode = chatContextModeWeeklySummary
+			fallback, fallbackErr := a.buildRawEventContext(ctx, childID, question, intent, nowUTC, fallbackSelection, profileSnapshot, birthDateText)
+			if fallbackErr == nil {
+				fallback.Meta["time_range"] = chatContextModeWeeklySummary
+				fallback.Meta["context_source"] = "weekly_summary_fallback_event_window"
+				fallback.Meta["week_anchor_utc"] = selection.WeekAnchor.UTC().Format("2006-01-02")
+				return fallback, nil
+			}
+		}
+		return result, nil
 	case chatContextModeMonthlyMedicalSummary:
-		return a.buildMonthlyMedicalSummaryContext(ctx, childID, nowUTC, selection, profileSnapshot, birthDateText)
+		result, err := a.buildMonthlyMedicalSummaryContext(ctx, childID, nowUTC, selection, profileSnapshot, birthDateText)
+		if err != nil {
+			return chatContextResult{}, err
+		}
+		if contextHasMissingData(result) {
+			fallbackSelection := selection
+			fallbackSelection.RawStart = selection.MonthStart.UTC()
+			fallbackSelection.RawEnd = selection.MonthEnd.UTC()
+			fallbackSelection.Mode = chatContextModeMonthlyMedicalSummary
+			fallback, fallbackErr := a.buildRawEventContext(ctx, childID, question, intent, nowUTC, fallbackSelection, profileSnapshot, birthDateText)
+			if fallbackErr == nil {
+				fallback.Meta["time_range"] = chatContextModeMonthlyMedicalSummary
+				fallback.Meta["context_source"] = "monthly_medical_fallback_event_window"
+				fallback.Meta["month_start_utc"] = selection.MonthStart.UTC().Format("2006-01-02")
+				fallback.Meta["month_end_utc"] = selection.MonthEnd.UTC().Format("2006-01-02")
+				return fallback, nil
+			}
+		}
+		return result, nil
 	case chatContextModeMonthlyParentingRollup:
-		return a.buildMonthlyParentingRollupContext(ctx, childID, nowUTC, selection, profileSnapshot, birthDateText)
+		result, err := a.buildMonthlyParentingRollupContext(ctx, childID, nowUTC, selection, profileSnapshot, birthDateText)
+		if err != nil {
+			return chatContextResult{}, err
+		}
+		if contextHasMissingData(result) {
+			fallbackSelection := selection
+			fallbackSelection.RawStart = selection.MonthStart.UTC()
+			fallbackSelection.RawEnd = selection.MonthEnd.UTC()
+			fallbackSelection.Mode = chatContextModeMonthlyParentingRollup
+			fallback, fallbackErr := a.buildRawEventContext(ctx, childID, question, intent, nowUTC, fallbackSelection, profileSnapshot, birthDateText)
+			if fallbackErr == nil {
+				fallback.Meta["time_range"] = chatContextModeMonthlyParentingRollup
+				fallback.Meta["context_source"] = "monthly_parenting_fallback_event_window"
+				fallback.Meta["month_start_utc"] = selection.MonthStart.UTC().Format("2006-01-02")
+				fallback.Meta["month_end_utc"] = selection.MonthEnd.UTC().Format("2006-01-02")
+				return fallback, nil
+			}
+		}
+		return result, nil
 	case chatContextModeRequestedDateRaw, chatContextModeLast3DRaw:
 		return a.buildRawEventContext(ctx, childID, question, intent, nowUTC, selection, profileSnapshot, birthDateText)
 	default:
 		return a.buildRawEventContext(ctx, childID, question, intent, nowUTC, selection, profileSnapshot, birthDateText)
 	}
+}
+
+func contextHasMissingData(result chatContextResult) bool {
+	if len(result.Meta) == 0 {
+		return false
+	}
+	raw, ok := result.Meta["has_missing_data"]
+	if !ok {
+		return false
+	}
+	parsed, ok := raw.(bool)
+	return ok && parsed
 }
 
 func buildBaseProfileMeta(childID string, profile childProfileSnapshot, birthDateText string) map[string]any {
@@ -1932,18 +1996,24 @@ func parseChatScopeAnchorDate(raw string, nowUTC time.Time, localZone *time.Loca
 		return startOfScopeLocalDayUTC(nowUTC, zone), true
 	}
 	if parsed, err := parseDate(candidate); err == nil {
+		return startOfScopeLocalDateUTC(parsed.Year(), parsed.Month(), parsed.Day(), zone), true
+	}
+
+	if parsed, err := time.Parse(time.RFC3339Nano, candidate); err == nil {
 		return startOfScopeLocalDayUTC(parsed.UTC(), zone), true
 	}
-	layouts := []string{
-		time.RFC3339Nano,
-		time.RFC3339,
+	if parsed, err := time.Parse(time.RFC3339, candidate); err == nil {
+		return startOfScopeLocalDayUTC(parsed.UTC(), zone), true
+	}
+
+	localLayouts := []string{
 		"2006-01-02 15:04:05",
 		"2006-01-02 15:04",
 		"2006-01-02T15:04:05",
 		"2006-01-02T15:04",
 	}
-	for _, layout := range layouts {
-		if parsed, err := time.Parse(layout, candidate); err == nil {
+	for _, layout := range localLayouts {
+		if parsed, err := time.ParseInLocation(layout, candidate, zone); err == nil {
 			return startOfScopeLocalDayUTC(parsed.UTC(), zone), true
 		}
 	}
@@ -2026,11 +2096,7 @@ func selectionByRequestedScope(
 		selection.RequestedDate = &anchor
 		selection.RawStart = anchor
 		selection.RawEnd = anchor.Add(24 * time.Hour)
-		if nowUTC.Sub(anchor) > chatRawWindowDuration {
-			selection.Mode = chatContextModeRequestedDateSummary
-		} else {
-			selection.Mode = chatContextModeRequestedDateRaw
-		}
+		selection.Mode = chatContextModeRequestedDateRaw
 		return selection, true
 	case "week":
 		selection.Mode = chatContextModeWeeklySummary
@@ -2056,6 +2122,14 @@ func startOfScopeLocalDayUTC(value time.Time, zone *time.Location) time.Time {
 	}
 	local := value.In(zone)
 	localStart := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, zone)
+	return localStart.UTC()
+}
+
+func startOfScopeLocalDateUTC(year int, month time.Month, day int, zone *time.Location) time.Time {
+	if zone == nil {
+		zone = time.UTC
+	}
+	localStart := time.Date(year, month, day, 0, 0, 0, 0, zone)
 	return localStart.UTC()
 }
 
@@ -2258,35 +2332,37 @@ func (a *App) buildRawEventContext(
 	profileSnapshot childProfileSnapshot,
 	birthDateText string,
 ) (chatContextResult, error) {
-	rows, err := a.db.Query(
-		ctx,
-		`SELECT id, type::text, "startTime", "endTime", COALESCE("valueJson", '{}'::jsonb)::text, COALESCE("metadataJson", '{}'::jsonb)::text
+	const nonDayRawFetchLimit = 240
+
+	query := `SELECT id, type::text, "startTime", "endTime", COALESCE("valueJson", '{}'::jsonb)::text, COALESCE("metadataJson", '{}'::jsonb)::text
 		 FROM "Event"
 		 WHERE "babyId" = $1
-		   AND "startTime" >= $2
-		   AND "startTime" < $3
-		   AND NOT (
-		     "endTime" IS NULL
-		     AND (
-		       COALESCE("metadataJson"->>'event_state', '') = 'OPEN'
-		       OR COALESCE("metadataJson"->>'entry_mode', '') = 'manual_start'
-		     )
+		   AND (
+		     ("startTime" >= $2 AND "startTime" < $3)
+		     OR ("endTime" IS NOT NULL AND "endTime" > $2 AND "startTime" < $3)
 		   )
-		   AND COALESCE("metadataJson"->>'event_state', 'CLOSED') <> 'CANCELED'
-		 ORDER BY "startTime" DESC
-		 LIMIT 240`,
-		childID,
-		selection.RawStart,
-		selection.RawEnd,
-	)
+		   AND state = 'CLOSED'
+		 ORDER BY "startTime" DESC`
+	args := []any{childID, selection.RawStart, selection.RawEnd}
+	if selection.Mode != chatContextModeRequestedDateRaw {
+		query += ` LIMIT 240`
+	}
+
+	rows, err := a.db.Query(ctx, query, args...)
 	if err != nil {
 		return chatContextResult{}, err
 	}
 	defer rows.Close()
 
-	focusTypes := focusEventTypesForQuestion(question, intent)
-	evidenceRows := make([]normalizedEvidenceRow, 0, 96)
-	evidenceIDs := make([]string, 0, 96)
+	// In explicit day mode, include all events in the selected day window.
+	// This avoids dropping same-day records due to question-intent filtering.
+	focusTypes := map[string]struct{}{}
+	if selection.Mode != chatContextModeRequestedDateRaw {
+		focusTypes = focusEventTypesForQuestion(question, intent)
+	}
+	evidenceRows := make([]normalizedEvidenceRow, 0, 128)
+	evidenceIDs := make([]string, 0, 128)
+	rawFetchedCount := 0
 	for rows.Next() {
 		var eventID string
 		var eventType string
@@ -2297,6 +2373,7 @@ func (a *App) buildRawEventContext(
 		if err := rows.Scan(&eventID, &eventType, &startAt, &endAt, &valueText, &metadataText); err != nil {
 			return chatContextResult{}, err
 		}
+		rawFetchedCount++
 		if !shouldKeepFocusEventType(eventType, focusTypes) {
 			continue
 		}
@@ -2307,7 +2384,12 @@ func (a *App) buildRawEventContext(
 	if err := rows.Err(); err != nil {
 		return chatContextResult{}, err
 	}
-	if len(evidenceRows) > 80 {
+	truncated := false
+	if selection.Mode != chatContextModeRequestedDateRaw && rawFetchedCount >= nonDayRawFetchLimit {
+		truncated = true
+	}
+	if selection.Mode != chatContextModeRequestedDateRaw && len(evidenceRows) > 80 {
+		truncated = true
 		evidenceRows = evidenceRows[:80]
 		evidenceIDs = evidenceIDs[:80]
 	}
@@ -2319,14 +2401,25 @@ func (a *App) buildRawEventContext(
 	meta["raw_since_utc"] = selection.RawStart.UTC().Format(time.RFC3339)
 	meta["raw_until_utc"] = selection.RawEnd.UTC().Format(time.RFC3339)
 	meta["evidence_event_ids"] = evidenceIDs
+	meta["returned_event_count"] = len(evidenceRows)
+	meta["truncated"] = truncated
 	meta["has_estimated_values"] = false
 	meta["has_missing_data"] = len(evidenceRows) == 0
+	if selection.Mode == chatContextModeRequestedDateRaw {
+		meta["event_filter_mode"] = "all_events_in_requested_day"
+	} else {
+		meta["event_filter_mode"] = "question_focus"
+	}
 	if selection.RequestedDate != nil {
 		meta["requested_date_utc"] = selection.RequestedDate.UTC().Format("2006-01-02")
 	}
 
+	headline := fmt.Sprintf("질문 우선 컨텍스트 (child_id=%s). 질문과 직접 관련된 근거만 사용하세요.", childID)
+	if selection.Mode == chatContextModeRequestedDateRaw {
+		headline = fmt.Sprintf("요청 날짜 컨텍스트 (child_id=%s). 선택한 날짜의 모든 이벤트를 사용하세요.", childID)
+	}
 	summaryLines := []string{
-		fmt.Sprintf("질문 우선 컨텍스트 (child_id=%s). 질문과 직접 관련된 근거만 사용하세요.", childID),
+		headline,
 		fmt.Sprintf("아동 프로필: 이름=%s, 생년월일=%s, 나이=%d일 (만 %d개월).", profileSnapshot.Name, birthDateText, profileSnapshot.AgeDays, profileSnapshot.AgeMonths),
 		fmt.Sprintf("근거 범위: %s ~ %s", formatContextTime(selection.RawStart), formatContextTime(selection.RawEnd)),
 	}

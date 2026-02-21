@@ -5,7 +5,7 @@ Flutter app wired to backend APIs via `Dio`.
 ## Prerequisites
 - Flutter SDK
 - Running backend on `http://127.0.0.1:8000`
-- Valid backend JWT token (HS256, signed with backend `JWT_SECRET`)
+- Google Sign-In setup with web client id (`GOOGLE_SERVER_CLIENT_ID`)
 - Platform requirements:
   - Android `14+` (min API 34), target API `35`
   - iOS `18.0+` (Xcode `16+`)
@@ -20,7 +20,7 @@ flutter pub get
 ```powershell
 flutter run -d windows --debug `
   --dart-define=API_BASE_URL=http://127.0.0.1:8000 `
-  --dart-define=API_BEARER_TOKEN=<jwt-token>
+  --dart-define=GOOGLE_SERVER_CLIENT_ID=<google-web-client-id>
 ```
 
 Optional defines:
@@ -32,20 +32,18 @@ Optional defines:
 
 `BABY_ID/HOUSEHOLD_ID/ALBUM_ID` are optional for first onboarding.
 
-## Token Input Rules (Current)
-- On onboarding `Save & Start`, token is required.
-- Token can come from:
-  - `--dart-define=API_BEARER_TOKEN`
-  - onboarding token text input
-- Local fallback:
-  - if onboarding token input is empty, app calls `POST /dev/local-token` automatically
-  - works only when backend runs with `APP_ENV=local`
-- If missing, app blocks submission before API call with an explicit message.
+## Auth Rules (Current)
+- Google login uses `google_sign_in` and sends Google ID token as Bearer.
+- Backend must enable:
+  - `AUTH_ACCEPT_GOOGLE_ID_TOKEN=true`
+  - `GOOGLE_OAUTH_CLIENT_IDS=<google-web-client-id>`
+- Local fallback still exists for debug builds:
+  - app can call `POST /dev/local-token` when no bearer exists and backend is local/dev.
 
 ## Android Studio
 `Run/Debug Configurations` -> `Additional run args`:
 ```text
---dart-define=API_BASE_URL=http://10.0.2.2:8000 --dart-define=API_BEARER_TOKEN=<jwt-token>
+--dart-define=API_BASE_URL=http://10.0.2.2:8000 --dart-define=GOOGLE_SERVER_CLIENT_ID=<google-web-client-id>
 ```
 
 ## Gemini / Assistant (Current)

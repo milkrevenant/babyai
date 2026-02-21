@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM golang:1.26-bookworm AS builder
+FROM --platform=linux/amd64 golang:1.26-bookworm AS builder
 WORKDIR /src/apps/backend
 
 COPY apps/backend/go.mod apps/backend/go.sum ./
@@ -9,7 +9,7 @@ RUN go mod download
 COPY apps/backend ./
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o /out/babyai-api ./cmd/api
 
-FROM node:20-bookworm-slim AS runtime
+FROM --platform=linux/amd64 node:20-bookworm-slim AS runtime
 WORKDIR /app
 
 RUN apt-get update -y \

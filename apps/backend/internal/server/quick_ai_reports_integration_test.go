@@ -633,6 +633,38 @@ func TestQuickLandingSnapshotRangeWeekReturnsAveragesAndGraph(t *testing.T) {
 	}
 }
 
+func TestQuickLandingSnapshotRespectsAnchorDate(t *testing.T) {
+	resetDatabase(t)
+	fixture := seedOwnerFixture(t)
+
+	seedEvent(t, "", fixture.BabyID, "FORMULA", time.Date(2026, 2, 3, 8, 0, 0, 0, time.UTC), nil, map[string]any{"ml": 90}, fixture.UserID)
+	seedEvent(t, "", fixture.BabyID, "FORMULA", time.Date(2026, 2, 17, 9, 0, 0, 0, time.UTC), nil, map[string]any{"ml": 210}, fixture.UserID)
+
+	rec := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodGet,
+		"/api/v1/quick/landing-snapshot?baby_id="+fixture.BabyID+"&range=week&anchor_date=2026-02-18&tz_offset=%2B00:00",
+		signToken(t, fixture.UserID, nil),
+		nil,
+		nil,
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	body := decodeJSONMap(t, rec)
+	if got, _ := body["anchor_date"].(string); got != "2026-02-18" {
+		t.Fatalf("expected anchor_date 2026-02-18, got %v", body["anchor_date"])
+	}
+	if got, _ := body["range_start_date"].(string); got != "2026-02-16" {
+		t.Fatalf("expected range_start_date 2026-02-16, got %v", body["range_start_date"])
+	}
+	if got, _ := body["formula_total_ml"].(float64); int(got) != 210 {
+		t.Fatalf("expected formula_total_ml 210, got %v", body["formula_total_ml"])
+	}
+}
+
 func TestQuickLandingSnapshotRangeValidation(t *testing.T) {
 	resetDatabase(t)
 	fixture := seedOwnerFixture(t)
@@ -651,6 +683,43 @@ func TestQuickLandingSnapshotRangeValidation(t *testing.T) {
 	}
 	if detail := responseDetail(t, rec); detail != "range must be one of: day, week, month" {
 		t.Fatalf("unexpected detail: %q", detail)
+	}
+}
+
+func TestMonthlyReportNormalizesMonthStartAndReturnsTrend(t *testing.T) {
+	resetDatabase(t)
+	fixture := seedOwnerFixture(t)
+
+	sleepStart := time.Date(2026, 2, 19, 0, 10, 0, 0, time.UTC)
+	sleepEnd := sleepStart.Add(80 * time.Minute)
+	seedEvent(t, "", fixture.BabyID, "SLEEP", sleepStart, &sleepEnd, map[string]any{}, fixture.UserID)
+	seedEvent(t, "", fixture.BabyID, "FORMULA", time.Date(2026, 2, 19, 3, 30, 0, 0, time.UTC), nil, map[string]any{"ml": 120}, fixture.UserID)
+
+	rec := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodGet,
+		"/api/v1/reports/monthly?baby_id="+fixture.BabyID+"&month_start=2026-02-19&tz_offset=%2B00:00",
+		signToken(t, fixture.UserID, nil),
+		nil,
+		nil,
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	body := decodeJSONMap(t, rec)
+	if got, _ := body["month_start"].(string); got != "2026-02-01" {
+		t.Fatalf("expected month_start=2026-02-01, got %v", body["month_start"])
+	}
+	trend, _ := body["trend"].(map[string]any)
+	if trend == nil {
+		t.Fatalf("expected trend object, got %T", body["trend"])
+	}
+	if got, _ := trend["feeding_total_ml"].(string); got != "new" {
+		t.Fatalf("expected feeding_total_ml trend=new, got %v", trend["feeding_total_ml"])
+	}
+	if got, _ := trend["sleep_total_min"].(string); got != "new" {
+		t.Fatalf("expected sleep_total_min trend=new, got %v", trend["sleep_total_min"])
 	}
 }
 

@@ -45,6 +45,12 @@ enum EventSource {
   IMPORT
 }
 
+enum EventState {
+  OPEN
+  CLOSED
+  CANCELED
+}
+
 enum VoiceClipStatus {
   PARSED
   CONFIRMED
@@ -202,6 +208,7 @@ model Event {
   id           String      @id @default(uuid())
   babyId        String
   type          EventType
+  state         EventState  @default(CLOSED)
   startTime     DateTime
   endTime       DateTime?
   valueJson     Json
@@ -214,6 +221,7 @@ model Event {
 
   @@index([babyId, startTime(sort: Desc)])
   @@index([babyId, type, startTime(sort: Desc)])
+  @@index([babyId, type, state, startTime(sort: Desc)])
 }
 
 model VoiceClip {
@@ -626,4 +634,3 @@ model MonthlyMedicalSummary {
   @@unique([childId, month])
   @@index([childId, month(sort: Desc)])
 }
-

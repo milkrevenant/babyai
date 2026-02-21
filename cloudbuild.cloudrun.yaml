@@ -1,0 +1,83 @@
+# Cloud Build pipeline for Google Cloud Run.
+# Flow: build image -> run Prisma migration job -> deploy API service.
+
+substitutions:
+  _REGION: us-central1
+  _AR_REPO: babyai
+  _IMAGE: babyai-api
+  _SERVICE: babyai-api
+  _MIGRATION_JOB: babyai-db-migrate
+  _DATABASE_URL_SECRET: babyai-database-url
+  _JWT_SECRET_SECRET: babyai-jwt-secret
+  _GOOGLE_OAUTH_CLIENT_IDS: ""
+
+steps:
+  - id: build-image
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --platform=linux/amd64
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_IMAGE}:$BUILD_ID
+      - .
+
+  - id: push-image
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_IMAGE}:$BUILD_ID
+
+  - id: deploy-migration-job
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        IMAGE_URI="${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_IMAGE}:$BUILD_ID"
+        gcloud run jobs deploy "${_MIGRATION_JOB}" \
+          --project="$PROJECT_ID" \
+          --region="${_REGION}" \
+          --image="${IMAGE_URI}" \
+          --command=npm \
+          --args=run,prisma:migrate:deploy \
+          --set-env-vars=APP_ENV=production \
+          --set-secrets=DATABASE_URL=${_DATABASE_URL_SECRET}:latest \
+          --tasks=1 \
+          --max-retries=0 \
+          --task-timeout=1800s \
+          --quiet
+
+  - id: execute-migration-job
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        gcloud run jobs execute "${_MIGRATION_JOB}" \
+          --project="$PROJECT_ID" \
+          --region="${_REGION}" \
+          --wait \
+          --quiet
+
+  - id: deploy-service
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        IMAGE_URI="${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_IMAGE}:$BUILD_ID"
+        gcloud run deploy "${_SERVICE}" \
+          --project="$PROJECT_ID" \
+          --region="${_REGION}" \
+          --platform=managed \
+          --image="${IMAGE_URI}" \
+          --port=8080 \
+          --set-env-vars=APP_ENV=production,API_PREFIX=/api/v1,AUTH_ACCEPT_GOOGLE_ID_TOKEN=true,GOOGLE_OAUTH_CLIENT_IDS=${_GOOGLE_OAUTH_CLIENT_IDS} \
+          --set-secrets=DATABASE_URL=${_DATABASE_URL_SECRET}:latest,JWT_SECRET=${_JWT_SECRET_SECRET}:latest \
+          --allow-unauthenticated \
+          --quiet
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_IMAGE}:$BUILD_ID
+
+timeout: 3600s

@@ -12,11 +12,11 @@ Baby care logging + AI summary monorepo.
 
 ## Current Auth Model (Important)
 - Backend APIs are protected by `Authorization: Bearer <jwt>`.
-- Backend does not yet expose a public login/token-issue API.
-- Local dev uses either:
-  - `--dart-define=API_BEARER_TOKEN=...`
-  - onboarding token input field in the mobile app
-- Production target is automatic sign-in/token issue flow (not manual token input).
+- Backend accepts:
+  - internal HS256 JWT (`JWT_SECRET`), and
+  - optional Google ID token direct verification when `AUTH_ACCEPT_GOOGLE_ID_TOKEN=true`.
+- Mobile release builds require `API_BASE_URL` define.
+- Mobile Google Sign-In needs `GOOGLE_SERVER_CLIENT_ID` define to receive ID token reliably.
 
 ## Quick Start (Windows / PowerShell)
 1. Prepare PostgreSQL (pick one)
@@ -57,7 +57,13 @@ npm install
 $env:DATABASE_URL="postgres://babyai:babyai@localhost:5432/babyai"
 npm run prisma:validate
 npm run prisma:generate
-npm run prisma:push
+npm run prisma:migrate:deploy
+```
+
+If your DB was created earlier via `prisma db push`, run one-time baseline first:
+```powershell
+$env:DATABASE_URL="postgres://babyai:babyai@localhost:5432/babyai"
+npm run prisma:migrate:baseline:init
 ```
 
 4. Run mobile
@@ -65,15 +71,13 @@ npm run prisma:push
 cd C:\Users\milkrevenant\Documents\code\babyai\apps\mobile
 flutter pub get
 flutter run -d windows --debug `
-  --dart-define=API_BASE_URL=http://127.0.0.1:8000 `
-  --dart-define=API_BEARER_TOKEN=<jwt-token>
+  --dart-define=API_BASE_URL=http://127.0.0.1:8000
 ```
 
 Android emulator example:
 ```powershell
 flutter run -d emulator-5554 --debug `
-  --dart-define=API_BASE_URL=http://10.0.2.2:8000 `
-  --dart-define=API_BEARER_TOKEN=<jwt-token>
+  --dart-define=API_BASE_URL=http://10.0.2.2:8000
 ```
 
 5. Complete onboarding in app
@@ -84,6 +88,11 @@ flutter run -d emulator-5554 --debug `
 ## References
 - Backend setup: `apps/backend/README.md`
 - Mobile setup: `apps/mobile/README.md`
+- Docker deploy: `docs/DEPLOY_DOCKER.md`
+- GCP Cloud Run deploy: `docs/DEPLOY_GCP_CLOUD_RUN.md`
+- AWS ECS Fargate deploy: `docs/DEPLOY_AWS_ECS_FARGATE.md`
+- Local vs Cloud parity: `docs/LOCAL_ENV_PARITY.md`
+- Railway deploy: `docs/DEPLOY_RAILWAY.md`
 - Gemini/Assistant roadmap: `docs/gemini-babyai-plan.md`
 
 ## Gemini/Assistant Notes (Current)
