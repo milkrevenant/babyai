@@ -124,6 +124,7 @@ func (a *App) Router() *gin.Engine {
 	api.POST("/chat/query", a.chatQuery)
 	api.GET("/reports/daily", a.getDailyReport)
 	api.GET("/reports/weekly", a.getWeeklyReport)
+	api.GET("/reports/monthly", a.getMonthlyReport)
 	api.POST("/photos/upload-url", a.createPhotoUploadURL)
 	api.POST("/photos/complete", a.completePhotoUpload)
 	api.GET("/subscription/me", a.getMySubscription)

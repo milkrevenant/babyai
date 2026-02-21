@@ -221,7 +221,12 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 	rangeKey := strings.ToLower(strings.TrimSpace(c.DefaultQuery("range", "day")))
 	nowUTC := time.Now().UTC()
 	localNow := nowUTC.In(localZone)
-	localStart, localEnd, rangeDays, rangeLabel, err := quickRangeWindow(localNow, rangeKey)
+	localAnchor, err := parseQuickAnchorDate(c.Query("anchor_date"), localNow, localZone)
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	localStart, localEnd, rangeDays, rangeLabel, err := quickRangeWindow(localAnchor, rangeKey)
 	if err != nil {
 		writeError(c, http.StatusBadRequest, err.Error())
 		return
@@ -678,9 +683,11 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
+		"baby_id":                         baby.ID,
 		"baby_name":                       profile.Name,
 		"baby_profile_photo_url":          profile.ProfilePhotoURL,
-		"date":                            localNow.Format("2006-01-02"),
+		"date":                            localAnchor.Format("2006-01-02"),
+		"anchor_date":                     localAnchor.Format("2006-01-02"),
 		"range":                           rangeKey,
 		"range_label":                     rangeLabel,
 		"range_start_date":                localStart.Format("2006-01-02"),
@@ -774,9 +781,9 @@ func (a *App) quickLandingSnapshot(c *gin.Context) {
 	})
 }
 
-func quickRangeWindow(localNow time.Time, rangeKey string) (time.Time, time.Time, int, string, error) {
-	location := localNow.Location()
-	year, month, day := localNow.Date()
+func quickRangeWindow(localAnchor time.Time, rangeKey string) (time.Time, time.Time, int, string, error) {
+	location := localAnchor.Location()
+	year, month, day := localAnchor.Date()
 	dayStart := time.Date(year, month, day, 0, 0, 0, 0, location)
 
 	switch rangeKey {
@@ -803,6 +810,22 @@ func quickRangeWindow(localNow time.Time, rangeKey string) (time.Time, time.Time
 	default:
 		return time.Time{}, time.Time{}, 0, "", errors.New("range must be one of: day, week, month")
 	}
+}
+
+func parseQuickAnchorDate(raw string, localNow time.Time, zone *time.Location) (time.Time, error) {
+	if zone == nil {
+		zone = time.UTC
+	}
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		local := localNow.In(zone)
+		return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, zone), nil
+	}
+	parsed, err := parseDate(trimmed)
+	if err != nil {
+		return time.Time{}, errors.New("anchor_date must be YYYY-MM-DD")
+	}
+	return time.Date(parsed.Year(), parsed.Month(), parsed.Day(), 0, 0, 0, 0, zone), nil
 }
 
 func parseTZOffset(raw string) (*time.Location, string, error) {
@@ -1287,6 +1310,74 @@ func (a *App) getWeeklyReport(c *gin.Context) {
 		"suggestions": []string{
 			"Keep logging feeding and sleep consistently to improve ETA quality.",
 			"If diaper events spike, review feeding intervals and hydration patterns.",
+		},
+		"labels": []string{"record_based"},
+	})
+}
+
+func (a *App) getMonthlyReport(c *gin.Context) {
+	user, ok := authUserFromContext(c)
+	if !ok {
+		writeError(c, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	babyID := c.Query("baby_id")
+	monthStartRaw := strings.TrimSpace(c.Query("month_start"))
+	if monthStartRaw == "" {
+		writeError(c, http.StatusBadRequest, "month_start must be YYYY-MM-DD")
+		return
+	}
+	requestedDate, err := parseDate(monthStartRaw)
+	if err != nil {
+		writeError(c, http.StatusBadRequest, "month_start must be YYYY-MM-DD")
+		return
+	}
+	localZone, _, err := parseTZOffset(c.Query("tz_offset"))
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	localMonthStart := time.Date(
+		requestedDate.Year(),
+		requestedDate.Month(),
+		1,
+		0,
+		0,
+		0,
+		0,
+		localZone,
+	)
+	startUTC := localMonthStart.UTC()
+	endUTC := localMonthStart.AddDate(0, 1, 0).UTC()
+
+	baby, statusCode, err := a.getBabyWithAccess(c.Request.Context(), user.ID, babyID, readRoles)
+	if err != nil {
+		writeError(c, statusCode, err.Error())
+		return
+	}
+
+	currentMetrics, err := a.computeWeeklyMetrics(c, baby.ID, startUTC, endUTC)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to compute monthly metrics")
+		return
+	}
+	previousStart := localMonthStart.AddDate(0, -1, 0).UTC()
+	previousMetrics, err := a.computeWeeklyMetrics(c, baby.ID, previousStart, startUTC)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to compute monthly metrics")
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"baby_id":     baby.ID,
+		"month_start": localMonthStart.Format("2006-01-02"),
+		"trend": gin.H{
+			"feeding_total_ml": trendString(currentMetrics.FeedingML, previousMetrics.FeedingML),
+			"sleep_total_min":  trendString(float64(currentMetrics.SleepMinutes), float64(previousMetrics.SleepMinutes)),
+		},
+		"suggestions": []string{
+			"Use the month view to compare weekday patterns and spot routine drift.",
+			"Keep start/end timestamps complete to improve monthly averages.",
 		},
 		"labels": []string{"record_based"},
 	})
