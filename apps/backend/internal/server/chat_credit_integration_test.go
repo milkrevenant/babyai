@@ -261,6 +261,83 @@ func TestChatQueryUsesOnboardingChildWhenChildIDMissing(t *testing.T) {
 	}
 }
 
+func TestChatQueryDayModeUsesAllEventsInRequestedDate(t *testing.T) {
+	resetDatabase(t)
+	fixture := seedOwnerFixture(t)
+	sessionID := createSessionForTest(t, fixture.UserID, fixture.BabyID)
+
+	anchorDate := time.Date(2026, 2, 19, 0, 0, 0, 0, time.UTC)
+	overnightEnd := anchorDate.Add(30 * time.Minute)
+	overnightSleepID := seedEvent(
+		t,
+		"",
+		fixture.BabyID,
+		"SLEEP",
+		anchorDate.Add(-30*time.Minute),
+		&overnightEnd,
+		map[string]any{"duration_min": 60},
+		fixture.UserID,
+	)
+	formulaID := seedEvent(t, "", fixture.BabyID, "FORMULA", anchorDate.Add(1*time.Hour), nil, map[string]any{"ml": 120}, fixture.UserID)
+	sleepEnd := anchorDate.Add(5 * time.Hour)
+	sleepID := seedEvent(t, "", fixture.BabyID, "SLEEP", anchorDate.Add(3*time.Hour), &sleepEnd, map[string]any{"duration_min": 120}, fixture.UserID)
+	pooID := seedEvent(t, "", fixture.BabyID, "POO", anchorDate.Add(7*time.Hour), nil, map[string]any{}, fixture.UserID)
+
+	rec := performRequest(
+		t,
+		newTestRouter(t),
+		http.MethodPost,
+		"/api/v1/chat/query",
+		signToken(t, fixture.UserID, nil),
+		map[string]any{
+			"session_id":        sessionID,
+			"child_id":          fixture.BabyID,
+			"query":             "수유 기록 알려줘",
+			"use_personal_data": true,
+			"date_mode":         "day",
+			"anchor_date":       "2026-02-19",
+			"tz_offset":         "+00:00",
+		},
+		nil,
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	body := decodeJSONMap(t, rec)
+	contextMap, ok := body["context"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected context map in response, got %T (%v)", body["context"], body["context"])
+	}
+	if got := strings.TrimSpace(toString(contextMap["time_range"])); got != chatContextModeRequestedDateRaw {
+		t.Fatalf("expected time_range=%s, got %q", chatContextModeRequestedDateRaw, got)
+	}
+	rawIDs, ok := contextMap["evidence_event_ids"].([]any)
+	if !ok {
+		t.Fatalf("expected evidence_event_ids array, got %T (%v)", contextMap["evidence_event_ids"], contextMap["evidence_event_ids"])
+	}
+	if len(rawIDs) != 4 {
+		t.Fatalf("expected 4 evidence_event_ids from requested day, got %d (%v)", len(rawIDs), rawIDs)
+	}
+	found := map[string]bool{}
+	for _, item := range rawIDs {
+		id := strings.TrimSpace(toString(item))
+		if id != "" {
+			found[id] = true
+		}
+	}
+	for _, expected := range []string{overnightSleepID, formulaID, sleepID, pooID} {
+		if !found[expected] {
+			t.Fatalf("expected evidence_event_ids to include %s, got %v", expected, rawIDs)
+		}
+	}
+	if got := int(extractNumber(contextMap["returned_event_count"])); got != 4 {
+		t.Fatalf("expected returned_event_count=4, got %v", contextMap["returned_event_count"])
+	}
+	if truncated, _ := contextMap["truncated"].(bool); truncated {
+		t.Fatalf("expected truncated=false for day mode, got true")
+	}
+}
+
 func createSessionForTest(t *testing.T, userID, babyID string) string {
 	t.Helper()
 	rec := performRequest(

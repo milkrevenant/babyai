@@ -172,7 +172,7 @@ func verifyRequiredTables(pool *pgxpool.Pool) error {
 
 	if len(missing) > 0 {
 		return fmt.Errorf(
-			"missing required tables: %s. Run `npm run prisma:push` with TEST_DATABASE_URL before running integration tests",
+			"missing required tables: %s. Run `npm run prisma:migrate:deploy` with TEST_DATABASE_URL before running integration tests",
 			strings.Join(missing, ", "),
 		)
 	}
@@ -423,8 +423,8 @@ func seedEvent(
 	_, err := testPool.Exec(
 		ctx,
 		`INSERT INTO "Event" (
-			id, "babyId", type, "startTime", "endTime", "valueJson", "metadataJson", source, "createdBy", "createdAt"
-		) VALUES ($1, $2, $3, $4, $5, $6, NULL, 'MANUAL', $7, NOW())`,
+			id, "babyId", type, state, "startTime", "endTime", "valueJson", "metadataJson", source, "createdBy", "createdAt"
+		) VALUES ($1, $2, $3, 'CLOSED', $4, $5, $6, NULL, 'MANUAL', $7, NOW())`,
 		eventID,
 		babyID,
 		eventType,

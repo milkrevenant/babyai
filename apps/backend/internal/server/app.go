@@ -19,8 +19,21 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"google.golang.org/api/idtoken"
 
 	"babyai/apps/backend/internal/config"
+)
+
+type internalAuthFailureReason string
+
+const (
+	internalAuthFailureNone             internalAuthFailureReason = ""
+	internalAuthFailureInvalidSignature internalAuthFailureReason = "invalid_signature"
+	internalAuthFailureInvalidPayload   internalAuthFailureReason = "invalid_payload"
+	internalAuthFailureInvalidAudience  internalAuthFailureReason = "invalid_audience"
+	internalAuthFailureInvalidIssuer    internalAuthFailureReason = "invalid_issuer"
+	internalAuthFailureMissingSubject   internalAuthFailureReason = "missing_subject"
+	internalAuthFailureUserLookup       internalAuthFailureReason = "user_lookup"
 )
 
 const (
@@ -124,6 +137,7 @@ func (a *App) Router() *gin.Engine {
 	api.POST("/chat/query", a.chatQuery)
 	api.GET("/reports/daily", a.getDailyReport)
 	api.GET("/reports/weekly", a.getWeeklyReport)
+	api.GET("/reports/monthly", a.getMonthlyReport)
 	api.POST("/photos/upload-url", a.createPhotoUploadURL)
 	api.POST("/photos/complete", a.completePhotoUpload)
 	api.GET("/subscription/me", a.getMySubscription)
@@ -346,49 +360,150 @@ func (a *App) authMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (any, error) {
-			if token.Method == nil || token.Method.Alg() != a.cfg.JWTAlgorithm {
-				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-			}
-			return []byte(a.cfg.JWTSecret), nil
-		})
-		if err != nil || !token.Valid {
-			writeError(c, http.StatusUnauthorized, "Invalid bearer token")
+		user, failureReason, err := a.authenticateInternalBearer(c.Request.Context(), tokenString)
+		if err == nil {
+			c.Set("authUser", user)
+			c.Next()
 			return
 		}
 
-		claims, ok := token.Claims.(jwt.MapClaims)
-		if !ok {
-			writeError(c, http.StatusUnauthorized, "Invalid token payload")
-			return
-		}
-		if a.cfg.JWTAudience != "" && !claimHasAudience(claims["aud"], a.cfg.JWTAudience) {
-			writeError(c, http.StatusUnauthorized, "Invalid token audience")
-			return
-		}
-		if a.cfg.JWTIssuer != "" {
-			issuer, _ := claims["iss"].(string)
-			if issuer != a.cfg.JWTIssuer {
-				writeError(c, http.StatusUnauthorized, "Invalid token issuer")
+		if failureReason == internalAuthFailureInvalidSignature && a.cfg.AuthAcceptGoogleIDToken {
+			if googleUser, googleErr := a.authenticateGoogleIDToken(c.Request.Context(), tokenString); googleErr == nil {
+				c.Set("authUser", googleUser)
+				c.Next()
 				return
 			}
 		}
-		sub, _ := claims["sub"].(string)
-		sub = strings.TrimSpace(sub)
-		if sub == "" {
+
+		switch failureReason {
+		case internalAuthFailureInvalidAudience:
+			writeError(c, http.StatusUnauthorized, "Invalid token audience")
+		case internalAuthFailureInvalidIssuer:
+			writeError(c, http.StatusUnauthorized, "Invalid token issuer")
+		case internalAuthFailureMissingSubject:
 			writeError(c, http.StatusUnauthorized, "Token subject missing")
-			return
-		}
-
-		user, err := a.getOrCreateUser(c.Request.Context(), sub, claims)
-		if err != nil {
+		case internalAuthFailureInvalidPayload:
+			writeError(c, http.StatusUnauthorized, "Invalid token payload")
+		case internalAuthFailureUserLookup:
 			writeError(c, http.StatusUnauthorized, err.Error())
-			return
+		default:
+			writeError(c, http.StatusUnauthorized, "Invalid bearer token")
 		}
-
-		c.Set("authUser", user)
-		c.Next()
 	}
+}
+
+func (a *App) authenticateInternalBearer(
+	ctx context.Context,
+	tokenString string,
+) (AuthUser, internalAuthFailureReason, error) {
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (any, error) {
+		if token.Method == nil || token.Method.Alg() != a.cfg.JWTAlgorithm {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return []byte(a.cfg.JWTSecret), nil
+	})
+	if err != nil || !token.Valid {
+		return AuthUser{}, internalAuthFailureInvalidSignature, errors.New("invalid bearer token")
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return AuthUser{}, internalAuthFailureInvalidPayload, errors.New("invalid token payload")
+	}
+	if a.cfg.JWTAudience != "" && !claimHasAudience(claims["aud"], a.cfg.JWTAudience) {
+		return AuthUser{}, internalAuthFailureInvalidAudience, errors.New("invalid token audience")
+	}
+	if a.cfg.JWTIssuer != "" {
+		issuer, _ := claims["iss"].(string)
+		if issuer != a.cfg.JWTIssuer {
+			return AuthUser{}, internalAuthFailureInvalidIssuer, errors.New("invalid token issuer")
+		}
+	}
+	sub, _ := claims["sub"].(string)
+	sub = strings.TrimSpace(sub)
+	if sub == "" {
+		return AuthUser{}, internalAuthFailureMissingSubject, errors.New("token subject missing")
+	}
+
+	user, userErr := a.getOrCreateUser(ctx, sub, claims)
+	if userErr != nil {
+		return AuthUser{}, internalAuthFailureUserLookup, userErr
+	}
+	return user, internalAuthFailureNone, nil
+}
+
+func (a *App) authenticateGoogleIDToken(ctx context.Context, tokenString string) (AuthUser, error) {
+	clientIDs := make([]string, 0, len(a.cfg.GoogleOAuthClientIDs))
+	for _, id := range a.cfg.GoogleOAuthClientIDs {
+		trimmed := strings.TrimSpace(id)
+		if trimmed != "" {
+			clientIDs = append(clientIDs, trimmed)
+		}
+	}
+	if len(clientIDs) == 0 {
+		return AuthUser{}, errors.New("GOOGLE_OAUTH_CLIENT_IDS is not configured")
+	}
+
+	var payload *idtoken.Payload
+	var validateErr error
+	for _, audience := range clientIDs {
+		parsed, err := idtoken.Validate(ctx, tokenString, audience)
+		if err == nil {
+			payload = parsed
+			validateErr = nil
+			break
+		}
+		validateErr = err
+	}
+	if validateErr != nil {
+		return AuthUser{}, validateErr
+	}
+	if payload == nil {
+		return AuthUser{}, errors.New("google id token validation failed")
+	}
+
+	subject := strings.TrimSpace(payload.Subject)
+	if subject == "" {
+		if rawSub, ok := payload.Claims["sub"].(string); ok {
+			subject = strings.TrimSpace(rawSub)
+		}
+	}
+	if subject == "" {
+		return AuthUser{}, errors.New("Token subject missing")
+	}
+
+	name := ""
+	if rawName, ok := payload.Claims["name"].(string); ok {
+		name = strings.TrimSpace(rawName)
+	}
+	if name == "" {
+		if rawGivenName, ok := payload.Claims["given_name"].(string); ok {
+			name = strings.TrimSpace(rawGivenName)
+		}
+	}
+	if name == "" {
+		name = fmt.Sprintf("google-%s", truncate(subject, 8))
+	}
+
+	user := AuthUser{}
+	var providerUID *string
+	var phone *string
+	if err := a.db.QueryRow(
+		ctx,
+		`INSERT INTO "User" (id, provider, "providerUid", phone, name, "createdAt")
+		 VALUES ($1, 'google', $2, NULL, $3, NOW())
+		 ON CONFLICT (provider, "providerUid")
+		 DO UPDATE SET name = EXCLUDED.name
+		 RETURNING id, provider, "providerUid", phone, name`,
+		uuid.NewString(),
+		subject,
+		name,
+	).Scan(&user.ID, &user.Provider, &providerUID, &phone, &user.Name); err != nil {
+		return AuthUser{}, err
+	}
+	user.ProviderUID = providerUID
+	user.Phone = phone
+	return user, nil
 }
 
 func claimHasAudience(value any, audience string) bool {

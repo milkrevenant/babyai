@@ -82,6 +82,7 @@ class BabyAIApi {
   static const String _cacheQuickLanding = "quick_landing_snapshot";
   static const String _cacheDailyReport = "daily_report";
   static const String _cacheWeeklyReport = "weekly_report";
+  static const String _cacheMonthlyReport = "monthly_report";
   static const String _cacheBabyProfile = "baby_profile";
   static const String _cacheSyncEventIds = "sync_event_ids";
   final Dio _dio;
@@ -111,6 +112,11 @@ class BabyAIApi {
       }
       final String provider = (payload["provider"] ?? "").toString().trim();
       if (provider.isEmpty) {
+        final String issuer = (payload["iss"] ?? "").toString().trim();
+        if (issuer == "accounts.google.com" ||
+            issuer == "https://accounts.google.com") {
+          return "google";
+        }
         return null;
       }
       return provider.toLowerCase();
@@ -1334,6 +1340,7 @@ class BabyAIApi {
 
   Future<Map<String, dynamic>> _buildLocalLandingSnapshot({
     required String normalizedRange,
+    String? cacheKey,
   }) async {
     _requireBabyId();
     final Map<String, dynamic>? profile =
@@ -1351,7 +1358,7 @@ class BabyAIApi {
     await OfflineDataStore.instance.writeCache(
       namespace: _cacheQuickLanding,
       babyId: activeBabyId,
-      key: normalizedRange,
+      key: cacheKey ?? normalizedRange,
       data: snapshot,
     );
     return snapshot;
@@ -1359,6 +1366,7 @@ class BabyAIApi {
 
   Future<Map<String, dynamic>> _buildFallbackOfflineLandingSnapshot({
     required String normalizedRange,
+    String? cacheKey,
   }) async {
     _requireBabyId();
     final Map<String, dynamic>? profile =
@@ -1379,7 +1387,7 @@ class BabyAIApi {
     await OfflineDataStore.instance.writeCache(
       namespace: _cacheQuickLanding,
       babyId: activeBabyId,
-      key: normalizedRange,
+      key: cacheKey ?? normalizedRange,
       data: payload,
     );
     return payload;
@@ -1523,6 +1531,99 @@ class BabyAIApi {
     return payload;
   }
 
+  Future<Map<String, dynamic>> _buildLocalMonthlyReport(
+      DateTime monthStart) async {
+    _requireBabyId();
+    final DateTime localMonthStart = DateTime(
+      monthStart.year,
+      monthStart.month,
+      1,
+    );
+    final DateTime localMonthEnd =
+        DateTime(localMonthStart.year, localMonthStart.month + 1, 1);
+    final DateTime previousMonthStart = DateTime(
+      localMonthStart.year,
+      localMonthStart.month - 1,
+      1,
+    );
+    final String monthStartKey = _ymdCalendarDate(localMonthStart);
+
+    final List<_LocalEventRecord> all =
+        await _localEventRecordsForBaby(activeBabyId);
+    final List<_LocalEventRecord> closed = all
+        .where(
+          (_LocalEventRecord e) =>
+              e.status == _LocalEventStatus.closed &&
+              !e.startTime.isBefore(localMonthStart) &&
+              e.startTime.isBefore(localMonthEnd),
+        )
+        .toList(growable: false);
+    final List<_LocalEventRecord> previousClosed = all
+        .where(
+          (_LocalEventRecord e) =>
+              e.status == _LocalEventStatus.closed &&
+              !e.startTime.isBefore(previousMonthStart) &&
+              e.startTime.isBefore(localMonthStart),
+        )
+        .toList(growable: false);
+
+    final int formulaTotal = closed
+        .where((_LocalEventRecord e) => e.type == "FORMULA")
+        .fold<int>(0, (int s, _LocalEventRecord e) => s + _extractMl(e.value));
+    final int previousFormulaTotal = previousClosed
+        .where((_LocalEventRecord e) => e.type == "FORMULA")
+        .fold<int>(0, (int s, _LocalEventRecord e) => s + _extractMl(e.value));
+    final int sleepTotal = closed
+        .where((_LocalEventRecord e) => e.type == "SLEEP" && e.endTime != null)
+        .fold<int>(
+            0,
+            (int s, _LocalEventRecord e) =>
+                s + e.endTime!.difference(e.startTime).inMinutes);
+    final int previousSleepTotal = previousClosed
+        .where((_LocalEventRecord e) => e.type == "SLEEP" && e.endTime != null)
+        .fold<int>(
+            0,
+            (int s, _LocalEventRecord e) =>
+                s + e.endTime!.difference(e.startTime).inMinutes);
+
+    String trend(int current, int previous) {
+      if (current == 0 && previous == 0) {
+        return "flat";
+      }
+      if (previous == 0 && current > 0) {
+        return "new";
+      }
+      if (current > previous) {
+        return "up";
+      }
+      if (current < previous) {
+        return "down";
+      }
+      return "flat";
+    }
+
+    final Map<String, dynamic> payload = <String, dynamic>{
+      "baby_id": activeBabyId,
+      "month_start": monthStartKey,
+      "trend": <String, dynamic>{
+        "feeding_total_ml": trend(formulaTotal, previousFormulaTotal),
+        "sleep_total_min": trend(sleepTotal, previousSleepTotal),
+      },
+      "suggestions": <String>[
+        "로컬 기록 기반 월간 요약입니다.",
+      ],
+      "labels": <dynamic>[],
+      "offline_cached": true,
+    };
+    await OfflineDataStore.instance.writeCache(
+      namespace: _cacheMonthlyReport,
+      babyId: activeBabyId,
+      key: monthStartKey,
+      data: payload,
+    );
+    return payload;
+  }
+
   Future<void> _seedOfflineSnapshotAndReports({
     required String babyId,
     required String babyName,
@@ -1577,6 +1678,11 @@ class BabyAIApi {
       weekStartLocal.month,
       weekStartLocal.day,
     ).toIso8601String().split("T").first;
+    final String monthKey = DateTime.utc(
+      monthStartLocal.year,
+      monthStartLocal.month,
+      monthStartLocal.day,
+    ).toIso8601String().split("T").first;
 
     await OfflineDataStore.instance.writeCache(
       namespace: _cacheDailyReport,
@@ -1607,20 +1713,25 @@ class BabyAIApi {
     await OfflineDataStore.instance.writeCache(
       namespace: _cacheDailyReport,
       babyId: babyId,
-      key: DateTime.utc(
-        monthStartLocal.year,
-        monthStartLocal.month,
-        monthStartLocal.day,
-      ).toIso8601String().split("T").first,
+      key: monthKey,
       data: <String, dynamic>{
         "baby_id": babyId,
-        "date": DateTime.utc(
-          monthStartLocal.year,
-          monthStartLocal.month,
-          monthStartLocal.day,
-        ).toIso8601String().split("T").first,
+        "date": monthKey,
         "summary": <dynamic>[],
         "events": <dynamic>[],
+        "labels": <dynamic>[],
+        "offline_cached": true,
+      },
+    );
+    await OfflineDataStore.instance.writeCache(
+      namespace: _cacheMonthlyReport,
+      babyId: babyId,
+      key: monthKey,
+      data: <String, dynamic>{
+        "baby_id": babyId,
+        "month_start": monthKey,
+        "trend": <String, dynamic>{},
+        "suggestions": <dynamic>[],
         "labels": <dynamic>[],
         "offline_cached": true,
       },
@@ -2114,14 +2225,24 @@ class BabyAIApi {
   }
 
   Future<Map<String, dynamic>> _fetchQuickLandingSnapshotRemote(
-    String normalizedRange,
-  ) async {
+    String normalizedRange, {
+    DateTime? anchorDate,
+  }) async {
+    final String? anchorDateText = anchorDate == null
+        ? null
+        : _ymdCalendarDate(
+            DateTime(anchorDate.year, anchorDate.month, anchorDate.day),
+          );
+    final String cacheKey = anchorDateText == null
+        ? (normalizedRange.isEmpty ? "day" : normalizedRange)
+        : "${normalizedRange.isEmpty ? "day" : normalizedRange}@$anchorDateText";
     final Response<dynamic> response = await _dio.get<dynamic>(
       "/api/v1/quick/landing-snapshot",
       queryParameters: <String, dynamic>{
         "baby_id": activeBabyId,
         "range": normalizedRange.isEmpty ? "day" : normalizedRange,
         "tz_offset": _localTimezoneOffset(),
+        if (anchorDateText != null) "anchor_date": anchorDateText,
       },
       options: _authOptions(),
     );
@@ -2129,18 +2250,24 @@ class BabyAIApi {
     await OfflineDataStore.instance.writeCache(
       namespace: _cacheQuickLanding,
       babyId: activeBabyId,
-      key: normalizedRange.isEmpty ? "day" : normalizedRange,
+      key: cacheKey,
       data: payload,
     );
     return payload;
   }
 
-  Future<void> _refreshQuickLandingSnapshotCache(String normalizedRange) async {
+  Future<void> _refreshQuickLandingSnapshotCache(
+    String normalizedRange, {
+    DateTime? anchorDate,
+  }) async {
     if (!_hasServerLinkedProfile) {
       return;
     }
     try {
-      await _fetchQuickLandingSnapshotRemote(normalizedRange);
+      await _fetchQuickLandingSnapshotRemote(
+        normalizedRange,
+        anchorDate: anchorDate,
+      );
     } catch (_) {
       // Ignore background refresh failures.
     }
@@ -2149,9 +2276,17 @@ class BabyAIApi {
   Future<Map<String, dynamic>> quickLandingSnapshot({
     String range = "day",
     bool preferOffline = true,
+    DateTime? anchorDate,
   }) async {
     final String normalizedRange = range.trim().toLowerCase();
-    final String cacheKey = normalizedRange.isEmpty ? "day" : normalizedRange;
+    final String? anchorDateText = anchorDate == null
+        ? null
+        : _ymdCalendarDate(
+            DateTime(anchorDate.year, anchorDate.month, anchorDate.day),
+          );
+    final String cacheKey = anchorDateText == null
+        ? (normalizedRange.isEmpty ? "day" : normalizedRange)
+        : "${normalizedRange.isEmpty ? "day" : normalizedRange}@$anchorDateText";
     try {
       _requireBabyId();
       final Map<String, dynamic>? cached =
@@ -2162,10 +2297,17 @@ class BabyAIApi {
       );
       if (preferOffline || !_hasServerLinkedProfile) {
         try {
-          final Map<String, dynamic> local =
-              await _buildLocalLandingSnapshot(normalizedRange: cacheKey);
+          final Map<String, dynamic> local = await _buildLocalLandingSnapshot(
+            normalizedRange: normalizedRange.isEmpty ? "day" : normalizedRange,
+            cacheKey: cacheKey,
+          );
           if (_hasServerLinkedProfile) {
-            unawaited(_refreshQuickLandingSnapshotCache(cacheKey));
+            unawaited(
+              _refreshQuickLandingSnapshotCache(
+                normalizedRange,
+                anchorDate: anchorDate,
+              ),
+            );
           }
           return _withOfflineCacheFlag(local);
         } catch (_) {
@@ -2173,15 +2315,22 @@ class BabyAIApi {
             return _withOfflineCacheFlag(cached);
           }
           return await _buildFallbackOfflineLandingSnapshot(
-            normalizedRange: cacheKey,
+            normalizedRange: normalizedRange.isEmpty ? "day" : normalizedRange,
+            cacheKey: cacheKey,
           );
         }
       }
       await flushOfflineMutations();
-      return await _fetchQuickLandingSnapshotRemote(cacheKey);
+      return await _fetchQuickLandingSnapshotRemote(
+        normalizedRange,
+        anchorDate: anchorDate,
+      );
     } catch (error) {
       try {
-        return await _buildLocalLandingSnapshot(normalizedRange: cacheKey);
+        return await _buildLocalLandingSnapshot(
+          normalizedRange: normalizedRange.isEmpty ? "day" : normalizedRange,
+          cacheKey: cacheKey,
+        );
       } catch (_) {
         final Map<String, dynamic>? cached =
             await OfflineDataStore.instance.readCache(
@@ -2194,7 +2343,8 @@ class BabyAIApi {
         }
         try {
           return await _buildFallbackOfflineLandingSnapshot(
-            normalizedRange: cacheKey,
+            normalizedRange: normalizedRange.isEmpty ? "day" : normalizedRange,
+            cacheKey: cacheKey,
           );
         } catch (_) {
           throw _toFailure(error);
@@ -3122,6 +3272,90 @@ class BabyAIApi {
         return _withOfflineCacheFlag(cached);
       }
       return await _buildLocalWeeklyReport(weekStart);
+    }
+  }
+
+  Future<Map<String, dynamic>> _fetchMonthlyReportRemote(
+      DateTime monthStart) async {
+    final DateTime normalizedMonthStart =
+        DateTime(monthStart.year, monthStart.month, 1);
+    final String monthStartDay = _ymdCalendarDate(normalizedMonthStart);
+    final String tzOffset =
+        _localTimezoneOffset(_calendarDateNoonLocal(normalizedMonthStart));
+    final Response<dynamic> response = await _dio.get<dynamic>(
+      "/api/v1/reports/monthly",
+      queryParameters: <String, dynamic>{
+        "baby_id": activeBabyId,
+        "month_start": monthStartDay,
+        "tz_offset": tzOffset,
+      },
+      options: _authOptions(),
+    );
+    final Map<String, dynamic> payload = _requireMap(response);
+    await OfflineDataStore.instance.writeCache(
+      namespace: _cacheMonthlyReport,
+      babyId: activeBabyId,
+      key: monthStartDay,
+      data: payload,
+    );
+    return payload;
+  }
+
+  Future<void> _refreshMonthlyReportCache(DateTime monthStart) async {
+    if (!_hasServerLinkedProfile) {
+      return;
+    }
+    try {
+      await _fetchMonthlyReportRemote(monthStart);
+    } catch (_) {
+      // Ignore background refresh failures.
+    }
+  }
+
+  Future<Map<String, dynamic>> monthlyReport(
+    DateTime monthStart, {
+    bool preferOffline = true,
+  }) async {
+    _requireBabyId();
+    final DateTime normalizedMonthStart =
+        DateTime(monthStart.year, monthStart.month, 1);
+    final String monthStartDay = _ymdCalendarDate(normalizedMonthStart);
+    final Map<String, dynamic>? cached =
+        await OfflineDataStore.instance.readCache(
+      namespace: _cacheMonthlyReport,
+      babyId: activeBabyId,
+      key: monthStartDay,
+    );
+    if (preferOffline || !_hasServerLinkedProfile) {
+      try {
+        final Map<String, dynamic> local =
+            await _buildLocalMonthlyReport(normalizedMonthStart);
+        if (_hasServerLinkedProfile) {
+          unawaited(_refreshMonthlyReportCache(normalizedMonthStart));
+        }
+        return _withOfflineCacheFlag(local);
+      } catch (_) {
+        if (cached != null) {
+          return _withOfflineCacheFlag(cached);
+        }
+        return <String, dynamic>{
+          "baby_id": activeBabyId,
+          "month_start": monthStartDay,
+          "trend": <String, dynamic>{},
+          "suggestions": <String>[],
+          "labels": <dynamic>[],
+          "offline_cached": true,
+        };
+      }
+    }
+    try {
+      await flushOfflineMutations();
+      return await _fetchMonthlyReportRemote(normalizedMonthStart);
+    } catch (_) {
+      if (cached != null) {
+        return _withOfflineCacheFlag(cached);
+      }
+      return await _buildLocalMonthlyReport(normalizedMonthStart);
     }
   }
 

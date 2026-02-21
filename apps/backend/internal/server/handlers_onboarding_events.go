@@ -335,8 +335,8 @@ func (a *App) seedOnboardingDummyData(
 		if _, err := tx.Exec(
 			ctx,
 			`INSERT INTO "Event" (
-				id, "babyId", type, "startTime", "endTime", "valueJson", "metadataJson", source, "createdBy", "createdAt"
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, 'MANUAL', $8, NOW())`,
+				id, "babyId", type, state, "startTime", "endTime", "valueJson", "metadataJson", source, "createdBy", "createdAt"
+			) VALUES ($1, $2, $3, 'CLOSED', $4, $5, $6, $7, 'MANUAL', $8, NOW())`,
 			eventID,
 			babyID,
 			item.Type,
@@ -371,6 +371,10 @@ func (a *App) parseVoiceEvent(c *gin.Context) {
 	user, ok := authUserFromContext(c)
 	if !ok {
 		writeError(c, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if !a.cfg.EnableVoiceDummyParse {
+		writeError(c, http.StatusNotImplemented, "Voice parsing is not enabled in this environment")
 		return
 	}
 
@@ -525,8 +529,8 @@ func (a *App) confirmEvents(c *gin.Context) {
 		if _, err := tx.Exec(
 			c.Request.Context(),
 			`INSERT INTO "Event" (
-					id, "babyId", type, "startTime", "endTime", "valueJson", "metadataJson", source, "createdBy", "createdAt"
-				) VALUES ($1, $2, $3, $4, $5, $6, $7, 'VOICE', $8, NOW())`,
+					id, "babyId", type, state, "startTime", "endTime", "valueJson", "metadataJson", source, "createdBy", "createdAt"
+				) VALUES ($1, $2, $3, 'CLOSED', $4, $5, $6, $7, 'VOICE', $8, NOW())`,
 			uuid.NewString(),
 			babyID,
 			event.Type,
@@ -659,8 +663,8 @@ func (a *App) createManualEvent(c *gin.Context) {
 	if _, err := tx.Exec(
 		c.Request.Context(),
 		`INSERT INTO "Event" (
-			id, "babyId", type, "startTime", "endTime", "valueJson", "metadataJson", source, "createdBy", "createdAt"
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, 'MANUAL', $8, NOW())`,
+			id, "babyId", type, state, "startTime", "endTime", "valueJson", "metadataJson", source, "createdBy", "createdAt"
+		) VALUES ($1, $2, $3, 'CLOSED', $4, $5, $6, $7, 'MANUAL', $8, NOW())`,
 		eventID,
 		baby.ID,
 		eventType,
@@ -806,10 +810,7 @@ func (a *App) startManualEvent(c *gin.Context) {
 		 WHERE "babyId" = $1
 		   AND type = $2
 		   AND "endTime" IS NULL
-		   AND (
-		     COALESCE("metadataJson"->>'event_state', '') = 'OPEN'
-		     OR COALESCE("metadataJson"->>'entry_mode', '') = 'manual_start'
-		   )
+		   AND state = 'OPEN'
 		 ORDER BY "startTime" DESC
 		 LIMIT 1`,
 		baby.ID,
@@ -831,8 +832,8 @@ func (a *App) startManualEvent(c *gin.Context) {
 	if _, err := tx.Exec(
 		c.Request.Context(),
 		`INSERT INTO "Event" (
-			id, "babyId", type, "startTime", "endTime", "valueJson", "metadataJson", source, "createdBy", "createdAt"
-		) VALUES ($1, $2, $3, $4, NULL, $5, $6, 'MANUAL', $7, NOW())`,
+			id, "babyId", type, state, "startTime", "endTime", "valueJson", "metadataJson", source, "createdBy", "createdAt"
+		) VALUES ($1, $2, $3, 'OPEN', $4, NULL, $5, $6, 'MANUAL', $7, NOW())`,
 		eventID,
 		baby.ID,
 		eventType,
@@ -931,13 +932,14 @@ func (a *App) updateManualEvent(c *gin.Context) {
 	defer tx.Rollback(c.Request.Context())
 
 	var existingType string
+	var existingState string
 	var existingStart time.Time
 	var existingEnd *time.Time
 	var existingValueRaw []byte
 	var existingMetadataRaw []byte
 	err = tx.QueryRow(
 		c.Request.Context(),
-		`SELECT type, "startTime", "endTime", "valueJson", "metadataJson"
+		`SELECT type, state::text, "startTime", "endTime", "valueJson", "metadataJson"
 		 FROM "Event"
 		 WHERE id = $1 AND "babyId" = $2
 		 FOR UPDATE`,
@@ -945,6 +947,7 @@ func (a *App) updateManualEvent(c *gin.Context) {
 		baby.ID,
 	).Scan(
 		&existingType,
+		&existingState,
 		&existingStart,
 		&existingEnd,
 		&existingValueRaw,
@@ -959,14 +962,8 @@ func (a *App) updateManualEvent(c *gin.Context) {
 		return
 	}
 	existingMetadata := parseJSONStringMap(existingMetadataRaw)
-	existingEventState := strings.ToUpper(
-		strings.TrimSpace(toString(existingMetadata["event_state"])),
-	)
-	existingEntryMode := strings.ToLower(
-		strings.TrimSpace(toString(existingMetadata["entry_mode"])),
-	)
-	isOpenEvent := existingEnd == nil &&
-		(existingEventState == "OPEN" || existingEntryMode == "manual_start")
+	existingEventState := strings.ToUpper(strings.TrimSpace(existingState))
+	isOpenEvent := existingEnd == nil && existingEventState == "OPEN"
 	if isOpenEvent {
 		c.AbortWithStatusJSON(http.StatusConflict, gin.H{
 			"detail":       "only closed events can be updated",
@@ -1014,6 +1011,7 @@ func (a *App) updateManualEvent(c *gin.Context) {
 		c.Request.Context(),
 		`UPDATE "Event"
 		 SET type = $2,
+		     state = 'CLOSED',
 		     "startTime" = $3,
 		     "endTime" = $4,
 		     "valueJson" = $5,
@@ -1115,19 +1113,20 @@ func (a *App) completeManualEvent(c *gin.Context) {
 	defer tx.Rollback(c.Request.Context())
 
 	var eventType string
+	var eventState string
 	var startTime time.Time
 	var existingEnd *time.Time
 	var valueRaw []byte
 	var metadataRaw []byte
 	err = tx.QueryRow(
 		c.Request.Context(),
-		`SELECT type, "startTime", "endTime", "valueJson", "metadataJson"
+		`SELECT type, state::text, "startTime", "endTime", "valueJson", "metadataJson"
 		 FROM "Event"
 		 WHERE id = $1 AND "babyId" = $2
 		 FOR UPDATE`,
 		eventID,
 		baby.ID,
-	).Scan(&eventType, &startTime, &existingEnd, &valueRaw, &metadataRaw)
+	).Scan(&eventType, &eventState, &startTime, &existingEnd, &valueRaw, &metadataRaw)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(c, http.StatusNotFound, "Event not found")
 		return
@@ -1137,9 +1136,8 @@ func (a *App) completeManualEvent(c *gin.Context) {
 		return
 	}
 	existingMetadata := parseJSONStringMap(metadataRaw)
-	eventState := strings.ToUpper(strings.TrimSpace(toString(existingMetadata["event_state"])))
-	entryMode := strings.ToLower(strings.TrimSpace(toString(existingMetadata["entry_mode"])))
-	if !(existingEnd == nil && (eventState == "OPEN" || entryMode == "manual_start")) {
+	eventState = strings.ToUpper(strings.TrimSpace(eventState))
+	if !(existingEnd == nil && eventState == "OPEN") {
 		c.AbortWithStatusJSON(http.StatusConflict, gin.H{
 			"detail":       "event is not open",
 			"event_id":     eventID,
@@ -1166,9 +1164,11 @@ func (a *App) completeManualEvent(c *gin.Context) {
 		c.Request.Context(),
 		`UPDATE "Event"
 		 SET "endTime" = $2,
+		     state = 'CLOSED',
 		     "valueJson" = $3,
 		     "metadataJson" = $4
 		 WHERE id = $1
+		   AND state = 'OPEN'
 		   AND "endTime" IS NULL`,
 		eventID,
 		resolvedEnd,
@@ -1291,18 +1291,19 @@ func (a *App) cancelManualEvent(c *gin.Context) {
 	defer tx.Rollback(c.Request.Context())
 
 	var eventType string
+	var currentState string
 	var startTime time.Time
 	var existingEnd *time.Time
 	var metadataRaw []byte
 	err = tx.QueryRow(
 		c.Request.Context(),
-		`SELECT type, "startTime", "endTime", "metadataJson"
+		`SELECT type, state::text, "startTime", "endTime", "metadataJson"
 		 FROM "Event"
 		 WHERE id = $1 AND "babyId" = $2
 		 FOR UPDATE`,
 		eventID,
 		baby.ID,
-	).Scan(&eventType, &startTime, &existingEnd, &metadataRaw)
+	).Scan(&eventType, &currentState, &startTime, &existingEnd, &metadataRaw)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(c, http.StatusNotFound, "Event not found")
 		return
@@ -1312,9 +1313,8 @@ func (a *App) cancelManualEvent(c *gin.Context) {
 		return
 	}
 	metadata := parseJSONStringMap(metadataRaw)
-	eventState := strings.ToUpper(strings.TrimSpace(toString(metadata["event_state"])))
-	entryMode := strings.ToLower(strings.TrimSpace(toString(metadata["entry_mode"])))
-	isOpenEvent := existingEnd == nil && (eventState == "OPEN" || entryMode == "manual_start")
+	eventState := strings.ToUpper(strings.TrimSpace(currentState))
+	isOpenEvent := existingEnd == nil && eventState == "OPEN"
 	if eventState == "CANCELED" {
 		c.AbortWithStatusJSON(http.StatusConflict, gin.H{
 			"detail":       "event is already canceled",
@@ -1345,9 +1345,10 @@ func (a *App) cancelManualEvent(c *gin.Context) {
 		c.Request.Context(),
 		`UPDATE "Event"
 		 SET "endTime" = $2,
+		     state = 'CANCELED',
 		     "metadataJson" = $3
 		 WHERE id = $1
-		   AND COALESCE("metadataJson"->>'event_state', '') <> 'CANCELED'`,
+		   AND state <> 'CANCELED'`,
 		eventID,
 		resolvedEnd,
 		mustMarshalJSON(metadata),
@@ -1418,10 +1419,7 @@ func (a *App) listOpenEvents(c *gin.Context) {
 		FROM "Event"
 		WHERE "babyId" = $1
 		  AND "endTime" IS NULL
-		  AND (
-		    COALESCE("metadataJson"->>'event_state', '') = 'OPEN'
-		    OR COALESCE("metadataJson"->>'entry_mode', '') = 'manual_start'
-		  )
+		  AND state = 'OPEN'
 		ORDER BY "startTime" DESC`
 	args := []any{baby.ID}
 	if queryType != "" {
@@ -1435,10 +1433,7 @@ func (a *App) listOpenEvents(c *gin.Context) {
 			WHERE "babyId" = $1
 			  AND "endTime" IS NULL
 			  AND type = $2
-			  AND (
-			    COALESCE("metadataJson"->>'event_state', '') = 'OPEN'
-			    OR COALESCE("metadataJson"->>'entry_mode', '') = 'manual_start'
-			  )
+			  AND state = 'OPEN'
 			ORDER BY "startTime" DESC`
 		args = []any{baby.ID, eventType}
 	}

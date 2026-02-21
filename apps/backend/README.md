@@ -15,6 +15,20 @@ Recommended path for Google Cloud is Cloud Run with Dockerfile-based build.
 
 See: `docs/DEPLOY_GCP_CLOUD_RUN.md`
 
+## AWS Deployment
+Recommended AWS path for this repository is ECS Fargate + ECR.
+
+See: `docs/DEPLOY_AWS_ECS_FARGATE.md`
+
+## Local vs Cloud Parity
+Run pre-deploy environment parity checks:
+
+```bash
+./apps/backend/scripts/self_check_env_parity.sh
+```
+
+See: `docs/LOCAL_ENV_PARITY.md`
+
 ## PostgreSQL Setup
 You need a running PostgreSQL instance before starting backend.
 
@@ -73,6 +87,14 @@ npm run prisma:generate
 npm run prisma:migrate:deploy
 ```
 
+The API now performs a startup schema guard for required runtime columns
+(`Event.state`, `ChatSession.memory*`). If migrations are missing, startup
+fails fast with a message to run:
+
+```bash
+npm run prisma:migrate:deploy
+```
+
 If this database was previously managed by `prisma db push`, run one-time baseline before deploy:
 
 ```powershell
@@ -88,6 +110,8 @@ Set in `.env`:
 Optional:
 - `JWT_AUDIENCE`
 - `JWT_ISSUER`
+- `AUTH_ACCEPT_GOOGLE_ID_TOKEN` (default `false`)
+- `GOOGLE_OAUTH_CLIENT_IDS` (required when `AUTH_ACCEPT_GOOGLE_ID_TOKEN=true`, CSV)
 - `ALLOW_DEV_TOKEN_ENDPOINT` (default `false`, allows `/dev/local-token` outside `APP_ENV=local`)
 - `LOCAL_DEV_DEFAULT_SUB` (default `00000000-0000-0000-0000-000000000001`, local only)
 - `AUTH_AUTOCREATE_USER` (default `false`)
@@ -97,6 +121,8 @@ Optional:
 - `TEST_LOGIN_EMAIL` (required if `TEST_LOGIN_ENABLED=true`)
 - `TEST_LOGIN_PASSWORD` (required if `TEST_LOGIN_ENABLED=true`)
 - `TEST_LOGIN_NAME` (default `QA Test User`)
+- `ENABLE_PHOTO_PLACEHOLDER_UPLOAD` (default `false` in production, placeholder upload URL endpoint gate)
+- `ENABLE_VOICE_DUMMY_PARSE` (default `false` in production, dummy voice parse endpoint gate)
 - `CORS_ALLOW_ORIGINS`
 - `OPENAI_MODEL` (default `gpt-5-mini`)
 - `OPENAI_BASE_URL` (default `https://api.openai.com/v1`)
@@ -118,6 +144,8 @@ JWT_SECRET=replace-with-long-random-secret
 JWT_ALGORITHM=HS256
 JWT_AUDIENCE=
 JWT_ISSUER=
+AUTH_ACCEPT_GOOGLE_ID_TOKEN=true
+GOOGLE_OAUTH_CLIENT_IDS=<google-web-client-id>
 ALLOW_DEV_TOKEN_ENDPOINT=false
 LOCAL_DEV_DEFAULT_SUB=00000000-0000-0000-0000-000000000001
 AUTH_AUTOCREATE_USER=false
@@ -127,6 +155,8 @@ TEST_LOGIN_ENABLED=false
 TEST_LOGIN_EMAIL=
 TEST_LOGIN_PASSWORD=
 TEST_LOGIN_NAME=QA Test User
+ENABLE_PHOTO_PLACEHOLDER_UPLOAD=false
+ENABLE_VOICE_DUMMY_PARSE=false
 CORS_ALLOW_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000
 OPENAI_API_KEY=<your-openai-api-key>
 OPENAI_MODEL=gpt-5-mini
@@ -152,7 +182,11 @@ All `/api/v1/*` routes require:
 Authorization: Bearer <jwt>
 ```
 
-JWT expectations:
+Accepted bearer tokens:
+1. Internal JWT (HS256, signed by `JWT_SECRET`)
+2. Google ID token (only when `AUTH_ACCEPT_GOOGLE_ID_TOKEN=true`)
+
+Internal JWT expectations:
 - algorithm: `HS256`
 - signature key: `JWT_SECRET`
 - required claim: `sub` (UUID-like user id)
@@ -163,6 +197,10 @@ JWT expectations:
   - `phone`
 
 If `AUTH_AUTOCREATE_USER=false`, unknown `sub` is rejected with `User not found`.
+
+Google ID token mode:
+- backend verifies token with Google and allowed audiences from `GOOGLE_OAUTH_CLIENT_IDS`
+- user mapping key: `provider='google'` + `providerUid=<google sub>`
 
 ## Test Login and Dev Bootstrap
 

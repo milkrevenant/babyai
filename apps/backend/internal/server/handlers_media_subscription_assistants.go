@@ -181,6 +181,10 @@ func (a *App) createPhotoUploadURL(c *gin.Context) {
 		writeError(c, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
+	if !a.cfg.EnablePhotoPlaceholderUpload {
+		writeError(c, http.StatusNotImplemented, "Photo upload placeholder is not enabled in this environment")
+		return
+	}
 
 	albumID := strings.TrimSpace(c.Query("album_id"))
 	if albumID == "" {
@@ -249,6 +253,10 @@ func (a *App) completePhotoUpload(c *gin.Context) {
 	user, ok := authUserFromContext(c)
 	if !ok {
 		writeError(c, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if !a.cfg.EnablePhotoPlaceholderUpload {
+		writeError(c, http.StatusNotImplemented, "Photo upload placeholder is not enabled in this environment")
 		return
 	}
 
@@ -696,14 +704,7 @@ func (a *App) buildBreastfeedPreanalysisMetadata(
 	          WHERE "babyId" = $1
 	            AND type = 'BREASTFEED'
 	            AND "startTime" >= $2
-	            AND NOT (
-	              "endTime" IS NULL
-	              AND (
-	                COALESCE("metadataJson"->>'event_state', '') = 'OPEN'
-	                OR COALESCE("metadataJson"->>'entry_mode', '') = 'manual_start'
-	              )
-	            )
-	            AND COALESCE("metadataJson"->>'event_state', 'CLOSED') <> 'CANCELED'
+	            AND state = 'CLOSED'
 	          ORDER BY "startTime" ASC`
 	rows, err := q.Query(ctx, query, babyID, sinceUTC)
 	if err != nil && isUndefinedSchemaReferenceError(err) {
@@ -791,8 +792,8 @@ func (a *App) assistantDialog(ctx context.Context, babyID, tone, intent string) 
 		err := a.db.QueryRow(
 			ctx,
 			`SELECT "startTime" FROM "Event"
-			 WHERE "babyId" = $1 AND type = 'POO'
-			 ORDER BY "startTime" DESC LIMIT 1`,
+				 WHERE "babyId" = $1 AND type = 'POO' AND state = 'CLOSED'
+				 ORDER BY "startTime" DESC LIMIT 1`,
 			babyID,
 		).Scan(&lastPoo)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -814,10 +815,11 @@ func (a *App) assistantDialog(ctx context.Context, babyID, tone, intent string) 
 		rows, err := a.db.Query(
 			ctx,
 			`SELECT "startTime" FROM "Event"
-			 WHERE "babyId" = $1
-			   AND type IN ('FORMULA', 'BREASTFEED')
-			   AND "startTime" <= $2
-			 ORDER BY "startTime" DESC LIMIT 10`,
+				 WHERE "babyId" = $1
+				   AND type IN ('FORMULA', 'BREASTFEED')
+				   AND state = 'CLOSED'
+				   AND "startTime" <= $2
+				 ORDER BY "startTime" DESC LIMIT 10`,
 			babyID,
 			nowUTC,
 		)
@@ -862,7 +864,7 @@ func (a *App) assistantDialog(ctx context.Context, babyID, tone, intent string) 
 		rows, err := a.db.Query(
 			ctx,
 			`SELECT type FROM "Event"
-			 WHERE "babyId" = $1 AND "startTime" >= $2 AND "startTime" < $3`,
+				 WHERE "babyId" = $1 AND "startTime" >= $2 AND "startTime" < $3 AND state = 'CLOSED'`,
 			babyID,
 			start,
 			end,

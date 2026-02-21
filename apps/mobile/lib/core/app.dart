@@ -5,6 +5,7 @@ import "dart:ui" show ImageFilter;
 import "package:flutter/foundation.dart";
 import "package:flutter/material.dart";
 import "package:flutter/services.dart";
+import "package:google_sign_in/google_sign_in.dart";
 
 import "assistant/assistant_intent_bridge.dart";
 import "../features/chat/chat_page.dart";
@@ -270,6 +271,12 @@ class _HomeShellState extends State<_HomeShell> {
   AssistantActionPayload? _pendingAssistantAction;
   final TextEditingController _chatSearchController = TextEditingController();
   final FocusNode _chatSearchFocusNode = FocusNode();
+  final GoogleSignIn _googleSignIn = GoogleSignIn(
+    scopes: const <String>["email", "profile", "openid"],
+    serverClientId: AppEnv.googleServerClientId.isEmpty
+        ? null
+        : AppEnv.googleServerClientId,
+  );
 
   int _index = 0;
   bool _isGoogleLoggedIn = false;
@@ -1827,183 +1834,73 @@ class _HomeShellState extends State<_HomeShell> {
   }
 
   Future<void> _loginWithGoogleToken() async {
-    final TextEditingController tokenController = TextEditingController();
-    final TextEditingController emailController = TextEditingController();
-    final TextEditingController nameController = TextEditingController();
-    final TextEditingController passwordController = TextEditingController();
-
-    await showDialog<void>(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: Text(tr(context,
-              ko: "구글 로그인", en: "Google Login", es: "Inicio de Google")),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                TextField(
-                  controller: tokenController,
-                  minLines: 2,
-                  maxLines: 4,
-                  decoration: const InputDecoration(
-                    labelText: "JWT Token",
-                    hintText: "Paste server-issued token",
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: nameController,
-                  decoration: InputDecoration(
-                    labelText: tr(context,
-                        ko: "이름 (선택)",
-                        en: "Name (optional)",
-                        es: "Nombre (opcional)"),
-                    border: const OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: emailController,
-                  decoration: InputDecoration(
-                    labelText: tr(context,
-                        ko: "이메일 (선택)",
-                        en: "Email (optional)",
-                        es: "Correo (opcional)"),
-                    border: const OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: passwordController,
-                  obscureText: true,
-                  decoration: InputDecoration(
-                    labelText: tr(context,
-                        ko: "비밀번호 (테스트 계정)",
-                        en: "Password (test account)",
-                        es: "Contrasena (cuenta de prueba)"),
-                    border: const OutlineInputBorder(),
-                  ),
-                ),
-              ],
+    try {
+      final String previousToken = BabyAIApi.currentBearerToken.trim();
+      final GoogleSignInAccount? account = await _googleSignIn.signIn();
+      if (account == null) {
+        return;
+      }
+      final GoogleSignInAuthentication auth = await account.authentication;
+      final String idToken = (auth.idToken ?? "").trim();
+      if (idToken.isEmpty) {
+        if (!mounted) {
+          return;
+        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              tr(
+                context,
+                ko: "Google ID 토큰을 가져오지 못했습니다. GOOGLE_SERVER_CLIENT_ID 설정을 확인해 주세요.",
+                en: "Failed to obtain Google ID token. Check GOOGLE_SERVER_CLIENT_ID.",
+                es: "No se pudo obtener el token ID de Google. Revise GOOGLE_SERVER_CLIENT_ID.",
+              ),
             ),
           ),
-          actions: <Widget>[
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: Text(tr(context, ko: "취소", en: "Cancel", es: "Cancelar")),
-            ),
-            FilledButton(
-              onPressed: () async {
-                final String token = tokenController.text.trim();
-                final String email = emailController.text.trim();
-                final String password = passwordController.text;
-                final String previousToken =
-                    BabyAIApi.currentBearerToken.trim();
-                if (token.isNotEmpty) {
-                  BabyAIApi.setBearerToken(token);
-                } else if (email.isNotEmpty && password.isNotEmpty) {
-                  try {
-                    final Map<String, dynamic> login =
-                        await BabyAIApi.instance.loginWithTestAccount(
-                      email: email,
-                      password: password,
-                      name: nameController.text.trim().isNotEmpty
-                          ? nameController.text.trim()
-                          : null,
-                    );
-                    final String issuedToken =
-                        (login["token"] ?? "").toString().trim();
-                    if (issuedToken.isEmpty) {
-                      throw ApiFailure("로그인 토큰을 발급받지 못했습니다.");
-                    }
-                  } catch (error) {
-                    if (!mounted || !context.mounted) {
-                      return;
-                    }
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text(error.toString())),
-                    );
-                    return;
-                  }
-                } else {
-                  if (!mounted || !context.mounted) {
-                    return;
-                  }
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(tr(context,
-                          ko: "JWT 토큰을 입력하거나 테스트 계정 이메일/비밀번호를 입력해 주세요.",
-                          en: "Enter JWT token or test account email/password.",
-                          es: "Ingrese JWT o email/contrasena de prueba.")),
-                    ),
-                  );
-                  return;
-                }
-                final String effectiveToken =
-                    BabyAIApi.currentBearerToken.trim();
-                if (effectiveToken.isEmpty) {
-                  if (!mounted || !context.mounted) {
-                    return;
-                  }
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(tr(context,
-                          ko: "로그인 토큰이 비어 있습니다.",
-                          en: "Login token is empty.",
-                          es: "El token de inicio de sesion esta vacio.")),
-                    ),
-                  );
-                  return;
-                }
-                final bool changedToken = effectiveToken != previousToken;
-                if (changedToken &&
-                    BabyAIApi.activeBabyId.isNotEmpty &&
-                    !BabyAIApi.activeBabyId.toLowerCase().startsWith("offline_")) {
-                  _clearLinkedProfileState();
-                }
-                await _promoteOfflineProfileAfterGoogleLogin();
-                if (!mounted || !context.mounted) {
-                  return;
-                }
-                final String name = nameController.text.trim();
-                final Map<String, dynamic> payload = _decodeJwtPayload(effectiveToken);
-                final bool isGoogle = BabyAIApi.isGoogleLinked;
-                setState(() {
-                  _isGoogleLoggedIn = isGoogle;
-                  _isBusinessAccount = _resolveBusinessAccount(payload);
-                  _accountName = name.isNotEmpty
-                      ? name
-                      : ((payload["name"] ??
-                              payload["given_name"] ??
-                              "Google User")
-                          .toString());
-                  _accountEmail = email.isNotEmpty
-                      ? email
-                      : ((payload["email"] ??
-                              payload["upn"] ??
-                              payload["sub"] ??
-                              "Connected")
-                          .toString());
-                });
-                unawaited(AppSessionStore.persistRuntimeState());
-                Navigator.of(context).pop();
-              },
-              child: Text(tr(context, ko: "로그인", en: "Login", es: "Entrar")),
-            ),
-          ],
         );
-      },
-    );
+        return;
+      }
 
-    tokenController.dispose();
-    emailController.dispose();
-    nameController.dispose();
-    passwordController.dispose();
+      BabyAIApi.setBearerToken(idToken);
+      final bool changedToken = idToken != previousToken;
+      if (changedToken &&
+          BabyAIApi.activeBabyId.isNotEmpty &&
+          !BabyAIApi.activeBabyId.toLowerCase().startsWith("offline_")) {
+        _clearLinkedProfileState();
+      }
+
+      await _promoteOfflineProfileAfterGoogleLogin();
+      if (!mounted) {
+        return;
+      }
+
+      final Map<String, dynamic> payload = _decodeJwtPayload(idToken);
+      final bool isGoogle = BabyAIApi.isGoogleLinked;
+      setState(() {
+        _isGoogleLoggedIn = isGoogle;
+        _isBusinessAccount = _resolveBusinessAccount(payload);
+        _accountName = (account.displayName ?? "").trim().isNotEmpty
+            ? account.displayName!.trim()
+            : ((payload["name"] ?? payload["given_name"] ?? "Google User")
+                .toString());
+        _accountEmail = (account.email).trim().isNotEmpty
+            ? account.email.trim()
+            : ((payload["email"] ?? payload["upn"] ?? payload["sub"] ?? "Connected")
+                .toString());
+      });
+      await AppSessionStore.persistRuntimeState();
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.toString())),
+      );
+    }
   }
 
   void _logout() {
+    unawaited(_googleSignIn.signOut());
     BabyAIApi.setBearerToken("");
     _clearLinkedProfileState();
     setState(() {

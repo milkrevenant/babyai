@@ -10,58 +10,68 @@ import (
 )
 
 type Config struct {
-	AppEnv                     string
-	AppName                    string
-	APIPrefix                  string
-	AppPort                    string
-	DatabaseURL                string
-	RedisURL                   string
-	DefaultTone                string
-	JWTSecret                  string
-	JWTAlgorithm               string
-	JWTAudience                string
-	JWTIssuer                  string
-	LocalDevDefaultSub         string
-	AllowDevTokenEndpoint      bool
-	AuthAutoCreateUser         bool
-	LocalForceSubscriptionPlan string
-	OnboardingSeedDummyData    bool
-	TestLoginEnabled           bool
-	TestLoginEmail             string
-	TestLoginPassword          string
-	TestLoginName              string
-	CORSAllowOrigins           []string
-	OpenAIAPIKey               string
-	OpenAIModel                string
-	OpenAIBaseURL              string
-	AIMaxOutputTokens          int
-	AITimeoutSeconds           int
+	AppEnv                       string
+	AppName                      string
+	APIPrefix                    string
+	AppPort                      string
+	DatabaseURL                  string
+	RedisURL                     string
+	DefaultTone                  string
+	JWTSecret                    string
+	JWTAlgorithm                 string
+	JWTAudience                  string
+	JWTIssuer                    string
+	AuthAcceptGoogleIDToken      bool
+	GoogleOAuthClientIDs         []string
+	LocalDevDefaultSub           string
+	AllowDevTokenEndpoint        bool
+	AuthAutoCreateUser           bool
+	LocalForceSubscriptionPlan   string
+	OnboardingSeedDummyData      bool
+	TestLoginEnabled             bool
+	TestLoginEmail               string
+	TestLoginPassword            string
+	TestLoginName                string
+	EnablePhotoPlaceholderUpload bool
+	EnableVoiceDummyParse        bool
+	CORSAllowOrigins             []string
+	OpenAIAPIKey                 string
+	OpenAIModel                  string
+	OpenAIBaseURL                string
+	AIMaxOutputTokens            int
+	AITimeoutSeconds             int
 }
 
 func Load() Config {
 	_ = godotenv.Load(".env")
+	appEnv := getEnv("APP_ENV", "local")
+	isNonProdEnv := !strings.EqualFold(strings.TrimSpace(appEnv), "production")
 
 	return Config{
-		AppEnv:                     getEnv("APP_ENV", "local"),
-		AppName:                    getEnv("APP_NAME", "BabyAI API"),
-		APIPrefix:                  getEnv("API_PREFIX", "/api/v1"),
-		AppPort:                    getEnv("APP_PORT", getEnv("PORT", "8000")),
-		DatabaseURL:                getEnv("DATABASE_URL", "postgresql://babyai:babyai@localhost:5432/babyai"),
-		RedisURL:                   getEnv("REDIS_URL", "redis://localhost:6379/0"),
-		DefaultTone:                getEnv("DEFAULT_TONE", "neutral"),
-		JWTSecret:                  getEnv("JWT_SECRET", ""),
-		JWTAlgorithm:               getEnv("JWT_ALGORITHM", "HS256"),
-		JWTAudience:                getEnv("JWT_AUDIENCE", ""),
-		JWTIssuer:                  getEnv("JWT_ISSUER", ""),
-		LocalDevDefaultSub:         getEnv("LOCAL_DEV_DEFAULT_SUB", "00000000-0000-0000-0000-000000000001"),
-		AllowDevTokenEndpoint:      getEnvBool("ALLOW_DEV_TOKEN_ENDPOINT", false),
-		AuthAutoCreateUser:         getEnvBool("AUTH_AUTOCREATE_USER", false),
-		LocalForceSubscriptionPlan: getEnv("LOCAL_FORCE_SUBSCRIPTION_PLAN", ""),
-		OnboardingSeedDummyData:    getEnvBool("ONBOARDING_SEED_DUMMY_DATA", false),
-		TestLoginEnabled:           getEnvBool("TEST_LOGIN_ENABLED", false),
-		TestLoginEmail:             getEnv("TEST_LOGIN_EMAIL", ""),
-		TestLoginPassword:          getEnv("TEST_LOGIN_PASSWORD", ""),
-		TestLoginName:              getEnv("TEST_LOGIN_NAME", "QA Test User"),
+		AppEnv:                       appEnv,
+		AppName:                      getEnv("APP_NAME", "BabyAI API"),
+		APIPrefix:                    getEnv("API_PREFIX", "/api/v1"),
+		AppPort:                      getEnv("APP_PORT", getEnv("PORT", "8000")),
+		DatabaseURL:                  getEnv("DATABASE_URL", "postgresql://babyai:babyai@localhost:5432/babyai"),
+		RedisURL:                     getEnv("REDIS_URL", "redis://localhost:6379/0"),
+		DefaultTone:                  getEnv("DEFAULT_TONE", "neutral"),
+		JWTSecret:                    getEnv("JWT_SECRET", ""),
+		JWTAlgorithm:                 getEnv("JWT_ALGORITHM", "HS256"),
+		JWTAudience:                  getEnv("JWT_AUDIENCE", ""),
+		JWTIssuer:                    getEnv("JWT_ISSUER", ""),
+		AuthAcceptGoogleIDToken:      getEnvBool("AUTH_ACCEPT_GOOGLE_ID_TOKEN", false),
+		GoogleOAuthClientIDs:         getEnvCSV("GOOGLE_OAUTH_CLIENT_IDS", []string{}),
+		LocalDevDefaultSub:           getEnv("LOCAL_DEV_DEFAULT_SUB", "00000000-0000-0000-0000-000000000001"),
+		AllowDevTokenEndpoint:        getEnvBool("ALLOW_DEV_TOKEN_ENDPOINT", false),
+		AuthAutoCreateUser:           getEnvBool("AUTH_AUTOCREATE_USER", false),
+		LocalForceSubscriptionPlan:   getEnv("LOCAL_FORCE_SUBSCRIPTION_PLAN", ""),
+		OnboardingSeedDummyData:      getEnvBool("ONBOARDING_SEED_DUMMY_DATA", false),
+		TestLoginEnabled:             getEnvBool("TEST_LOGIN_ENABLED", false),
+		TestLoginEmail:               getEnv("TEST_LOGIN_EMAIL", ""),
+		TestLoginPassword:            getEnv("TEST_LOGIN_PASSWORD", ""),
+		TestLoginName:                getEnv("TEST_LOGIN_NAME", "QA Test User"),
+		EnablePhotoPlaceholderUpload: getEnvBool("ENABLE_PHOTO_PLACEHOLDER_UPLOAD", isNonProdEnv),
+		EnableVoiceDummyParse:        getEnvBool("ENABLE_VOICE_DUMMY_PARSE", isNonProdEnv),
 		CORSAllowOrigins: getEnvCSV(
 			"CORS_ALLOW_ORIGINS",
 			[]string{"http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"},
@@ -90,6 +100,9 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.JWTAlgorithm) == "" {
 		return errors.New("JWT_ALGORITHM is required")
+	}
+	if c.AuthAcceptGoogleIDToken && len(c.GoogleOAuthClientIDs) == 0 {
+		return errors.New("GOOGLE_OAUTH_CLIENT_IDS is required when AUTH_ACCEPT_GOOGLE_ID_TOKEN=true")
 	}
 	if c.TestLoginEnabled {
 		if strings.TrimSpace(c.TestLoginEmail) == "" {

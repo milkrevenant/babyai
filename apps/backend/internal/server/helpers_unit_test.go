@@ -210,6 +210,26 @@ func TestResolveRequestedChatScope(t *testing.T) {
 	}
 }
 
+func TestResolveRequestedChatScopeDateAnchorUsesLocalDate(t *testing.T) {
+	now := time.Date(2026, 2, 20, 9, 0, 0, 0, time.UTC)
+
+	losAngeles := resolveRequestedChatScope("day", "2026-02-20", "-08:00", now)
+	if losAngeles.AnchorDate == nil {
+		t.Fatalf("expected anchor date for -08:00")
+	}
+	if got := losAngeles.AnchorDate.UTC().Format("2006-01-02 15:04"); got != "2026-02-20 08:00" {
+		t.Fatalf("expected local 2026-02-20 at -08:00 -> 2026-02-20 08:00 UTC, got %s", got)
+	}
+
+	seoul := resolveRequestedChatScope("day", "2026-02-20", "+09:00", now)
+	if seoul.AnchorDate == nil {
+		t.Fatalf("expected anchor date for +09:00")
+	}
+	if got := seoul.AnchorDate.UTC().Format("2006-01-02 15:04"); got != "2026-02-19 15:00" {
+		t.Fatalf("expected local 2026-02-20 at +09:00 -> 2026-02-19 15:00 UTC, got %s", got)
+	}
+}
+
 func TestResolveChatContextSelectionWithRequestedScope(t *testing.T) {
 	now := time.Date(2026, 2, 20, 9, 0, 0, 0, time.UTC)
 	dayAnchor := time.Date(2026, 2, 19, 0, 0, 0, 0, time.UTC)
@@ -230,6 +250,25 @@ func TestResolveChatContextSelectionWithRequestedScope(t *testing.T) {
 	}
 	if got := daySelection.RequestedDate.UTC().Format("2006-01-02"); got != "2026-02-19" {
 		t.Fatalf("unexpected requested day: %s", got)
+	}
+	oldDayAnchor := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	oldDaySelection := resolveChatContextSelection(
+		"ignored question",
+		aiIntentDataQuery,
+		now,
+		chatScopeOverride{
+			Mode:       "day",
+			AnchorDate: &oldDayAnchor,
+		},
+	)
+	if oldDaySelection.Mode != chatContextModeRequestedDateRaw {
+		t.Fatalf("expected requested_date_raw for explicit day mode regardless anchor age, got %q", oldDaySelection.Mode)
+	}
+	if oldDaySelection.RequestedDate == nil {
+		t.Fatalf("expected requested date for old day mode")
+	}
+	if got := oldDaySelection.RequestedDate.UTC().Format("2006-01-02"); got != "2026-02-01" {
+		t.Fatalf("unexpected requested old day: %s", got)
 	}
 
 	monthAnchor := time.Date(2026, 2, 5, 0, 0, 0, 0, time.UTC)
