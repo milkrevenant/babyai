@@ -10,7 +10,6 @@ import "../../core/widgets/simple_donut_chart.dart";
 import "../../core/widgets/simple_line_chart.dart";
 import "../../core/widgets/app_svg_icon.dart";
 
-const Duration _kTabAnimationDuration = Duration(milliseconds: 220);
 const int _minutesPerDay = 24 * 60;
 typedef _OpenEventsSheetHandler = Future<void> Function({
   required String title,
@@ -147,6 +146,7 @@ class ReportPageState extends State<ReportPage> {
 
   Map<DateTime, _DayStats> _statsByDay = <DateTime, _DayStats>{};
   Map<String, dynamic>? _weeklyReport;
+  Map<String, dynamic>? _monthlyReport;
   ReportRange? _inlineComparisonRange;
   bool _inlineComparisonLoading = false;
   ReportRangeComparison? _inlineComparisonData;
@@ -857,35 +857,50 @@ class ReportPageState extends State<ReportPage> {
     final DateTime weekStartUtc = _toWeekStart(focusedDayUtc);
     final DateTime monthStartUtc =
         DateTime.utc(focusedDayUtc.year, focusedDayUtc.month, 1);
-    final int monthDayCount =
-        DateUtils.getDaysInMonth(monthStartUtc.year, monthStartUtc.month);
-
-    final List<DateTime> weekDays = List<DateTime>.generate(
-      7,
-      (int i) => weekStartUtc.add(Duration(days: i)),
-    );
-    final List<DateTime> monthDays = List<DateTime>.generate(
-      monthDayCount,
-      (int i) => monthStartUtc.add(Duration(days: i)),
-    );
-
-    final Map<String, DateTime> uniqueDays = <String, DateTime>{
-      for (final DateTime day in monthDays) _dayKey(day): day,
-      for (final DateTime day in weekDays) _dayKey(day): day,
-      _dayKey(focusedDayUtc): focusedDayUtc,
-    };
 
     try {
-      final Future<Map<String, dynamic>> weeklyFuture =
-          _loadWeeklySafe(weekStartUtc);
-      final Map<String, _DayStats> parsed = <String, _DayStats>{};
+      final Map<DateTime, _DayStats> parsed = <DateTime, _DayStats>{};
+      Map<String, dynamic>? weekly;
+      Map<String, dynamic>? monthly;
 
-      await Future.wait(uniqueDays.entries.map(
-        (MapEntry<String, DateTime> entry) async {
-          final Map<String, dynamic> report = await _loadDailySafe(entry.value);
-          parsed[entry.key] = _DayStats.fromReport(entry.value, report);
-        },
-      ));
+      switch (_selected) {
+        case ReportRange.daily:
+          final Map<String, dynamic> daily =
+              await _loadDailySafe(focusedDayUtc);
+          parsed[_utcDate(focusedDayUtc)] =
+              _DayStats.fromReport(focusedDayUtc, daily);
+          break;
+        case ReportRange.weekly:
+          final Future<Map<String, dynamic>> weeklyFuture =
+              _loadWeeklySafe(weekStartUtc);
+          final List<DateTime> weekDays = List<DateTime>.generate(
+            7,
+            (int i) => weekStartUtc.add(Duration(days: i)),
+            growable: false,
+          );
+          await Future.wait(weekDays.map((DateTime dayUtc) async {
+            final Map<String, dynamic> report = await _loadDailySafe(dayUtc);
+            parsed[_utcDate(dayUtc)] = _DayStats.fromReport(dayUtc, report);
+          }));
+          weekly = await weeklyFuture;
+          break;
+        case ReportRange.monthly:
+          final Future<Map<String, dynamic>> monthlyFuture =
+              _loadMonthlySafe(monthStartUtc);
+          final int monthDayCount =
+              DateUtils.getDaysInMonth(monthStartUtc.year, monthStartUtc.month);
+          final List<DateTime> monthDays = List<DateTime>.generate(
+            monthDayCount,
+            (int i) => monthStartUtc.add(Duration(days: i)),
+            growable: false,
+          );
+          await Future.wait(monthDays.map((DateTime dayUtc) async {
+            final Map<String, dynamic> report = await _loadDailySafe(dayUtc);
+            parsed[_utcDate(dayUtc)] = _DayStats.fromReport(dayUtc, report);
+          }));
+          monthly = await monthlyFuture;
+          break;
+      }
 
       if (!mounted) {
         return;
@@ -896,16 +911,12 @@ class ReportPageState extends State<ReportPage> {
         _weekStartUtc = weekStartUtc;
         _monthStartUtc = monthStartUtc;
         _statsByDay = <DateTime, _DayStats>{
-          for (final MapEntry<String, DateTime> entry in uniqueDays.entries)
-            entry.value: parsed[entry.key] ?? _DayStats.empty(entry.value),
+          for (final MapEntry<DateTime, _DayStats> entry in parsed.entries)
+            _utcDate(entry.key): entry.value,
         };
+        _weeklyReport = weekly;
+        _monthlyReport = monthly;
       });
-
-      final Map<String, dynamic> weekly = await weeklyFuture;
-      if (!mounted) {
-        return;
-      }
-      setState(() => _weeklyReport = weekly);
     } catch (error) {
       if (!mounted) {
         return;
@@ -931,6 +942,13 @@ class ReportPageState extends State<ReportPage> {
   Future<Map<String, dynamic>> _loadWeeklySafe(DateTime weekStartUtc) async {
     return await BabyAIApi.instance.weeklyReport(
       weekStartUtc,
+      preferOffline: false,
+    );
+  }
+
+  Future<Map<String, dynamic>> _loadMonthlySafe(DateTime monthStartUtc) async {
+    return await BabyAIApi.instance.monthlyReport(
+      monthStartUtc,
       preferOffline: false,
     );
   }
@@ -985,6 +1003,13 @@ class ReportPageState extends State<ReportPage> {
         ((_weeklyReport?["suggestions"] as List<dynamic>?) ?? <dynamic>[])
             .map((dynamic item) => item.toString())
             .toList(growable: false);
+    final Map<dynamic, dynamic> monthlyTrend =
+        (_monthlyReport?["trend"] as Map<dynamic, dynamic>?) ??
+            <dynamic, dynamic>{};
+    final List<String> monthlySuggestions =
+        ((_monthlyReport?["suggestions"] as List<dynamic>?) ?? <dynamic>[])
+            .map((dynamic item) => item.toString())
+            .toList(growable: false);
     final DateTime nowUtc = DateTime.now().toUtc();
     final List<_EventDetail> knownEvents = _statsByDay.values
         .expand((_DayStats day) => day.events)
@@ -1018,26 +1043,17 @@ class ReportPageState extends State<ReportPage> {
             ),
           ],
           const SizedBox(height: 10),
-          AnimatedSwitcher(
-            duration: _kTabAnimationDuration,
-            switchInCurve: Curves.easeOut,
-            switchOutCurve: Curves.easeOut,
-            transitionBuilder: (Widget child, Animation<double> animation) {
-              return FadeTransition(
-                opacity: animation,
-                child: child,
-              );
-            },
-            child: _buildBody(
-              context,
-              today: _stats(_todayUtc),
-              weekDays: weekDays,
-              monthDays: monthDays,
-              weeklyTrend: weeklyTrend,
-              suggestions: suggestions,
-              nowUtc: nowUtc,
-              knownEvents: knownEvents,
-            ),
+          _buildBody(
+            context,
+            today: _stats(_todayUtc),
+            weekDays: weekDays,
+            monthDays: monthDays,
+            weeklyTrend: weeklyTrend,
+            suggestions: suggestions,
+            monthlyTrend: monthlyTrend,
+            monthlySuggestions: monthlySuggestions,
+            nowUtc: nowUtc,
+            knownEvents: knownEvents,
           ),
         ],
       ),
@@ -1051,6 +1067,8 @@ class ReportPageState extends State<ReportPage> {
     required List<_DayStats> monthDays,
     required Map<dynamic, dynamic> weeklyTrend,
     required List<String> suggestions,
+    required Map<dynamic, dynamic> monthlyTrend,
+    required List<String> monthlySuggestions,
     required DateTime nowUtc,
     required List<_EventDetail> knownEvents,
   }) {
@@ -1075,6 +1093,8 @@ class ReportPageState extends State<ReportPage> {
         return _MonthlyView(
           key: const ValueKey<String>("monthly"),
           days: monthDays,
+          monthlyTrend: monthlyTrend,
+          suggestions: monthlySuggestions,
         );
     }
   }
@@ -1086,13 +1106,6 @@ DateTime _utcDate(DateTime value) {
 
 DateTime _toWeekStart(DateTime dayUtc) {
   return dayUtc.subtract(Duration(days: dayUtc.weekday - DateTime.monday));
-}
-
-String _dayKey(DateTime dayUtc) {
-  final String y = dayUtc.year.toString().padLeft(4, "0");
-  final String m = dayUtc.month.toString().padLeft(2, "0");
-  final String d = dayUtc.day.toString().padLeft(2, "0");
-  return "$y-$m-$d";
 }
 
 bool _isSameUtcDate(DateTime a, DateTime b) {
@@ -1446,9 +1459,16 @@ class _WeeklyView extends StatelessWidget {
 }
 
 class _MonthlyView extends StatelessWidget {
-  const _MonthlyView({super.key, required this.days});
+  const _MonthlyView({
+    super.key,
+    required this.days,
+    required this.monthlyTrend,
+    required this.suggestions,
+  });
 
   final List<_DayStats> days;
+  final Map<dynamic, dynamic> monthlyTrend;
+  final List<String> suggestions;
 
   @override
   Widget build(BuildContext context) {
@@ -1469,6 +1489,10 @@ class _MonthlyView extends StatelessWidget {
     final _MonthlyInsights insights = _buildMonthlyInsights(days);
     final String sleepPattern = _monthlySleepPatternText(insights);
     final String feedPattern = _monthlyFeedPatternText(insights);
+    final String apiInsight = suggestions.isNotEmpty
+        ? suggestions.first
+        : "Feed trend: ${monthlyTrend["feeding_total_ml"] ?? "-"}. "
+            "Sleep trend: ${monthlyTrend["sleep_total_min"] ?? "-"}.";
 
     return Column(
       children: <Widget>[
@@ -1555,6 +1579,15 @@ class _MonthlyView extends StatelessWidget {
                   style: TextStyle(fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 12),
+                Text(
+                  apiInsight,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    height: 1.35,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 10),
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,

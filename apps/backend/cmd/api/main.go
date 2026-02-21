@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -30,6 +31,16 @@ func main() {
 
 	if err := pool.Ping(ctx); err != nil {
 		log.Fatalf("database ping failed: %v", err)
+	}
+	if err := server.ValidateRuntimeSchema(ctx, pool); err != nil {
+		log.Fatalf("database schema mismatch: %v", err)
+	}
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("AUTO_ENABLE_PG_STAT_STATEMENTS")), "true") {
+		if _, err := pool.Exec(ctx, `CREATE EXTENSION IF NOT EXISTS pg_stat_statements`); err != nil {
+			// Best-effort only: some managed DB roles cannot create extensions,
+			// or shared_preload_libraries may not include pg_stat_statements yet.
+			log.Printf("optional extension pg_stat_statements not enabled: %v", err)
+		}
 	}
 
 	app := server.New(cfg, pool)
