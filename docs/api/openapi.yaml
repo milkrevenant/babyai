@@ -69,6 +69,29 @@ paths:
         '400':
           description: Invalid input
 
+  /auth/test-login:
+    post:
+      tags: [dev]
+      summary: Issue JWT token with configured QA test credentials
+      operationId: testLogin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TestLoginRequest'
+      responses:
+        '200':
+          description: Test login succeeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestLoginResponse'
+        '401':
+          description: Invalid credentials
+        '404':
+          description: Endpoint disabled
+
   /api/v1/onboarding/parent:
     post:
       tags: [onboarding]
@@ -1346,6 +1369,28 @@ components:
         provider:
           type: string
           enum: [google, apple, phone]
+        reference_text: { type: string }
+
+    TestLoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string }
+        name: { type: string }
+
+    TestLoginResponse:
+      type: object
+      properties:
+        token: { type: string }
+        sub: { type: string, format: uuid }
+        name: { type: string }
+        email: { type: string, format: email }
+        provider:
+          type: string
+          enum: [google]
+        baby_id: { type: string }
+        household_id: { type: string }
         reference_text: { type: string }
 
     CheckoutRequest:

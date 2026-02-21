@@ -26,6 +26,10 @@ type Config struct {
 	AuthAutoCreateUser         bool
 	LocalForceSubscriptionPlan string
 	OnboardingSeedDummyData    bool
+	TestLoginEnabled           bool
+	TestLoginEmail             string
+	TestLoginPassword          string
+	TestLoginName              string
 	CORSAllowOrigins           []string
 	OpenAIAPIKey               string
 	OpenAIModel                string
@@ -54,6 +58,10 @@ func Load() Config {
 		AuthAutoCreateUser:         getEnvBool("AUTH_AUTOCREATE_USER", false),
 		LocalForceSubscriptionPlan: getEnv("LOCAL_FORCE_SUBSCRIPTION_PLAN", ""),
 		OnboardingSeedDummyData:    getEnvBool("ONBOARDING_SEED_DUMMY_DATA", false),
+		TestLoginEnabled:           getEnvBool("TEST_LOGIN_ENABLED", false),
+		TestLoginEmail:             getEnv("TEST_LOGIN_EMAIL", ""),
+		TestLoginPassword:          getEnv("TEST_LOGIN_PASSWORD", ""),
+		TestLoginName:              getEnv("TEST_LOGIN_NAME", "QA Test User"),
 		CORSAllowOrigins: getEnvCSV(
 			"CORS_ALLOW_ORIGINS",
 			[]string{"http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"},
@@ -82,6 +90,14 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.JWTAlgorithm) == "" {
 		return errors.New("JWT_ALGORITHM is required")
+	}
+	if c.TestLoginEnabled {
+		if strings.TrimSpace(c.TestLoginEmail) == "" {
+			return errors.New("TEST_LOGIN_EMAIL is required when TEST_LOGIN_ENABLED=true")
+		}
+		if strings.TrimSpace(c.TestLoginPassword) == "" {
+			return errors.New("TEST_LOGIN_PASSWORD is required when TEST_LOGIN_ENABLED=true")
+		}
 	}
 	return nil
 }

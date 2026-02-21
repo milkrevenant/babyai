@@ -835,14 +835,20 @@ class BabyAIApi {
     throw ApiFailure("Unexpected API response shape");
   }
 
-  String _localTimezoneOffset() {
-    final Duration offset = DateTime.now().timeZoneOffset;
+  String _localTimezoneOffset([DateTime? referenceLocal]) {
+    final DateTime reference = (referenceLocal ?? DateTime.now()).toLocal();
+    final Duration offset = reference.timeZoneOffset;
     final int totalMinutes = offset.inMinutes;
     final String sign = totalMinutes >= 0 ? "+" : "-";
     final int absMinutes = totalMinutes.abs();
     final int hours = absMinutes ~/ 60;
     final int minutes = absMinutes % 60;
     return "$sign${hours.toString().padLeft(2, "0")}:${minutes.toString().padLeft(2, "0")}";
+  }
+
+  DateTime _localNoon(DateTime value) {
+    final DateTime local = value.toLocal();
+    return DateTime(local.year, local.month, local.day, 12);
   }
 
   String _offlineId(String prefix) {
@@ -1011,6 +1017,17 @@ class BabyAIApi {
     final String m = local.month.toString().padLeft(2, "0");
     final String d = local.day.toString().padLeft(2, "0");
     return "$y-$m-$d";
+  }
+
+  String _ymdCalendarDate(DateTime value) {
+    final String y = value.year.toString().padLeft(4, "0");
+    final String m = value.month.toString().padLeft(2, "0");
+    final String d = value.day.toString().padLeft(2, "0");
+    return "$y-$m-$d";
+  }
+
+  DateTime _calendarDateNoonLocal(DateTime value) {
+    return DateTime(value.year, value.month, value.day, 12);
   }
 
   bool _isNightSleep(DateTime localStart) {
@@ -1371,9 +1388,9 @@ class BabyAIApi {
   Future<Map<String, dynamic>> _buildLocalDailyReport(
       DateTime targetDate) async {
     _requireBabyId();
-    final DateTime localDate = targetDate.toLocal();
+    final String day = _ymdCalendarDate(targetDate);
     final DateTime dayStart =
-        DateTime(localDate.year, localDate.month, localDate.day);
+        DateTime(targetDate.year, targetDate.month, targetDate.day);
     final DateTime dayEnd = dayStart.add(const Duration(days: 1));
     final List<_LocalEventRecord> all =
         await _localEventRecordsForBaby(activeBabyId);
@@ -1430,7 +1447,7 @@ class BabyAIApi {
 
     final Map<String, dynamic> payload = <String, dynamic>{
       "baby_id": activeBabyId,
-      "date": _ymdLocal(dayStart.toUtc()),
+      "date": day,
       "summary": <String>[
         "Sleep total: $sleepTotal min",
         "Feeding events: $feedings",
@@ -1445,7 +1462,7 @@ class BabyAIApi {
     await OfflineDataStore.instance.writeCache(
       namespace: _cacheDailyReport,
       babyId: activeBabyId,
-      key: targetDate.toIso8601String().split("T").first,
+      key: day,
       data: payload,
     );
     return payload;
@@ -1454,7 +1471,9 @@ class BabyAIApi {
   Future<Map<String, dynamic>> _buildLocalWeeklyReport(
       DateTime weekStart) async {
     _requireBabyId();
-    final DateTime localWeekStart = weekStart.toLocal();
+    final String weekStartDay = _ymdCalendarDate(weekStart);
+    final DateTime localWeekStart =
+        DateTime(weekStart.year, weekStart.month, weekStart.day);
     final DateTime weekEnd = localWeekStart.add(const Duration(days: 7));
     final List<_LocalEventRecord> all =
         await _localEventRecordsForBaby(activeBabyId);
@@ -1483,7 +1502,7 @@ class BabyAIApi {
 
     final Map<String, dynamic> payload = <String, dynamic>{
       "baby_id": activeBabyId,
-      "week_start": weekStart.toIso8601String().split("T").first,
+      "week_start": weekStartDay,
       "trend": <String, dynamic>{
         "feeding_total_ml": formulaTotal,
         "sleep_total_min": sleepTotal,
@@ -1498,7 +1517,7 @@ class BabyAIApi {
     await OfflineDataStore.instance.writeCache(
       namespace: _cacheWeeklyReport,
       babyId: activeBabyId,
-      key: weekStart.toIso8601String().split("T").first,
+      key: weekStartDay,
       data: payload,
     );
     return payload;
@@ -1719,6 +1738,40 @@ class BabyAIApi {
           if (sub != null && sub.trim().isNotEmpty) "sub": sub.trim(),
           if (name != null && name.trim().isNotEmpty) "name": name.trim(),
           if (provider.trim().isNotEmpty) "provider": provider.trim(),
+        },
+      );
+      final Map<String, dynamic> payload = _requireMap(response);
+      final String token = (payload["token"] ?? "").toString().trim();
+      if (token.isNotEmpty) {
+        setBearerToken(token);
+      }
+      final String issuedBabyId = (payload["baby_id"] ?? "").toString().trim();
+      final String issuedHouseholdId =
+          (payload["household_id"] ?? "").toString().trim();
+      if (issuedBabyId.isNotEmpty || issuedHouseholdId.isNotEmpty) {
+        setRuntimeIds(
+          babyId: issuedBabyId.isNotEmpty ? issuedBabyId : null,
+          householdId: issuedHouseholdId.isNotEmpty ? issuedHouseholdId : null,
+        );
+      }
+      return payload;
+    } catch (error) {
+      throw _toFailure(error);
+    }
+  }
+
+  Future<Map<String, dynamic>> loginWithTestAccount({
+    required String email,
+    required String password,
+    String? name,
+  }) async {
+    try {
+      final Response<dynamic> response = await _dio.post<dynamic>(
+        "/auth/test-login",
+        data: <String, dynamic>{
+          "email": email.trim(),
+          "password": password,
+          if (name != null && name.trim().isNotEmpty) "name": name.trim(),
         },
       );
       final Map<String, dynamic> payload = _requireMap(response);
@@ -2470,9 +2523,8 @@ class BabyAIApi {
       final String normalizedMode = dateMode.trim().toLowerCase().isEmpty
           ? "day"
           : dateMode.trim().toLowerCase();
-      final String anchorDateText = "${anchor.year.toString().padLeft(4, "0")}-"
-          "${anchor.month.toString().padLeft(2, "0")}-"
-          "${anchor.day.toString().padLeft(2, "0")}";
+      final String anchorDateText = _ymdLocal(anchor);
+      final String tzOffset = _localTimezoneOffset(_localNoon(anchor));
       final Response<dynamic> response = await _dio.post<dynamic>(
         "/api/v1/chat/query",
         data: <String, dynamic>{
@@ -2482,7 +2534,7 @@ class BabyAIApi {
           "use_personal_data": usePersonalData,
           "date_mode": normalizedMode,
           "anchor_date": anchorDateText,
-          "tz_offset": _localTimezoneOffset(),
+          "tz_offset": tzOffset,
           if (childId != null && childId.trim().isNotEmpty)
             "child_id": childId.trim()
           else if (activeBabyId.isNotEmpty)
@@ -2505,10 +2557,8 @@ class BabyAIApi {
         final String normalizedMode = dateMode.trim().toLowerCase().isEmpty
             ? "day"
             : dateMode.trim().toLowerCase();
-        final String anchorDateText =
-            "${anchor.year.toString().padLeft(4, "0")}-"
-            "${anchor.month.toString().padLeft(2, "0")}-"
-            "${anchor.day.toString().padLeft(2, "0")}";
+        final String anchorDateText = _ymdLocal(anchor);
+        final String tzOffset = _localTimezoneOffset(_localNoon(anchor));
         final Response<dynamic> retry = await _dio.post<dynamic>(
           "/api/v1/chat/query",
           data: <String, dynamic>{
@@ -2518,7 +2568,7 @@ class BabyAIApi {
             "use_personal_data": usePersonalData,
             "date_mode": normalizedMode,
             "anchor_date": anchorDateText,
-            "tz_offset": _localTimezoneOffset(),
+            "tz_offset": tzOffset,
             if (activeBabyId.isNotEmpty) "child_id": activeBabyId,
           },
           options: _authOptions(
@@ -2537,10 +2587,8 @@ class BabyAIApi {
         final String normalizedMode = dateMode.trim().toLowerCase().isEmpty
             ? "day"
             : dateMode.trim().toLowerCase();
-        final String anchorDateText =
-            "${anchor.year.toString().padLeft(4, "0")}-"
-            "${anchor.month.toString().padLeft(2, "0")}-"
-            "${anchor.day.toString().padLeft(2, "0")}";
+        final String anchorDateText = _ymdLocal(anchor);
+        final String tzOffset = _localTimezoneOffset(_localNoon(anchor));
         final Response<dynamic> retry = await _dio.post<dynamic>(
           "/api/v1/chat/query",
           data: <String, dynamic>{
@@ -2550,7 +2598,7 @@ class BabyAIApi {
             "use_personal_data": usePersonalData,
             "date_mode": normalizedMode,
             "anchor_date": anchorDateText,
-            "tz_offset": _localTimezoneOffset(),
+            "tz_offset": tzOffset,
             if (activeBabyId.isNotEmpty) "child_id": activeBabyId,
           },
           options: _authOptions(
@@ -2919,13 +2967,15 @@ class BabyAIApi {
 
   Future<Map<String, dynamic>> _fetchDailyReportRemote(
       DateTime targetDate) async {
-    final String day = targetDate.toIso8601String().split("T").first;
+    final String day = _ymdCalendarDate(targetDate);
+    final String tzOffset =
+        _localTimezoneOffset(_calendarDateNoonLocal(targetDate));
     final Response<dynamic> response = await _dio.get<dynamic>(
       "/api/v1/reports/daily",
       queryParameters: <String, dynamic>{
         "baby_id": activeBabyId,
         "date": day,
-        "tz_offset": _localTimezoneOffset(),
+        "tz_offset": tzOffset,
       },
       options: _authOptions(),
     );
@@ -2955,7 +3005,7 @@ class BabyAIApi {
     bool preferOffline = true,
   }) async {
     _requireBabyId();
-    final String day = targetDate.toIso8601String().split("T").first;
+    final String day = _ymdCalendarDate(targetDate);
     final Map<String, dynamic>? cached =
         await OfflineDataStore.instance.readCache(
       namespace: _cacheDailyReport,
@@ -2997,13 +3047,15 @@ class BabyAIApi {
 
   Future<Map<String, dynamic>> _fetchWeeklyReportRemote(
       DateTime weekStart) async {
-    final String day = weekStart.toIso8601String().split("T").first;
+    final String day = _ymdCalendarDate(weekStart);
+    final String tzOffset =
+        _localTimezoneOffset(_calendarDateNoonLocal(weekStart));
     final Response<dynamic> response = await _dio.get<dynamic>(
       "/api/v1/reports/weekly",
       queryParameters: <String, dynamic>{
         "baby_id": activeBabyId,
         "week_start": day,
-        "tz_offset": _localTimezoneOffset(),
+        "tz_offset": tzOffset,
       },
       options: _authOptions(),
     );
@@ -3033,7 +3085,7 @@ class BabyAIApi {
     bool preferOffline = true,
   }) async {
     _requireBabyId();
-    final String day = weekStart.toIso8601String().split("T").first;
+    final String day = _ymdCalendarDate(weekStart);
     final Map<String, dynamic>? cached =
         await OfflineDataStore.instance.readCache(
       namespace: _cacheWeeklyReport,

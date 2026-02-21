@@ -1,6 +1,6 @@
 # Railway Deployment (Backend API)
 
-This project deploys the Go backend from `apps/backend` using Docker and runs Prisma schema sync during Railway pre-deploy.
+This project deploys the Go backend from `apps/backend` using Docker and applies Prisma migrations during Railway pre-deploy.
 
 ## Official references
 - Railway deployment docs: https://docs.railway.com/guides/deploy
@@ -15,7 +15,7 @@ This project deploys the Go backend from `apps/backend` using Docker and runs Pr
 
 `railway.json` uses:
 - Dockerfile build: `Dockerfile`
-- Pre-deploy DB sync: `npm run prisma:push`
+- Pre-deploy DB migration: `npm run prisma:migrate:deploy`
 - Health check: `/health`
 
 ## Deploy steps
@@ -29,10 +29,36 @@ This project deploys the Go backend from `apps/backend` using Docker and runs Pr
    - `APP_ENV=production`
    - `AUTH_AUTOCREATE_USER=false`
    - `OPENAI_API_KEY` (required for AI endpoints)
+   - optional (QA build without embedding JWT):
+     - `TEST_LOGIN_ENABLED=true`
+     - `TEST_LOGIN_EMAIL=<qa-email>`
+     - `TEST_LOGIN_PASSWORD=<qa-password>`
+     - `TEST_LOGIN_NAME=QA Tester`
    - optional: `JWT_AUDIENCE`, `JWT_ISSUER`, `CORS_ALLOW_ORIGINS`
 6. Deploy.
 
-During each deploy, Railway runs `npm run prisma:push` first, then starts the API container.
+During each deploy, Railway runs `npm run prisma:migrate:deploy` first, then starts the API container.
+
+## Migration transition note
+If your existing Railway database was historically managed by `prisma db push` (no migration history table),
+`prisma:migrate:deploy` can fail on first switch. In that case:
+- reset/wipe the DB once, then redeploy, or
+- baseline the DB before switching fully to migration deploy.
+
+Example baseline command (use your latest migration folder name):
+
+```bash
+DATABASE_URL="$DATABASE_URL" \
+  npx prisma migrate resolve \
+  --applied <migration_folder_name> \
+  --schema packages/schema/prisma/schema.prisma
+```
+
+For this repository's initial migration, you can also run:
+
+```bash
+DATABASE_URL="$DATABASE_URL" npm run prisma:migrate:baseline:init
+```
 
 ## Verify after deploy
 - Health: `GET /health`
@@ -41,3 +67,6 @@ During each deploy, Railway runs `npm run prisma:push` first, then starts the AP
 ## Mobile app production endpoint
 Use deployed API URL in mobile build defines:
 - `API_BASE_URL=https://<your-railway-domain>`
+
+For QA APK (JWT not embedded in app), do **not** set `API_BEARER_TOKEN` at build time.
+Users sign in with test email/password via `POST /auth/test-login`.

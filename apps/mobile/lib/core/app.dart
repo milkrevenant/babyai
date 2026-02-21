@@ -166,18 +166,12 @@ class _BabyAIAppState extends State<BabyAIApp> {
 
   @override
   Widget build(BuildContext context) {
-    if (!_appReady || _showLaunchSplash) {
-      return const MaterialApp(
-        debugShowCheckedModeBanner: false,
-        home: _LaunchSplashScreen(),
-      );
-    }
-
     return AppSettingsScope(
       controller: _themeController,
       child: AnimatedBuilder(
         animation: _themeController,
         builder: (BuildContext context, _) {
+          final bool showSplash = !_appReady || _showLaunchSplash;
           return MaterialApp(
             title: "BabyAI",
             debugShowCheckedModeBanner: false,
@@ -185,7 +179,9 @@ class _BabyAIAppState extends State<BabyAIApp> {
             locale: _localeFromLanguage(_themeController.language),
             theme: _buildTheme(brightness: Brightness.light),
             darkTheme: _buildTheme(brightness: Brightness.dark),
-            home: _HomeShell(themeController: _themeController),
+            home: showSplash
+                ? const _LaunchSplashScreen()
+                : _HomeShell(themeController: _themeController),
           );
         },
       ),
@@ -1834,6 +1830,7 @@ class _HomeShellState extends State<_HomeShell> {
     final TextEditingController tokenController = TextEditingController();
     final TextEditingController emailController = TextEditingController();
     final TextEditingController nameController = TextEditingController();
+    final TextEditingController passwordController = TextEditingController();
 
     await showDialog<void>(
       context: context,
@@ -1877,6 +1874,18 @@ class _HomeShellState extends State<_HomeShell> {
                     border: const OutlineInputBorder(),
                   ),
                 ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: passwordController,
+                  obscureText: true,
+                  decoration: InputDecoration(
+                    labelText: tr(context,
+                        ko: "비밀번호 (테스트 계정)",
+                        en: "Password (test account)",
+                        es: "Contrasena (cuenta de prueba)"),
+                    border: const OutlineInputBorder(),
+                  ),
+                ),
               ],
             ),
           ),
@@ -1888,26 +1897,78 @@ class _HomeShellState extends State<_HomeShell> {
             FilledButton(
               onPressed: () async {
                 final String token = tokenController.text.trim();
+                final String email = emailController.text.trim();
+                final String password = passwordController.text;
                 final String previousToken =
                     BabyAIApi.currentBearerToken.trim();
                 if (token.isNotEmpty) {
                   BabyAIApi.setBearerToken(token);
-                  final bool changedToken = token != previousToken;
-                  if (changedToken &&
-                      BabyAIApi.activeBabyId.isNotEmpty &&
-                      !BabyAIApi.activeBabyId
-                          .toLowerCase()
-                          .startsWith("offline_")) {
-                    _clearLinkedProfileState();
+                } else if (email.isNotEmpty && password.isNotEmpty) {
+                  try {
+                    final Map<String, dynamic> login =
+                        await BabyAIApi.instance.loginWithTestAccount(
+                      email: email,
+                      password: password,
+                      name: nameController.text.trim().isNotEmpty
+                          ? nameController.text.trim()
+                          : null,
+                    );
+                    final String issuedToken =
+                        (login["token"] ?? "").toString().trim();
+                    if (issuedToken.isEmpty) {
+                      throw ApiFailure("로그인 토큰을 발급받지 못했습니다.");
+                    }
+                  } catch (error) {
+                    if (!mounted || !context.mounted) {
+                      return;
+                    }
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(error.toString())),
+                    );
+                    return;
                   }
+                } else {
+                  if (!mounted || !context.mounted) {
+                    return;
+                  }
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(tr(context,
+                          ko: "JWT 토큰을 입력하거나 테스트 계정 이메일/비밀번호를 입력해 주세요.",
+                          en: "Enter JWT token or test account email/password.",
+                          es: "Ingrese JWT o email/contrasena de prueba.")),
+                    ),
+                  );
+                  return;
+                }
+                final String effectiveToken =
+                    BabyAIApi.currentBearerToken.trim();
+                if (effectiveToken.isEmpty) {
+                  if (!mounted || !context.mounted) {
+                    return;
+                  }
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(tr(context,
+                          ko: "로그인 토큰이 비어 있습니다.",
+                          en: "Login token is empty.",
+                          es: "El token de inicio de sesion esta vacio.")),
+                    ),
+                  );
+                  return;
+                }
+                final bool changedToken = effectiveToken != previousToken;
+                if (changedToken &&
+                    BabyAIApi.activeBabyId.isNotEmpty &&
+                    !BabyAIApi.activeBabyId.toLowerCase().startsWith("offline_")) {
+                  _clearLinkedProfileState();
                 }
                 await _promoteOfflineProfileAfterGoogleLogin();
                 if (!mounted || !context.mounted) {
                   return;
                 }
                 final String name = nameController.text.trim();
-                final String email = emailController.text.trim();
-                final Map<String, dynamic> payload = _decodeJwtPayload(token);
+                final Map<String, dynamic> payload = _decodeJwtPayload(effectiveToken);
                 final bool isGoogle = BabyAIApi.isGoogleLinked;
                 setState(() {
                   _isGoogleLoggedIn = isGoogle;
@@ -1939,6 +2000,7 @@ class _HomeShellState extends State<_HomeShell> {
     tokenController.dispose();
     emailController.dispose();
     nameController.dispose();
+    passwordController.dispose();
   }
 
   void _logout() {

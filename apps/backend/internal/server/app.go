@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -92,6 +93,7 @@ func (a *App) Router() *gin.Engine {
 	router.GET("/health", a.health)
 	router.GET("/dev/local-token", a.issueLocalDevToken)
 	router.POST("/dev/local-token", a.issueLocalDevToken)
+	router.POST("/auth/test-login", a.testLogin)
 
 	api := router.Group(a.cfg.APIPrefix)
 	api.Use(a.authMiddleware())
@@ -139,6 +141,84 @@ func (a *App) health(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"status":  "ok",
 		"service": "babyai-api",
+	})
+}
+
+type testLoginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	Name     string `json:"name,omitempty"`
+}
+
+func (a *App) testLogin(c *gin.Context) {
+	if !a.cfg.TestLoginEnabled {
+		writeError(c, http.StatusNotFound, "Not found")
+		return
+	}
+
+	var req testLoginRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeError(c, http.StatusBadRequest, "Invalid login payload")
+		return
+	}
+
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+	password := strings.TrimSpace(req.Password)
+	if email == "" || password == "" {
+		writeError(c, http.StatusBadRequest, "Email and password are required")
+		return
+	}
+
+	expectedEmail := strings.ToLower(strings.TrimSpace(a.cfg.TestLoginEmail))
+	expectedPassword := strings.TrimSpace(a.cfg.TestLoginPassword)
+	if subtle.ConstantTimeCompare([]byte(email), []byte(expectedEmail)) != 1 ||
+		subtle.ConstantTimeCompare([]byte(password), []byte(expectedPassword)) != 1 {
+		writeError(c, http.StatusUnauthorized, "Invalid credentials")
+		return
+	}
+
+	userID := uuid.NewSHA1(uuid.NameSpaceURL, []byte("babyai:test-login:"+email)).String()
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		name = strings.TrimSpace(a.cfg.TestLoginName)
+	}
+	if name == "" {
+		name = "QA Test User"
+	}
+	provider := "google"
+	providerUID := email
+
+	if _, err := a.db.Exec(
+		c.Request.Context(),
+		`INSERT INTO "User" (id, provider, "providerUid", phone, name, "createdAt")
+		 VALUES ($1, $2, $3, NULL, $4, NOW())
+		 ON CONFLICT (id)
+		 DO UPDATE SET provider = EXCLUDED.provider, "providerUid" = EXCLUDED."providerUid", name = EXCLUDED.name`,
+		userID,
+		provider,
+		providerUID,
+		name,
+	); err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to prepare login user")
+		return
+	}
+
+	signed, err := a.signJWT(userID, provider, name)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to sign login token")
+		return
+	}
+
+	latestBabyID, latestHouseholdID := a.latestBabyAndHousehold(c.Request.Context(), userID)
+	c.JSON(http.StatusOK, gin.H{
+		"token":          signed,
+		"sub":            userID,
+		"name":           name,
+		"email":          email,
+		"provider":       provider,
+		"baby_id":        latestBabyID,
+		"household_id":   latestHouseholdID,
+		"reference_text": "Test account login issued from backend credentials.",
 	})
 }
 
@@ -192,12 +272,29 @@ func (a *App) issueLocalDevToken(c *gin.Context) {
 		return
 	}
 
-	method := jwt.GetSigningMethod(strings.TrimSpace(a.cfg.JWTAlgorithm))
-	if method == nil {
-		writeError(c, http.StatusInternalServerError, "Unsupported JWT algorithm")
+	signed, err := a.signJWT(sub, provider, name)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to sign local token")
 		return
 	}
+	latestBabyID, latestHouseholdID := a.latestBabyAndHousehold(c.Request.Context(), sub)
 
+	c.JSON(http.StatusOK, gin.H{
+		"token":          signed,
+		"sub":            sub,
+		"name":           name,
+		"provider":       provider,
+		"baby_id":        latestBabyID,
+		"household_id":   latestHouseholdID,
+		"reference_text": "Local development token generated from backend JWT settings.",
+	})
+}
+
+func (a *App) signJWT(sub, provider, name string) (string, error) {
+	method := jwt.GetSigningMethod(strings.TrimSpace(a.cfg.JWTAlgorithm))
+	if method == nil {
+		return "", errors.New("unsupported jwt algorithm")
+	}
 	claims := jwt.MapClaims{
 		"sub":      sub,
 		"provider": provider,
@@ -211,18 +308,15 @@ func (a *App) issueLocalDevToken(c *gin.Context) {
 	if issuer := strings.TrimSpace(a.cfg.JWTIssuer); issuer != "" {
 		claims["iss"] = issuer
 	}
-
 	token := jwt.NewWithClaims(method, claims)
-	signed, err := token.SignedString([]byte(secret))
-	if err != nil {
-		writeError(c, http.StatusInternalServerError, "Failed to sign local token")
-		return
-	}
+	return token.SignedString([]byte(strings.TrimSpace(a.cfg.JWTSecret)))
+}
 
+func (a *App) latestBabyAndHousehold(ctx context.Context, userID string) (string, string) {
 	latestBabyID := ""
 	latestHouseholdID := ""
 	_ = a.db.QueryRow(
-		c.Request.Context(),
+		ctx,
 		`SELECT b.id, b."householdId"
 		   FROM "Baby" b
 		   JOIN "Household" h ON h.id = b."householdId"
@@ -234,18 +328,9 @@ func (a *App) issueLocalDevToken(c *gin.Context) {
 		     OR hm.id IS NOT NULL
 		  ORDER BY b."createdAt" DESC
 		  LIMIT 1`,
-		sub,
+		userID,
 	).Scan(&latestBabyID, &latestHouseholdID)
-
-	c.JSON(http.StatusOK, gin.H{
-		"token":          signed,
-		"sub":            sub,
-		"name":           name,
-		"provider":       provider,
-		"baby_id":        latestBabyID,
-		"household_id":   latestHouseholdID,
-		"reference_text": "Local development token generated from backend JWT settings.",
-	})
+	return latestBabyID, latestHouseholdID
 }
 
 func (a *App) authMiddleware() gin.HandlerFunc {

@@ -10,6 +10,11 @@ go run ./cmd/api
 
 Server default: `http://127.0.0.1:8000` (`/health`).
 
+## GCP Deployment
+Recommended path for Google Cloud is Cloud Run with Dockerfile-based build.
+
+See: `docs/DEPLOY_GCP_CLOUD_RUN.md`
+
 ## PostgreSQL Setup
 You need a running PostgreSQL instance before starting backend.
 
@@ -33,6 +38,31 @@ docker run --name babyai-postgres `
 Default connection string used in examples:
 `postgres://babyai:babyai@localhost:5432/babyai`
 
+### Railway Postgres: `pg_stat_statements` Log Error
+If deploy logs contain:
+`relation "pg_stat_statements" does not exist` (often from `/* railway:dataui */`),
+the app API can still work, but Railway query-stats UI cannot read statement stats.
+
+PostgreSQL requires `pg_stat_statements` to be preloaded at server start and then created as an extension.
+
+```sql
+-- connect as a superuser
+SHOW shared_preload_libraries;
+
+-- if empty:
+ALTER SYSTEM SET shared_preload_libraries = 'pg_stat_statements';
+
+-- if existing value is e.g. 'pg_cron', append it:
+ALTER SYSTEM SET shared_preload_libraries = 'pg_cron,pg_stat_statements';
+```
+
+Restart the Postgres service, then run:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+SELECT extname FROM pg_extension WHERE extname = 'pg_stat_statements';
+```
+
 After DB is up, sync schema from repo root:
 ```powershell
 cd C:\Users\milkrevenant\Documents\code\babyai
@@ -40,7 +70,14 @@ npm install
 $env:DATABASE_URL="postgres://babyai:babyai@localhost:5432/babyai"
 npm run prisma:validate
 npm run prisma:generate
-npm run prisma:push
+npm run prisma:migrate:deploy
+```
+
+If this database was previously managed by `prisma db push`, run one-time baseline before deploy:
+
+```powershell
+$env:DATABASE_URL="postgres://babyai:babyai@localhost:5432/babyai"
+npm run prisma:migrate:baseline:init
 ```
 
 ## Required Environment
@@ -56,11 +93,16 @@ Optional:
 - `AUTH_AUTOCREATE_USER` (default `false`)
 - `LOCAL_FORCE_SUBSCRIPTION_PLAN` (local only: `AI_ONLY` | `AI_PHOTO` | `PHOTO_SHARE`)
 - `ONBOARDING_SEED_DUMMY_DATA` (default `false`, local only)
+- `TEST_LOGIN_ENABLED` (default `false`, enables `POST /auth/test-login`)
+- `TEST_LOGIN_EMAIL` (required if `TEST_LOGIN_ENABLED=true`)
+- `TEST_LOGIN_PASSWORD` (required if `TEST_LOGIN_ENABLED=true`)
+- `TEST_LOGIN_NAME` (default `QA Test User`)
 - `CORS_ALLOW_ORIGINS`
 - `OPENAI_MODEL` (default `gpt-5-mini`)
 - `OPENAI_BASE_URL` (default `https://api.openai.com/v1`)
 - `AI_MAX_OUTPUT_TOKENS` (default `1200`)
 - `AI_TIMEOUT_SECONDS` (default `60`)
+- `AUTO_ENABLE_PG_STAT_STATEMENTS` (default `false`, best-effort extension creation at boot)
 
 Required for real AI routes in non-test env:
 - `OPENAI_API_KEY`
@@ -81,6 +123,10 @@ LOCAL_DEV_DEFAULT_SUB=00000000-0000-0000-0000-000000000001
 AUTH_AUTOCREATE_USER=false
 LOCAL_FORCE_SUBSCRIPTION_PLAN=
 ONBOARDING_SEED_DUMMY_DATA=false
+TEST_LOGIN_ENABLED=false
+TEST_LOGIN_EMAIL=
+TEST_LOGIN_PASSWORD=
+TEST_LOGIN_NAME=QA Test User
 CORS_ALLOW_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000
 OPENAI_API_KEY=<your-openai-api-key>
 OPENAI_MODEL=gpt-5-mini
@@ -118,9 +164,30 @@ JWT expectations:
 
 If `AUTH_AUTOCREATE_USER=false`, unknown `sub` is rejected with `User not found`.
 
-## Dev Bootstrap Token (No Login API Yet)
-This backend does not provide a public token issue endpoint yet.
-For local development, mint a dev JWT using the same `JWT_SECRET`.
+## Test Login and Dev Bootstrap
+
+### Test account login (no JWT exposure in client build)
+When enabled, backend can issue JWT via email/password:
+
+```http
+POST /auth/test-login
+Content-Type: application/json
+
+{"email":"qa@example.com","password":"<password>"}
+```
+
+To enable:
+```env
+TEST_LOGIN_ENABLED=true
+TEST_LOGIN_EMAIL=qa@example.com
+TEST_LOGIN_PASSWORD=<strong-password>
+TEST_LOGIN_NAME=QA Tester
+```
+
+Response includes `token`, `baby_id`, `household_id`.
+
+### Local dev token endpoint
+For local development, you can still mint a dev JWT using the same `JWT_SECRET`.
 
 PowerShell example:
 ```powershell
@@ -182,7 +249,7 @@ PowerShell example:
 $env:TEST_DATABASE_URL = "postgres://babyai:babyai@localhost:5432/babyai_test"
 $env:DATABASE_URL = $env:TEST_DATABASE_URL
 cd C:\Users\milkrevenant\Documents\code\babyai
-npm run prisma:push
+npm run prisma:migrate:deploy
 cd apps\backend
 go test ./internal/server -count=1
 go test ./... -count=1
